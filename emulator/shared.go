@@ -44,17 +44,36 @@ func (e *Emulator) privatize(addr, size uint64) error {
 			kept = append(kept, sr)
 			continue
 		}
-		// re-create the range as private anonymous memory with the same bytes
 		m := &sr.plan.Maps[sr.mapIdx]
-		if err := e.be.MemUnmap(sr.addr, sr.size); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("unmap shared %#x: %w", sr.addr, err)
-		} else if err := e.be.MemMap(sr.addr, sr.size, m.Prot); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("re-map private %#x: %w", sr.addr, err)
-		} else if len(m.Content) > 0 {
-			if err := e.be.MemWrite(sr.addr, m.Content); err != nil && firstErr == nil {
-				firstErr = fmt.Errorf("restore content %#x: %w", sr.addr, err)
+		// Each range is privatized independently: a failed unmap leaves the
+		// range SHARED (it stays tracked — the shared host buffer is still
+		// the live memory); anything past a failed unmap is skipped for that
+		// range. Ranges whose unmap succeeded but remap/content failed are no
+		// longer shared by definition (the guest pages are engine-private,
+		// possibly broken) and are dropped from tracking; the error bubbles
+		// up and Replace panics, so the engine never pretends to be healthy.
+		if err := e.be.MemUnmap(sr.addr, sr.size); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("unmap shared %#x: %w", sr.addr, err)
+			}
+			kept = append(kept, sr) // unmap failed -> still shared -> keep tracking
+			continue
+		}
+		if err := e.be.MemMap(sr.addr, sr.size, m.Prot); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("re-map private %#x: %w", sr.addr, err)
+			}
+			continue // unmapped but not re-mapped: dropped from tracking
+		}
+		if len(m.Content) > 0 {
+			if err := e.be.MemWrite(sr.addr, m.Content); err != nil {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("restore content %#x: %w", sr.addr, err)
+				}
+				continue // re-mapped but content unknown: dropped from tracking
 			}
 		}
+		// fully privatized: intentionally NOT re-added to e.shared
 	}
 	e.shared = kept
 	if firstErr != nil {

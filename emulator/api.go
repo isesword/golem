@@ -37,7 +37,19 @@ const (
 // Alloc returns the base of at least `size` bytes of guest memory with the
 // given protection. RW sizes up to arenaMaxAlloc are carved from the arena;
 // anything else maps a dedicated region as before.
+//
+// Panics if the backing uc_mem_map fails: handing the guest allocator an
+// unmapped address is an unrecoverable engine state, and every caller (JNI
+// marshaling, scratch buffers, fiber stacks) lacks a meaningful recovery.
 func (e *Emulator) Alloc(size uint64, prot int) uint64 {
+	a, err := e.doAlloc(size, prot)
+	if err != nil {
+		panic(fmt.Sprintf("emulator: alloc(%#x, %d): %v — guest memory mapping failed", size, prot, err))
+	}
+	return a
+}
+
+func (e *Emulator) doAlloc(size uint64, prot int) (uint64, error) {
 	if prot == ProtRead|ProtWrite && 0 < size && size <= arenaMaxAlloc {
 		size = (size + 15) &^ 15
 		a := &e.alloc
@@ -47,25 +59,32 @@ func (e *Emulator) Alloc(size uint64, prot int) uint64 {
 				chunk = int((size + 0xfff) &^ 0xfff)
 			}
 			base := e.mem.Mmap(uint64(chunk), prot, "arena")
-			_ = e.be.MemMap(base, uint64(chunk), prot)
+			if err := e.be.MemMap(base, uint64(chunk), prot); err != nil {
+				return 0, fmt.Errorf("map arena chunk %#x: %w", base, err)
+			}
 			*a = allocArena{base: base, off: 0, size: uint64(chunk)}
 		}
 		addr := a.base + a.off
 		a.off += size
-		return addr
+		return addr, nil
 	}
 	a := e.mem.Mmap(size, prot, "alloc")
-	_ = e.be.MemMap(a, (size+0xfff)&^0xfff, prot)
-	return a
+	if err := e.be.MemMap(a, (size+0xfff)&^0xfff, prot); err != nil {
+		return 0, fmt.Errorf("map %#x: %w", a, err)
+	}
+	return a, nil
 }
 
 // Malloc maps a fresh read/write guest region and returns its base.
 func (e *Emulator) Malloc(size uint64) uint64 { return e.Alloc(size, ProtRead|ProtWrite) }
 
 // WriteScratch copies bytes into a fresh RW region and returns the address.
+// Panics if the backing map/write fails (same rationale as Alloc).
 func (e *Emulator) WriteScratch(data []byte) uint64 {
 	a := e.Alloc(uint64(len(data))+16, ProtRead|ProtWrite)
-	_ = e.be.MemWrite(a, data)
+	if err := e.be.MemWrite(a, data); err != nil {
+		panic(fmt.Sprintf("emulator: WriteScratch: %v", err))
+	}
 	return a
 }
 
@@ -184,22 +203,28 @@ type ReplaceFunc func(h *Hook) uint64
 // overwritten with an `svc; ret` trampoline). This is golem's analogue of
 // unidbg's hook/replace: model or stub a native function in Go. Works on both
 // engines (it's a trap, not an inline patch).
+// Replace entry-patches `addr` with an SVC trap dispatched to fn. Panics if
+// any step fails (privatize/write/flush): a half-applied patch — code
+// patched but stale translation cached, or a registered hook the guest
+// never reaches — is worse than a loud failure at setup time.
 func (e *Emulator) Replace(addr uint64, fn ReplaceFunc) {
-	e.replaced[addr] = func(em *Emulator, b emu.Backend) {
-		ret := fn(&Hook{em})
-		_ = b.RegWrite(emu.RegX0, ret)
-	}
-	// svc #0 ; ret  — trap to onInterrupt, which dispatches to e.replaced[addr].
 	// Patching a shared read-only page would corrupt every engine sharing
-	// those bytes, so privatize first. A privatization failure is fatal: the
-	// patch must never silently half-apply.
+	// those bytes, so privatize first.
 	if err := e.privatize(addr, 8); err != nil {
 		panic(fmt.Sprintf("emulator: Replace %#x: %v", addr, err))
 	}
 	if err := e.be.MemWrite(addr, []byte{0x01, 0x00, 0x00, 0xd4, 0xc0, 0x03, 0x5f, 0xd6}); err != nil {
 		panic(fmt.Sprintf("emulator: Replace %#x: patch write: %v", addr, err))
 	}
-	_ = e.be.FlushCache() // drop any stale translation of the old code
+	if err := e.be.FlushCache(); err != nil {
+		panic(fmt.Sprintf("emulator: Replace %#x: flush: %v", addr, err))
+	}
+	// Registered only after the patch is fully in place: a registration that
+	// outlives a failed patch would trap into a hook the dispatch can't serve.
+	e.replaced[addr] = func(em *Emulator, b emu.Backend) {
+		ret := fn(&Hook{em})
+		_ = b.RegWrite(emu.RegX0, ret)
+	}
 }
 
 // ReplaceSymbol is Replace by exported symbol name.

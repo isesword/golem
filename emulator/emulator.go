@@ -240,8 +240,16 @@ func New(cfg Config) (e *Emulator, err error) {
 	}
 	// On any construction failure the half-booted engine must be torn down:
 	// it already holds unicorn mappings, and repeated failed New calls would
-	// otherwise leak engines.
+	// otherwise leak engines. The post-boot ReplaceFns pass may PANIC (a
+	// Replace that cannot patch is fatal), so the cleanup must catch panics
+	// too — close the backend, then re-panic to preserve the original signal.
 	defer func() {
+		if r := recover(); r != nil {
+			if e != nil {
+				e.be.Close()
+			}
+			panic(r)
+		}
 		if err != nil && e != nil {
 			e.be.Close()
 		}
