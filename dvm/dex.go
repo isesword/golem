@@ -10,7 +10,7 @@ import (
 // registers its classes, methods, and fields into the VM, so FindClass /
 // GetMethodID / GetFieldID resolve against real APK metadata (with correct
 // signatures and superclasses) instead of being synthesized on demand. This is
-// metadata only — gonidbg does not execute DEX bytecode (no JVM); you still
+// metadata only — golem does not execute DEX bytecode (no JVM); you still
 // model behavior with a dvm.Jni handler. Analogous to unidbg loading a DexClass.
 
 const dexNoIndex = 0xffffffff

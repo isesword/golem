@@ -1,4 +1,4 @@
-// Package emulator is gonidbg's high-level API: a minimal unidbg in Go. It boots
+// Package emulator is golem's high-level API: a minimal unidbg in Go. It boots
 // an emulated AArch64 Android process, maps + links real bionic (libc/libm/libdl)
 // and your target .so into guest memory through a selectable CPU backend
 // (Unicorn via purego), services Linux syscalls and the JNI/JavaVM surface, and
@@ -18,12 +18,12 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/sisi0318/gonidbg/dvm"
-	"github.com/sisi0318/gonidbg/internal/emu"
-	"github.com/sisi0318/gonidbg/internal/kernel"
-	"github.com/sisi0318/gonidbg/internal/loader"
-	"github.com/sisi0318/gonidbg/internal/memory"
-	"github.com/sisi0318/gonidbg/internal/vfs"
+	"github.com/isesword/golem/dvm"
+	"github.com/isesword/golem/internal/emu"
+	"github.com/isesword/golem/internal/kernel"
+	"github.com/isesword/golem/internal/loader"
+	"github.com/isesword/golem/internal/memory"
+	"github.com/isesword/golem/internal/vfs"
 )
 
 // Config controls how an Emulator boots.
@@ -56,7 +56,7 @@ type Config struct {
 	// Pid reported to the guest (getpid/gettid/...). 0 = a default.
 	Pid int
 	// Engine selects the CPU backend: "unicorn" | "" (auto /
-	// $GONIDBG_ENGINE / first compiled in).
+	// $GOLEM_ENGINE / first compiled in).
 	Engine string
 	// PropertyProvider, if set, answers the loaded .so's __system_property_get(key)
 	// calls: return (value, true) to supply a value, or ("", false) for "unset".
@@ -189,7 +189,7 @@ func (e *Emulator) LoadDex(path string) (int, error) { return e.vm.LoadDexFile(p
 func (e *Emulator) GuestExited() (bool, int) { return e.kctx.Exited, e.kctx.ExitCode }
 
 // Engine reports which CPU engine this emulator is running on ("unicorn" /
-// as resolved from Config.Engine / $GONIDBG_ENGINE / the default.
+// as resolved from Config.Engine / $GOLEM_ENGINE / the default.
 func (e *Emulator) Engine() string { return e.engine }
 
 // MemStats reports guest address-space bookkeeping: the region count and the

@@ -14,9 +14,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sisi0318/gonidbg/internal/emu"
-	"github.com/sisi0318/gonidbg/internal/memory"
-	"github.com/sisi0318/gonidbg/internal/vfs"
+	"github.com/isesword/golem/internal/emu"
+	"github.com/isesword/golem/internal/memory"
+	"github.com/isesword/golem/internal/vfs"
 )
 
 // BrkBase is the guest program-break heap origin (clear of modules/mmap arena).
@@ -712,7 +712,7 @@ func sysUname(c *Context, a [6]uint64) int64 {
 	set := func(i int, s string) { copy(buf[i*65:i*65+64], s) }
 	set(0, "Linux")
 	set(1, "localhost")
-	set(2, "4.14.117-gonidbg")
+	set(2, "4.14.117-golem")
 	set(3, "#1 SMP PREEMPT")
 	set(4, "aarch64")
 	set(5, "localdomain")

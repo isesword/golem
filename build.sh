@@ -3,7 +3,7 @@
 # libunicorn at runtime via purego; no cgo, no C compiler).
 #
 # Runtime dependency: libunicorn on the target machine (brew install unicorn /
-# apt install libunicorn2), locatable via $GONIDBG_UNICORN or the loader path.
+# apt install libunicorn2), locatable via $GOLEM_UNICORN or the loader path.
 #
 # Usage:
 #   ./build.sh                 # -> ./bin/{gonidbg,elfscan,loadplan}
@@ -23,4 +23,4 @@ CGO_ENABLED=0 go build -o "$OUT/elfscan"  ./cmd/elfscan
 CGO_ENABLED=0 go build -o "$OUT/loadplan" ./cmd/loadplan
 
 echo "[build] done -> $OUT/"
-echo "        run with: GONIDBG_UNICORN=/path/to/libunicorn.dylib $OUT/gonidbg ..."
+echo "        run with: GOLEM_UNICORN=/path/to/libunicorn.dylib $OUT/gonidbg ..."

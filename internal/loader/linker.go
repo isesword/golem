@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/sisi0318/gonidbg/internal/emu"
+	"github.com/isesword/golem/internal/emu"
 )
 
 // Resolver maps an imported symbol name to a guest address (e.g. a bionic

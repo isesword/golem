@@ -3,7 +3,7 @@ package emulator
 import (
 	"fmt"
 
-	"github.com/sisi0318/gonidbg/internal/emu"
+	"github.com/isesword/golem/internal/emu"
 )
 
 // registerHostFns registers libc functions we implement in Go because bionic's
@@ -13,7 +13,7 @@ import (
 func registerHostFns(e *Emulator) {
 	// AT_RANDOM target: 16 bytes used by stack-guard / canary setup.
 	e.atRandom = e.Alloc(16, emu.ProtRead|emu.ProtWrite)
-	_ = e.be.MemWrite(e.atRandom, []byte("gonidbg-randseed"))
+	_ = e.be.MemWrite(e.atRandom, []byte("golem-randseed"))
 
 	e.hostByName["getauxval"] = hostGetauxval
 

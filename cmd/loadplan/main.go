@@ -9,7 +9,7 @@ import (
 	"os"
 	"sort"
 
-	"github.com/sisi0318/gonidbg/internal/loader"
+	"github.com/isesword/golem/internal/loader"
 )
 
 func main() {

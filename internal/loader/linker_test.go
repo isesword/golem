@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/sisi0318/gonidbg/internal/emu"
+	"github.com/isesword/golem/internal/emu"
 )
 
 // memBE is an in-memory emu.Backend (sparse pages) for testing the linker

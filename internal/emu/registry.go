@@ -14,7 +14,7 @@ import (
 //	unicorn_purego.go (//go:build unicorn && darwin||linux) -> Register("unicorn", ...)
 //
 // So which engines exist in a binary is decided at build time (`-tags`), and
-// which one is used is decided at run time (arg / $GONIDBG_ENGINE / default).
+// which one is used is decided at run time (arg / $GOLEM_ENGINE / default).
 // A pure-Go build registers nothing; New then returns ErrNoBackend, exactly as
 // the old stub backend did.
 
@@ -53,12 +53,12 @@ func New() (Backend, error) { return NewNamed("") }
 // Resolve reports which engine name NewNamed(name) would pick, without building
 // it — handy for logging the active engine. Selection order:
 //  1. the explicit name argument, if non-empty;
-//  2. else $GONIDBG_ENGINE;
+//  2. else $GOLEM_ENGINE;
 //  3. else the first of defaultPreference that is compiled in;
 //  4. else the first registered engine.
 func Resolve(name string) (string, error) {
 	if name == "" {
-		name = strings.TrimSpace(os.Getenv("GONIDBG_ENGINE"))
+		name = strings.TrimSpace(os.Getenv("GOLEM_ENGINE"))
 	}
 	if name == "" {
 		for _, p := range defaultPreference {

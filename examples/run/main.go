@@ -1,7 +1,7 @@
 //go:build unicorn
 
 // Example: load the bundled native.so and call its exported functions through
-// gonidbg. Build with an engine and run from the repo root:
+// golem. Build with an engine and run from the repo root:
 //
 //	go run -tags unicorn  ./examples/run
 //	go run -tags unicorn ./examples/run
@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/sisi0318/gonidbg/emulator"
+	"github.com/isesword/golem/emulator"
 )
 
 func main() {
@@ -41,8 +41,8 @@ func main() {
 	fib, _ := e.CallSymbol("fib", 20)
 	fmt.Printf("fib(20)        = %d\n", fib)
 
-	// slen("hello, gonidbg") — exercises an import (bionic strlen) from guest code
-	p := e.WriteCStringAlloc("hello, gonidbg")
+	// slen("hello, golem") — exercises an import (bionic strlen) from guest code
+	p := e.WriteCStringAlloc("hello, golem")
 	slen, _ := e.CallSymbol("slen", p)
 	fmt.Printf("slen(...)      = %d\n", int32(slen))
 

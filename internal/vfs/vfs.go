@@ -34,7 +34,7 @@ func (v *VFS) SetFallback(fn func(guest string) ([]byte, bool, error)) { v.fallb
 // process name reported via /proc/self/*; empty falls back to a default.
 func New(assetRoot string, pid int, procName string) *VFS {
 	if procName == "" {
-		procName = "com.gonidbg.app"
+		procName = "com.golem.app"
 	}
 	v := &VFS{assetRoot: assetRoot, pid: pid, procName: procName, synth: map[string]func() ([]byte, error){}}
 	v.registerSynthetic()

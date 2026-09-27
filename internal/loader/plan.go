@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/sisi0318/gonidbg/internal/emu"
+	"github.com/isesword/golem/internal/emu"
 )
 
 // Plan is the compile-time instantiation plan for one Image at one load

@@ -1,4 +1,4 @@
-// elfscan: scope an AArch64 .so before loading it in gonidbg. Lists needed
+// elfscan: scope an AArch64 .so before loading it in golem. Lists needed
 // libraries, imported (undefined) symbols (grouped), exports, and init
 // functions. Pure stdlib (debug/elf), no cgo.
 //

@@ -7,12 +7,12 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/sisi0318/gonidbg/dvm"
+	"github.com/isesword/golem/dvm"
 )
 
 // douyinJni models the exact set of Java callbacks the target library makes
 // during JNI_OnLoad + signing. It embeds dvm.AbstractJni and overrides only the
-// methods the .so actually invokes — the standard gonidbg/unidbg pattern. This
+// methods the .so actually invokes — the standard golem/unidbg pattern. This
 // is hand-written from observing the library's JNI calls; it contains no
 // third-party code and no signing algorithm (that lives inside the .so).
 type douyinJni struct{ dvm.AbstractJni }

@@ -1,13 +1,13 @@
 //go:build unicorn
 
-// gonidbg: load an AArch64 Android .so and call one of its exported functions
+// golem: load an AArch64 Android .so and call one of its exported functions
 // with integer arguments — a small driver over the emulator API.
 //
-//	gonidbg [-engine unicorn] [-assets DIR] [-v] <lib.so> <symbol> [intarg...]
+//	golem [-engine unicorn] [-assets DIR] [-v] <lib.so> <symbol> [intarg...]
 //
 // Example:
 //
-//	gonidbg examples/native/native.so add 2 3      ->  add(...) = 5
+//	golem examples/native/native.so add 2 3      ->  add(...) = 5
 package main
 
 import (
@@ -17,15 +17,15 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sisi0318/gonidbg/emulator"
+	"github.com/isesword/golem/emulator"
 )
 
 func main() {
-	engine := flag.String("engine", "", "CPU engine: unicorn (default: auto / $GONIDBG_ENGINE)")
+	engine := flag.String("engine", "", "CPU engine: unicorn (default: auto / $GOLEM_ENGINE)")
 	assets := flag.String("assets", "", "android sdk23 asset root (auto-located if empty)")
 	verbose := flag.Bool("v", false, "verbose syscall/JNI tracing")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: gonidbg [flags] <lib.so> <symbol> [intarg...]")
+		fmt.Fprintln(os.Stderr, "usage: golem [flags] <lib.so> <symbol> [intarg...]")
 		flag.PrintDefaults()
 	}
 	flag.Parse()

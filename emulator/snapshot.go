@@ -4,10 +4,10 @@ import (
 	"debug/elf"
 	"fmt"
 
-	"github.com/sisi0318/gonidbg/dvm"
-	"github.com/sisi0318/gonidbg/internal/emu"
-	"github.com/sisi0318/gonidbg/internal/kernel"
-	"github.com/sisi0318/gonidbg/internal/memory"
+	"github.com/isesword/golem/dvm"
+	"github.com/isesword/golem/internal/emu"
+	"github.com/isesword/golem/internal/kernel"
+	"github.com/isesword/golem/internal/memory"
 )
 
 // Snapshot is a full, restorable image of one emulator's mutable guest+host

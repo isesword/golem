@@ -1,7 +1,7 @@
 # examples/douyin — real-world validation
 
 This example drives a **production, heavily-obfuscated** Android native library
-through gonidbg's *general* public API and reproduces the `X-*` request
+through golem's *general* public API and reproduces the `X-*` request
 signature headers it produces on-device. It exists to prove the open-source
 framework handles a real, hostile target — not just the toy `examples/native`.
 
@@ -43,7 +43,7 @@ X-Neptune    -11|50:51:59
 The fixed prefix of `X-Gorgon` (and `X-Neptune`) is identical across runs and
 across engines, matching the on-device / unidbg reference; the tail varies with
 the timestamp. This containing **no algorithm of its own** — the signing logic
-lives inside the `.so`; gonidbg only loads, links, and executes it, servicing
+lives inside the `.so`; golem only loads, links, and executes it, servicing
 its syscalls and JNI calls.
 
 ## Notes / authorized use

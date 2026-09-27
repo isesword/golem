@@ -5,7 +5,7 @@ package emulator
 import (
 	"testing"
 
-	"github.com/sisi0318/gonidbg/dvm"
+	"github.com/isesword/golem/dvm"
 )
 
 // Phase B integration: read-only module pages shared via uc_mem_map_ptr,

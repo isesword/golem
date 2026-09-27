@@ -1,12 +1,10 @@
 [简体中文](README.md) | **English**
 
-# gonidbg
+# golem
 
-[![CI](https://github.com/sisi0318/gonidbg/actions/workflows/ci.yml/badge.svg)](https://github.com/sisi0318/gonidbg/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/sisi0318/gonidbg.svg)](https://pkg.go.dev/github.com/sisi0318/gonidbg)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-gonidbg is a small Go reimplementation of [unidbg](https://github.com/zhkl0228/unidbg): it loads an Android AArch64 native library (`.so`) and calls its functions on your host machine, without a JVM, a device, or Android. It sets up just enough of an Android process around the `.so` (a dynamic linker, real bionic libc, a subset of Linux syscalls, and a JNI/JavaVM) so you can call the library's exports from Go and read and write its memory.
+golem is a small Go reimplementation of [unidbg](https://github.com/zhkl0228/unidbg): it loads an Android AArch64 native library (`.so`) and calls its functions on your host machine, without a JVM, a device, or Android. It sets up just enough of an Android process around the `.so` (a dynamic linker, real bionic libc, a subset of Linux syscalls, and a JNI/JavaVM) so you can call the library's exports from Go and read and write its memory.
 
 Like unidbg, the CPU engine sits behind an interface: this variant ships a [Unicorn](https://www.unicorn-engine.org/) interpreter backend that loads the stock libunicorn at **runtime** via [purego](https://github.com/ebitengine/purego) — **zero cgo at build time** (`CGO_ENABLED=0` works, no C compiler needed).
 
@@ -22,7 +20,7 @@ sum, _ := e.CallSymbol("add", 2, 3) // -> 5, executed as real AArch64 code
 
 ## Why
 
-unidbg is the de-facto tool for emulating Android native libraries, but it runs on a JVM and pulls in a fairly large stack. gonidbg tries to do the core of the same job in Go:
+unidbg is the de-facto tool for emulating Android native libraries, but it runs on a JVM and pulls in a fairly large stack. golem tries to do the core of the same job in Go:
 
 - No JVM. The build output is a single Go binary, so startup is fast and memory use is low.
 - Swappable engine. The engine hides behind the `emu.Backend` interface; Unicorn (purego, runtime-loaded) is the built-in default, much like unidbg's backends.
@@ -41,22 +39,22 @@ unidbg is the de-facto tool for emulating Android native libraries, but it runs 
 - Load **real class/method/field metadata from a classes.dex** (`Config.DexPath` / `LoadDex`): FindClass/GetMethodID/GetFieldID resolve against true signatures and superclasses (metadata only, no bytecode).
 - Memory helpers: alloc, read/write bytes, C-strings, and LE integers.
 - Per-instruction trace, plus a full instruction-stream trace (`TraceInsns`: per-instruction offset + opcode + register deltas + call/syscall annotations, Tenet-style, diffable against a real-device trace; Unicorn).
-- Selectable engine: build with `-tags unicorn` to compile in the purego backend, choose at runtime with `-engine` / `$GONIDBG_ENGINE`.
+- Selectable engine: build with `-tags unicorn` to compile in the purego backend, choose at runtime with `-engine` / `$GOLEM_ENGINE`.
 
 ## Quick start
 
 ### Prerequisites
 
 - Go 1.25+
-- One CPU engine: Unicorn (the default). Building needs **no C compiler at all**; at runtime the system must have libunicorn installed (`brew install unicorn` / `apt install libunicorn2`), or point `$GONIDBG_UNICORN` at it. See [BUILD.md](BUILD.md).
+- One CPU engine: Unicorn (the default). Building needs **no C compiler at all**; at runtime the system must have libunicorn installed (`brew install unicorn` / `apt install libunicorn2`), or point `$GOLEM_UNICORN` at it. See [BUILD.md](BUILD.md).
 
 ### Build & run the example
 
 ```bash
 # Linux / macOS (pure-Go build: no cgo, no zig)
-CGO_ENABLED=0 go build -tags unicorn -o bin/gonidbg ./cmd/gonidbg
-GONIDBG_UNICORN=$(brew --prefix unicorn)/lib/libunicorn.dylib \
-  ./bin/gonidbg examples/native/native.so fib 20                # fib([20]) = 6765
+CGO_ENABLED=0 go build -tags unicorn -o bin/golem ./cmd/golem
+GOLEM_UNICORN=$(brew --prefix unicorn)/lib/libunicorn.dylib \
+  ./bin/golem examples/native/native.so fib 20                # fib([20]) = 6765
 ```
 
 Full demo (loads the bundled `native.so`, calls exports, an imported `strlen`, a pointer-out function, and a Go `Replace` hook):
@@ -74,7 +72,7 @@ CGO_ENABLED=0 go run -tags unicorn ./examples/run   # libunicorn must be findabl
 ## Library usage
 
 ```go
-import "github.com/sisi0318/gonidbg/emulator"
+import "golem/emulator"
 
 e, err := emulator.New(emulator.Config{
     SOPath:    "libfoo.so",        // loaded + init_array + JNI_OnLoad at boot
@@ -127,7 +125,7 @@ This is how unidbg's `AbstractJni` works: the guest's `RegisterNatives`/`GetMeth
 
 - This variant ships only the Unicorn backend; the interface (`emu.Backend`) and registry keep the extension point for other engines.
 - The first call on a fresh emulator takes a few hundred ms (warm-up); after that, reuse the emulator and the calls are fast.
-- Licensing note: Unicorn is GPLv2, and statically linking it would make the combined binary GPLv2, so gonidbg keeps it behind a runtime `dlopen` boundary — the purego backend preserves that design.
+- Licensing note: Unicorn is GPLv2, and statically linking it would make the combined binary GPLv2, so golem keeps it behind a runtime `dlopen` boundary — the purego backend preserves that design.
 
 ## How it works
 
@@ -143,7 +141,7 @@ Guest memory and registers are exchanged through the `Backend` interface, implem
 ### Layout
 
 ```
-gonidbg/
+golem/
 ├── emulator/     public API: New, LoadLibrary, CallSymbol/CallOffset, Replace, memory helpers
 ├── dvm/          public: fake Dalvik VM — VM, Object, Class, Jni, AbstractJni, VaList
 ├── internal/
@@ -153,7 +151,7 @@ gonidbg/
 │   ├── memory/   guest address-space allocator
 │   └── vfs/      guest virtual filesystem (/system/lib64, /proc/self, properties, tzdata)
 ├── cmd/
-│   ├── gonidbg/  CLI: load a .so and call a symbol
+│   ├── golem/  CLI: load a .so and call a symbol
 │   ├── elfscan/  analyze a .so (imports/exports/init)
 │   ├── loadplan/ relocation histogram / link complexity
 │   └── bsmoke/   engine self-test
@@ -189,14 +187,14 @@ CGO_ENABLED=0 go test -tags unicorn ./emulator
 
 ## Credits & license
 
-gonidbg builds on:
+golem builds on:
 
 - [unidbg](https://github.com/zhkl0228/unidbg) (Apache-2.0): the project this reimplements.
 - [Unicorn Engine](https://github.com/unicorn-engine/unicorn) (GPLv2): the default CPU backend, loaded at runtime.
 - AOSP bionic (Apache-2.0) and others: the bundled sysroot under `assets/`. See [NOTICE](NOTICE).
 
-gonidbg's own code is licensed under Apache-2.0 (see [LICENSE](LICENSE)). Engine licensing as noted above: the Unicorn backend is loaded dynamically to keep its GPLv2 at a library boundary.
+golem's own code is licensed under Apache-2.0 (see [LICENSE](LICENSE)). Engine licensing as noted above: the Unicorn backend is loaded dynamically to keep its GPLv2 at a library boundary.
 
 ## Disclaimer
 
-gonidbg is a research and education tool for analyzing native libraries you are authorized to study. The repo contains no third-party application code or proprietary binaries, only a generic emulation framework and a tiny example library built from the source in this repo. Use it responsibly and in compliance with applicable law and the terms of any software you analyze.
+golem is a research and education tool for analyzing native libraries you are authorized to study. The repo contains no third-party application code or proprietary binaries, only a generic emulation framework and a tiny example library built from the source in this repo. Use it responsibly and in compliance with applicable law and the terms of any software you analyze.

@@ -29,16 +29,16 @@ import (
 // getrusage ru_maxrss (a high-water mark — plateaus are clean, linear growth
 // is a leak).
 //
-//	Opt-in (heavy): GONIDBG_MEMTEST=1 go test -tags unicorn \
+//	Opt-in (heavy): GOLEM_MEMTEST=1 go test -tags unicorn \
 //	  -run TestUnicornMemory -v ./internal/emu
 //
-// Counts: GONIDBG_MEM_N (default 100000), GONIDBG_MEM_CHURN (default 100000).
+// Counts: GOLEM_MEM_N (default 100000), GOLEM_MEM_CHURN (default 100000).
 func TestUnicornMemory(t *testing.T) {
-	if os.Getenv("GONIDBG_MEMTEST") != "1" {
-		t.Skip("heavy memory test; set GONIDBG_MEMTEST=1 to run")
+	if os.Getenv("GOLEM_MEMTEST") != "1" {
+		t.Skip("heavy memory test; set GOLEM_MEMTEST=1 to run")
 	}
-	hotN := envCount("GONIDBG_MEM_N", 100000)
-	churnN := envCount("GONIDBG_MEM_CHURN", 100000)
+	hotN := envCount("GOLEM_MEM_N", 100000)
+	churnN := envCount("GOLEM_MEM_CHURN", 100000)
 
 	type snap struct {
 		label   string
@@ -79,7 +79,7 @@ func TestUnicornMemory(t *testing.T) {
 	s1 := take("P1 after purego dlopen")
 	t.Logf("    Δ %s   <- libunicorn mapping + 3 trampolines + Go bindings (purego overhead)",
 		delta(s0, s1))
-	if lib := os.Getenv("GONIDBG_UNICORN"); lib != "" {
+	if lib := os.Getenv("GOLEM_UNICORN"); lib != "" {
 		if fi, err := os.Stat(lib); err == nil {
 			t.Logf("    libunicorn file: %.2f MiB (mapped lazily — RSS fills on use)", float64(fi.Size())/(1<<20))
 		}

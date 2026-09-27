@@ -1,4 +1,4 @@
-module github.com/sisi0318/gonidbg
+module github.com/isesword/golem
 
 go 1.25.0
 

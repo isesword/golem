@@ -6,12 +6,12 @@ import (
 )
 
 // TestLoadDex parses a real classes.dex and checks classes/methods/fields are
-// registered with sane metadata. Provide one via $GONIDBG_TEST_DEX (extract
+// registered with sane metadata. Provide one via $GOLEM_TEST_DEX (extract
 // classes.dex from any APK); the test skips if unset so it needs no bundled DEX.
 func TestLoadDex(t *testing.T) {
-	path := os.Getenv("GONIDBG_TEST_DEX")
+	path := os.Getenv("GOLEM_TEST_DEX")
 	if path == "" {
-		t.Skip("set GONIDBG_TEST_DEX=/path/to/classes.dex to exercise the DEX loader")
+		t.Skip("set GOLEM_TEST_DEX=/path/to/classes.dex to exercise the DEX loader")
 	}
 	vm := NewVM()
 	n, err := vm.LoadDexFile(path)

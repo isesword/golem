@@ -1,6 +1,6 @@
 # 构建说明(纯 Go 变体)
 
-本仓库是 gonidbg 的**纯 Go 变体**:`-tags unicorn` 的 CPU 引擎后端改用
+本仓库是 golem 的**纯 Go 变体**:`-tags unicorn` 的 CPU 引擎后端改用
 [purego](https://github.com/ebitengine/purego) 在**运行时** `dlopen` 原版
 libunicorn——构建期零 cgo、零 C 编译器、零自编 shim 库,`CGO_ENABLED=0`
 即可构建整个模块。运行期唯一依赖是系统里装有 libunicorn 本体。
@@ -27,7 +27,7 @@ sudo apt install libunicorn2             # 或 pip install unicorn 取 libunicor
 
 ```bash
 # 引擎版(CGO_ENABLED=0 是本变体的常态,不再需要 CC/zig/CGO_CFLAGS):
-CGO_ENABLED=0 go build -tags unicorn -o bin/gonidbg ./cmd/gonidbg
+CGO_ENABLED=0 go build -tags unicorn -o bin/golem ./cmd/golem
 CGO_ENABLED=0 go test  -tags unicorn ./...
 
 # 纯 Go 层(无引擎,随处可编,创建模拟器时报"无引擎"):
@@ -41,11 +41,11 @@ go run ./cmd/loadplan                    # 重定位直方图
 
 运行期定位 libunicorn 的顺序:
 
-1. `$GONIDBG_UNICORN`(显式路径,最可靠);
+1. `$GOLEM_UNICORN`(显式路径,最可靠);
 2. `libunicorn.2.dylib` / `libunicorn.dylib`(macOS)或 `libunicorn.so.2` / `libunicorn.so`(Linux),交由系统加载器搜索。
 
 ```bash
-GONIDBG_UNICORN=/opt/homebrew/opt/unicorn/lib/libunicorn.dylib ./bin/gonidbg examples/native/native.so add 2 3
+GOLEM_UNICORN=/opt/homebrew/opt/unicorn/lib/libunicorn.dylib ./bin/golem examples/native/native.so add 2 3
 ```
 
 ## 3. 交叉编译(纯 Go 的直接红利)
@@ -53,7 +53,7 @@ GONIDBG_UNICORN=/opt/homebrew/opt/unicorn/lib/libunicorn.dylib ./bin/gonidbg exa
 无 cgo 意味着交叉编译就是原生 `go build`,目标机只要带一份 libunicorn:
 
 ```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags unicorn -o gonidbg-linux ./cmd/gonidbg
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags unicorn -o golem-linux ./cmd/golem
 # 目标机:apt install libunicorn2(或 LD_LIBRARY_PATH 指向随包的 libunicorn.so)
 ```
 

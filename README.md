@@ -1,12 +1,10 @@
 **简体中文** | [English](README.en.md)
 
-# gonidbg
+# golem
 
-[![CI](https://github.com/sisi0318/gonidbg/actions/workflows/ci.yml/badge.svg)](https://github.com/sisi0318/gonidbg/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/sisi0318/gonidbg.svg)](https://pkg.go.dev/github.com/sisi0318/gonidbg)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-gonidbg 是 [unidbg](https://github.com/zhkl0228/unidbg) 的一个 Go 精简实现:在本机加载一个 Android AArch64 native 库(`.so`),不借助 JVM、真机或 Android 系统就能直接调用里面的函数。它给这个 `.so` 搭出一套够用的 Android 进程环境(动态链接器、真实的 bionic libc、一部分 Linux 系统调用、JNI/JavaVM),你就能从 Go 里调它的导出函数、读写它的内存。
+golem 是 [unidbg](https://github.com/zhkl0228/unidbg) 的一个 Go 精简实现:在本机加载一个 Android AArch64 native 库(`.so`),不借助 JVM、真机或 Android 系统就能直接调用里面的函数。它给这个 `.so` 搭出一套够用的 Android 进程环境(动态链接器、真实的 bionic libc、一部分 Linux 系统调用、JNI/JavaVM),你就能从 Go 里调它的导出函数、读写它的内存。
 
 和 unidbg 一样,CPU 引擎通过接口抽象解耦:本变体内置 [Unicorn](https://www.unicorn-engine.org/) 解释器后端——用 [purego](https://github.com/ebitengine/purego) 在运行时 `dlopen` 原版 libunicorn,**构建期零 cgo**(`CGO_ENABLED=0` 即可构建,无需 C 编译器)。
 
@@ -22,7 +20,7 @@ sum, _ := e.CallSymbol("add", 2, 3) // -> 5,作为真实 AArch64 代码执行
 
 ## 为什么
 
-unidbg 是模拟 Android native 库的事实标准,但它跑在 JVM 上,依赖也偏重。gonidbg 想用 Go 把最核心的那部分重新做一遍:
+unidbg 是模拟 Android native 库的事实标准,但它跑在 JVM 上,依赖也偏重。golem 想用 Go 把最核心的那部分重新做一遍:
 
 - 不需要 JVM。编译产物就是单个 Go 二进制,启动快、占用低。
 - 引擎可换。CPU 引擎藏在 `emu.Backend` 接口之后,Unicorn(purego 运行时加载)作为内置默认,跟 unidbg 的 backend 思路一致。
@@ -41,22 +39,22 @@ unidbg 是模拟 Android native 库的事实标准,但它跑在 JVM 上,依赖�
 - 从 **classes.dex 加载真实类/方法/字段元数据**(`Config.DexPath` / `LoadDex`):FindClass/GetMethodID/GetFieldID 按真实签名、父类解析(仅元数据,不执行字节码)。
 - 内存助手:分配、读写字节、C 字符串、小端整数。
 - 单指令 trace;以及完整指令流 trace(`TraceInsns`:每条指令的偏移 + 指令码 + 寄存器增量 + 调用/系统调用注解,Tenet 风格,可与真机 trace 对比;Unicorn)。
-- 引擎可选:`-tags unicorn` 编入 purego 后端,运行期用 `-engine` / `$GONIDBG_ENGINE` 选择。
+- 引擎可选:`-tags unicorn` 编入 purego 后端,运行期用 `-engine` / `$GOLEM_ENGINE` 选择。
 
 ## 快速开始
 
 ### 前置条件
 
 - Go 1.25+
-- 一个 CPU 引擎:Unicorn(默认)。构建**无需任何 C 编译器**;运行期需要系统装有 libunicorn(`brew install unicorn` / `apt install libunicorn2`),或用 `$GONIDBG_UNICORN` 指定其路径。详见 [BUILD.md](BUILD.md)。
+- 一个 CPU 引擎:Unicorn(默认)。构建**无需任何 C 编译器**;运行期需要系统装有 libunicorn(`brew install unicorn` / `apt install libunicorn2`),或用 `$GOLEM_UNICORN` 指定其路径。详见 [BUILD.md](BUILD.md)。
 
 ### 构建并运行示例
 
 ```bash
 # Linux / macOS(纯 Go 构建,无 cgo、无 zig)
-CGO_ENABLED=0 go build -tags unicorn -o bin/gonidbg ./cmd/gonidbg
-GONIDBG_UNICORN=$(brew --prefix unicorn)/lib/libunicorn.dylib \
-  ./bin/gonidbg examples/native/native.so fib 20                # fib([20]) = 6765
+CGO_ENABLED=0 go build -tags unicorn -o bin/golem ./cmd/golem
+GOLEM_UNICORN=$(brew --prefix unicorn)/lib/libunicorn.dylib \
+  ./bin/golem examples/native/native.so fib 20                # fib([20]) = 6765
 ```
 
 完整演示(加载内置 `native.so`,调用导出函数、一个被 import 的 `strlen`、一个写指针的函数,以及一个 Go `Replace` hook):
@@ -74,7 +72,7 @@ CGO_ENABLED=0 go run -tags unicorn ./examples/run   # 运行期需能找到 libu
 ## 作为库使用
 
 ```go
-import "github.com/sisi0318/gonidbg/emulator"
+import "golem/emulator"
 
 e, err := emulator.New(emulator.Config{
     SOPath:    "libfoo.so",        // 启动时加载并跑 init_array + JNI_OnLoad
@@ -129,7 +127,7 @@ e, _ := emulator.New(emulator.Config{SOPath: "libfoo.so", JNI: MyJni{}})
 
 - 本变体只内置 Unicorn 后端;接口(`emu.Backend`)与注册表机制保留了多引擎扩展点。
 - 每个模拟器第一次调用要花几百毫秒(预热),之后复用同一个模拟器就很快了。
-- 许可证提示:Unicorn 是 GPLv2,静态链接它会让整个二进制都变成 GPLv2,所以 gonidbg 把它放在运行时 `dlopen` 的边界之后——purego 后端延续了这一设计。
+- 许可证提示:Unicorn 是 GPLv2,静态链接它会让整个二进制都变成 GPLv2,所以 golem 把它放在运行时 `dlopen` 的边界之后——purego 后端延续了这一设计。
 
 ## 工作原理
 
@@ -145,7 +143,7 @@ guest 的内存和寄存器通过 `Backend` 接口交换,Unicorn purego 后端�
 ### 目录结构
 
 ```
-gonidbg/
+golem/
 ├── emulator/     公开 API:New、LoadLibrary、CallSymbol/CallOffset、Replace、内存助手
 ├── dvm/          公开:假 Dalvik VM —— VM、Object、Class、Jni、AbstractJni、VaList
 ├── internal/
@@ -155,7 +153,7 @@ gonidbg/
 │   ├── memory/   guest 地址空间分配器
 │   └── vfs/      guest 虚拟文件系统(/system/lib64、/proc/self、属性、tzdata)
 ├── cmd/
-│   ├── gonidbg/  CLI:加载 .so 并调用某个符号
+│   ├── golem/  CLI:加载 .so 并调用某个符号
 │   ├── elfscan/  分析 .so(导入/导出/init)
 │   ├── loadplan/ 重定位直方图 / 链接复杂度
 │   └── bsmoke/   引擎自检
@@ -196,8 +194,8 @@ CGO_ENABLED=0 go test -tags unicorn ./emulator
 - [Unicorn Engine](https://github.com/unicorn-engine/unicorn)(GPLv2):默认 CPU 后端,运行时加载。
 - AOSP bionic(Apache-2.0)等:`assets/` 下内置的 sysroot,见 [NOTICE](NOTICE)。
 
-gonidbg 自身的代码采用 Apache-2.0(见 [LICENSE](LICENSE))。引擎的许可证见上表:Unicorn 后端走动态加载,把它的 GPLv2 限制在库边界之内。
+golem 自身的代码采用 Apache-2.0(见 [LICENSE](LICENSE))。引擎的许可证见上表:Unicorn 后端走动态加载,把它的 GPLv2 限制在库边界之内。
 
 ## 免责声明
 
-gonidbg 是一个科研和教育用途的工具,用来分析你有权研究的 native 库。仓库里不含任何第三方应用的代码或专有二进制,只有一套通用的模拟框架,以及一个用本仓库源码自建的小示例库。请合理使用,并遵守适用的法律以及你所分析软件的相关条款。
+golem 是一个科研和教育用途的工具,用来分析你有权研究的 native 库。仓库里不含任何第三方应用的代码或专有二进制,只有一套通用的模拟框架,以及一个用本仓库源码自建的小示例库。请合理使用,并遵守适用的法律以及你所分析软件的相关条款。

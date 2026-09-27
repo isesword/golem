@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"unicode/utf16"
 
-	"github.com/sisi0318/gonidbg/dvm"
-	"github.com/sisi0318/gonidbg/internal/emu"
+	"github.com/isesword/golem/dvm"
+	"github.com/isesword/golem/internal/emu"
 )
 
 func le64(b []byte) uint64 { return binary.LittleEndian.Uint64(b) }

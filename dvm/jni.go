@@ -24,8 +24,8 @@ func (AbstractJni) CallVoidMethodV(*VM, *Object, string, *VaList)           {}
 
 func (AbstractJni) CallStaticObjectMethodV(*VM, *Class, string, *VaList) *Object { return nil }
 func (AbstractJni) CallStaticIntMethodV(*VM, *Class, string, *VaList) int32      { return 0 }
-func (AbstractJni) CallStaticBooleanMethodV(*VM, *Class, string, *VaList) bool { return false }
-func (AbstractJni) CallStaticLongMethodV(*VM, *Class, string, *VaList) int64   { return 0 }
+func (AbstractJni) CallStaticBooleanMethodV(*VM, *Class, string, *VaList) bool   { return false }
+func (AbstractJni) CallStaticLongMethodV(*VM, *Class, string, *VaList) int64     { return 0 }
 func (AbstractJni) CallStaticVoidMethodV(*VM, *Class, string, *VaList)           {}
 
 func (AbstractJni) GetObjectField(*VM, *Object, string) *Object      { return nil }

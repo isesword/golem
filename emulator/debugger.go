@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sisi0318/gonidbg/internal/emu"
+	"github.com/isesword/golem/internal/emu"
 )
 
 // Debugger is a small gdb-style console debugger: breakpoints, single-step,
@@ -77,7 +77,7 @@ func (d *Debugger) repl(pc uint64) {
 	}
 	fmt.Fprintf(d.Out, "\n* break @ 0x%x  %s\n", pc, d.e.NearestSym(pc))
 	for {
-		fmt.Fprint(d.Out, "(gonidbg) ")
+		fmt.Fprint(d.Out, "(golem) ")
 		if !d.sc.Scan() { // EOF -> detach and continue
 			d.step = false
 			return

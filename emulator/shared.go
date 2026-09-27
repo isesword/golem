@@ -3,7 +3,7 @@ package emulator
 import (
 	"fmt"
 
-	"github.com/sisi0318/gonidbg/internal/loader"
+	"github.com/isesword/golem/internal/loader"
 )
 
 // Phase B: shared read-only module pages.

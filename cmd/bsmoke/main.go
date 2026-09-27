@@ -1,7 +1,7 @@
 //go:build unicorn
 
 // bsmoke: exercises the real emu.Backend end-to-end on whichever engine is
-// compiled in (unicorn; pick with -engine / $GONIDBG_ENGINE).
+// compiled in (unicorn; pick with -engine / $GOLEM_ENGINE).
 // Guest program: `svc #0 ; add x0,x0,#1`. The interrupt hook (a Go callback)
 // does the thing that crashed naive attempts on Windows: maps a FRESH guest
 // region and reads/writes it. If x0==16 and the readback is 0xdeadbeef, guest
@@ -15,7 +15,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/sisi0318/gonidbg/internal/emu"
+	"github.com/isesword/golem/internal/emu"
 )
 
 func must(err error, what string) {
@@ -26,7 +26,7 @@ func must(err error, what string) {
 }
 
 func main() {
-	engine := flag.String("engine", "", "CPU engine: unicorn (default: auto / $GONIDBG_ENGINE)")
+	engine := flag.String("engine", "", "CPU engine: unicorn (default: auto / $GOLEM_ENGINE)")
 	flag.Parse()
 	fmt.Printf("engines compiled in: %s\n", strings.Join(emu.Available(), ", "))
 

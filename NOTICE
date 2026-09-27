@@ -1,5 +1,5 @@
-gonidbg
-Copyright 2026 The gonidbg Authors
+golem
+Copyright 2026 The golem Authors
 
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
@@ -26,7 +26,7 @@ owners.
 Interoperating projects (NOT distributed with this source)
 --------------------------------------------------------------------------------
 
-gonidbg is designed after, and interoperates with, these projects. Their code is
+golem is designed after, and interoperates with, these projects. Their code is
 fetched/built or loaded separately, not vendored in this repository:
 
   - unidbg          (Apache-2.0)  — the design reimplemented here.

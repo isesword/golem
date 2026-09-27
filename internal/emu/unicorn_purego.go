@@ -3,7 +3,7 @@
 // Pure-Go Unicorn2 backend: emu.Backend over the STOCK libunicorn, loaded at
 // runtime through purego (dlopen + assembly trampolines). No cgo, no C
 // compiler, no shim library — the only runtime dependency is libunicorn itself,
-// findable through $GONIDBG_UNICORN or the platform loader's search path:
+// findable through $GOLEM_UNICORN or the platform loader's search path:
 //
 //	macOS: libunicorn.2.dylib / libunicorn.dylib
 //	Linux: libunicorn.so.2    / libunicorn.so
@@ -219,7 +219,10 @@ func loadUnicorn() error {
 
 func dlopenUnicorn() (uintptr, error) {
 	var candidates []string
-	if p := strings.TrimSpace(os.Getenv("GONIDBG_UNICORN")); p != "" {
+	if p := strings.TrimSpace(os.Getenv("GOLEM_UNICORN")); p != "" {
+		candidates = append(candidates, p)
+	}
+	if p := strings.TrimSpace(os.Getenv("GOLEM_UNICORN")); p != "" { // legacy alias
 		candidates = append(candidates, p)
 	}
 	switch runtime.GOOS {
@@ -247,7 +250,7 @@ func dlopenUnicorn() (uintptr, error) {
 		}
 		lastErr = err
 	}
-	return 0, fmt.Errorf("emu: cannot load libunicorn (tried %s; set GONIDBG_UNICORN to its path): %w",
+	return 0, fmt.Errorf("emu: cannot load libunicorn (tried %s; set GOLEM_UNICORN to its path): %w",
 		strings.Join(candidates, ", "), lastErr)
 }
 

@@ -3,10 +3,10 @@ package emulator
 import (
 	"fmt"
 
-	"github.com/sisi0318/gonidbg/internal/emu"
+	"github.com/isesword/golem/internal/emu"
 )
 
-// This file is gonidbg's cooperative thread scheduler — the green-thread runtime
+// This file is golem's cooperative thread scheduler — the green-thread runtime
 // that lets the guest's pthread_create'd threads actually run. We can't run
 // guest threads concurrently (one CPU engine, no nested Start), so instead each
 // thread is a fiber with its own stack and a saved CPU context; the scheduler

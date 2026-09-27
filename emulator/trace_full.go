@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/sisi0318/gonidbg/internal/emu"
+	"github.com/isesword/golem/internal/emu"
 )
 
 // This file implements a full instruction-stream tracer: every guest
@@ -14,7 +14,7 @@ import (
 // register file deltas it produced, and symbol annotations for calls/syscalls.
 // The format is a clean cousin of a Frida/Tenet execution trace — designed to
 // diff an emulated run against a real-device trace to find where they diverge —
-// but it is gonidbg's own, built on the engine's per-instruction code hook.
+// but it is golem's own, built on the engine's per-instruction code hook.
 //
 // It needs the Unicorn engine (it traces one instruction at a time,
 // hook). Tracing is slow (one register-file read per instruction) and produces
@@ -63,7 +63,7 @@ func (e *Emulator) TraceInsns(w io.Writer, start, end, base uint64) (func(), err
 		return nil, fmt.Errorf("TraceInsns: full instruction trace requires the unicorn engine (current %q)", e.engine)
 	}
 	t := &insnTracer{e: e, w: bufio.NewWriterSize(w, 1<<20), base: base, buf: make([]byte, 0, 256)}
-	fmt.Fprintf(t.w, "# gonidbg instruction trace  base=0x%x range=[0x%x,0x%x)\n", base, start, end)
+	fmt.Fprintf(t.w, "# golem instruction trace  base=0x%x range=[0x%x,0x%x)\n", base, start, end)
 	h, err := e.be.HookCode(start, end, func(b emu.Backend, addr uint64, size uint32) {
 		t.onInsn(addr)
 	})

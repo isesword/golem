@@ -11,7 +11,7 @@
 //	-tags unicorn   -> Unicorn2 loaded at runtime via purego (unicorn_purego.go);
 //	                   no cgo, no C compiler, binds the stock libunicorn
 //
-// Build with both to choose at run time (arg / $GONIDBG_ENGINE). Everything else
+// Build with both to choose at run time (arg / $GOLEM_ENGINE). Everything else
 // in this module is written against this interface so it compiles and is
 // testable without a C toolchain (a pure-Go build registers no backend).
 package emu

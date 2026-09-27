@@ -3,11 +3,11 @@ package emulator
 import (
 	"fmt"
 
-	"github.com/sisi0318/gonidbg/dvm"
-	"github.com/sisi0318/gonidbg/internal/emu"
+	"github.com/isesword/golem/dvm"
+	"github.com/isesword/golem/internal/emu"
 )
 
-// This file is gonidbg's reverse JNI bridge: invoking a native method that the
+// This file is golem's reverse JNI bridge: invoking a native method that the
 // .so registered with RegisterNatives, *from Go*. It is the inverse of
 // jni_dispatch.go (the .so calling into Java). unidbg exposes this as
 // DvmObject.callJniMethod / callJniMethodObject; here it is CallNative*.

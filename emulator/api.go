@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/sisi0318/gonidbg/internal/emu"
+	"github.com/isesword/golem/internal/emu"
 )
 
 // Guest memory protection bits (mirror the CPU backend's UC_PROT_*).
@@ -181,7 +181,7 @@ func (h *Hook) SetPC(v uint64) { _ = h.e.be.RegWrite(emu.RegPC, v) }
 type ReplaceFunc func(h *Hook) uint64
 
 // Replace makes calls to the function at addr run fn instead (the entry is
-// overwritten with an `svc; ret` trampoline). This is gonidbg's analogue of
+// overwritten with an `svc; ret` trampoline). This is golem's analogue of
 // unidbg's hook/replace: model or stub a native function in Go. Works on both
 // engines (it's a trap, not an inline patch).
 func (e *Emulator) Replace(addr uint64, fn ReplaceFunc) {

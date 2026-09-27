@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/sisi0318/gonidbg/emulator"
+	"github.com/isesword/golem/emulator"
 )
 
 func rd8le(b []byte) uint64 {
