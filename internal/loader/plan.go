@@ -6,7 +6,6 @@ import (
 	"os"
 	"sort"
 	"sync"
-	"syscall"
 	"unsafe"
 
 	"github.com/isesword/golem/internal/emu"
@@ -160,7 +159,7 @@ func (img *Image) Plan() (*Plan, error) {
 		if shareable {
 			// Page-aligned host buffer for uc_mem_map_ptr (zero-copy, shared
 			// across all engines instantiating this plan).
-			buf, err := syscall.Mmap(-1, 0, int(m.Size), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_ANON|syscall.MAP_PRIVATE)
+			buf, err := allocSharedBuffer(int(m.Size))
 			if err != nil {
 				return nil, fmt.Errorf("shared buffer %#x: %w", m.Addr, err)
 			}
