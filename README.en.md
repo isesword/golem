@@ -201,6 +201,7 @@ CGO_ENABLED=0 go test -tags unicorn ./emulator
 golem builds on:
 
 - [unidbg](https://github.com/zhkl0228/unidbg) (Apache-2.0): the spiritual predecessor — the source of the domain model and the JNI-trap design.
+- [gonidbg](https://github.com/sisi0318/gonidbg) (Apache-2.0): the direct starting point — the Go implementation of the loader, bionic reuse, cooperative scheduler, and JNI trap that golem evolved from, adding the purego engine binding, JNI reference lifecycle, engine pool, and shared read-only pages.
 - [Unicorn Engine](https://github.com/unicorn-engine/unicorn) (GPLv2): the default CPU backend, loaded at runtime.
 - AOSP bionic (Apache-2.0) and others: the bundled sysroot under `assets/`. See [NOTICE](NOTICE).
 

@@ -202,6 +202,7 @@ CGO_ENABLED=0 go test -tags unicorn ./emulator
 ## 致谢与许可证
 
 - [unidbg](https://github.com/zhkl0228/unidbg)(Apache-2.0):精神前身——领域模型与 JNI 陷回设计的灵感来源。
+- [gonidbg](https://github.com/sisi0318/gonidbg)(Apache-2.0):本项目的直接起点——加载器、bionic 复用、协作式调度与 JNI 陷回的 Go 实现源自该 fork,在其基础上演化出 purego 引擎绑定、JNI 引用生命周期、引擎池与共享只读页。
 - [Unicorn Engine](https://github.com/unicorn-engine/unicorn)(GPLv2):默认 CPU 后端,运行时加载。
 - AOSP bionic(Apache-2.0)等:`assets/` 下内置的 sysroot,见 [NOTICE](NOTICE)。
 
