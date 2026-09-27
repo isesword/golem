@@ -30,10 +30,14 @@ type sharedRange struct {
 
 // privatize re-maps every shared range covering [addr, addr+size) as private
 // anonymous memory with identical content. Idempotent: ranges already
-// private are skipped.
-func (e *Emulator) privatize(addr, size uint64) {
+// private are skipped. Returns an error if ANY step of the re-mapping fails
+// — the caller must not write to a range it believes is private when the
+// privatization did not fully succeed, or every engine sharing those pages
+// would be corrupted.
+func (e *Emulator) privatize(addr, size uint64) error {
 	lo, hi := addr, addr+size
 	kept := e.shared[:0]
+	var firstErr error
 	for _, sr := range e.shared {
 		overlaps := lo < sr.addr+sr.size && sr.addr < hi
 		if !overlaps {
@@ -42,14 +46,24 @@ func (e *Emulator) privatize(addr, size uint64) {
 		}
 		// re-create the range as private anonymous memory with the same bytes
 		m := &sr.plan.Maps[sr.mapIdx]
-		_ = e.be.MemUnmap(sr.addr, sr.size)
-		_ = e.be.MemMap(sr.addr, sr.size, m.Prot)
-		if len(m.Content) > 0 {
-			_ = e.be.MemWrite(sr.addr, m.Content)
+		if err := e.be.MemUnmap(sr.addr, sr.size); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("unmap shared %#x: %w", sr.addr, err)
+		} else if err := e.be.MemMap(sr.addr, sr.size, m.Prot); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("re-map private %#x: %w", sr.addr, err)
+		} else if len(m.Content) > 0 {
+			if err := e.be.MemWrite(sr.addr, m.Content); err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("restore content %#x: %w", sr.addr, err)
+			}
 		}
-		_ = e.be.FlushCache()
 	}
 	e.shared = kept
+	if firstErr != nil {
+		return firstErr
+	}
+	if err := e.be.FlushCache(); err != nil {
+		return fmt.Errorf("flush after privatize: %w", err)
+	}
+	return nil
 }
 
 // applyPlan instantiates the plan in this engine, recording shared ranges.

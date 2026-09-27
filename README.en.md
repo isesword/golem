@@ -14,7 +14,7 @@ defer e.Close()
 sum, _ := e.CallSymbol("add", 2, 3) // -> 5, executed as real AArch64 code
 ```
 
-> Current status: both engines work end to end. They load and link bionic and the target `.so`, run `init_array` and `JNI_OnLoad`, call exports, and handle syscalls and JNI. It's only a subset of unidbg, so see [Compared to unidbg](#compared-to-unidbg) for what's missing.
+> Current status: the Unicorn (purego) backend works end to end. It loads and links bionic and the target `.so`, runs `init_array` and `JNI_OnLoad`, calls exports, and handles syscalls and JNI. It's only a subset of unidbg, so see [Compared to unidbg](#compared-to-unidbg) for what's missing.
 
 ---
 

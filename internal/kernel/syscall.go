@@ -308,6 +308,13 @@ var Names = map[uint64]string{
 
 // Dispatch reads the syscall number + args from the backend, runs the handler,
 // and writes the result to x0. Register it via Backend.HookInterrupt.
+//
+// Coverage policy (a deliberate design boundary): unimplemented syscalls
+// return -ENOSYS so gaps between the emulated kernel and a real one surface
+// in testing instead of being masked; todo() handlers optimistically return 0
+// for calls real kernels commonly answer with trivial success, and log under
+// Verbose. Every todo entry is a place the emulation may drift from a real
+// device — keep that list short.
 func (c *Context) Dispatch() {
 	num, _ := c.B.RegRead(emu.RegX8)
 	var args [6]uint64
@@ -694,12 +701,15 @@ func sysMprotect(c *Context, a [6]uint64) int64 {
 	return 0
 }
 
+// todo is an optimistic stub: returns 0 (success) for syscalls real kernels
+// commonly answer trivially. Logged under Verbose so drift from a real device
+// stays visible; replace with real implementations when behavior matters.
 func todo(name string) Handler {
 	return func(c *Context, _ [6]uint64) int64 {
 		if c.Verbose {
 			fmt.Printf("[syscall] TODO %s -> stub 0\n", name)
 		}
-		return 0 // optimistic stub; replace with a real impl when it matters
+		return 0
 	}
 }
 

@@ -73,11 +73,11 @@ type Config struct {
 	// reproducible runs (e.g. reverse-engineering a time-dependent signature).
 	Epoch int64
 
-	// ReplaceFns installs Go implementations by symbol name BEFORE the main
-	// .so (and its dependencies) load: names that resolve to a real symbol are
-	// entry-patched (Replace); names that would be unresolved imports get their
-	// stub bound to the implementation instead. Model NDK/libc functions the
-	// guest calls here (e.g. the AAssetManager family).
+	// ReplaceFns installs Go implementations by symbol name, with two binding
+	// paths: names the loaded modules import as UNRESOLVED symbols get their
+	// stub bound to the implementation (before linking); names the loaded
+	// modules EXPORT are entry-patched (Replace) after boot completes. Model
+	// NDK/libc functions the guest calls here (e.g. the AAssetManager family).
 	ReplaceFns map[string]func(h *Hook) uint64
 }
 
@@ -202,7 +202,7 @@ func (e *Emulator) MemStats() (regions int, mmapTop uint64) {
 
 // New boots an emulator: prepares the address space, maps bionic, and (if
 // Config.SOPath is set) loads + initializes the main library.
-func New(cfg Config) (*Emulator, error) {
+func New(cfg Config) (e *Emulator, err error) {
 	engine, err := emu.Resolve(cfg.Engine)
 	if err != nil {
 		return nil, fmt.Errorf("backend: %w", err)
@@ -215,7 +215,7 @@ func New(cfg Config) (*Emulator, error) {
 	if pid == 0 {
 		pid = defaultPid
 	}
-	e := &Emulator{
+	e = &Emulator{
 		cfg:         cfg,
 		engine:      engine,
 		be:          be,
@@ -238,6 +238,14 @@ func New(cfg Config) (*Emulator, error) {
 		fields:      map[dvm.Ref]*fieldRef{},
 		arrayPins:   map[uint64]pinEntry{},
 	}
+	// On any construction failure the half-booted engine must be torn down:
+	// it already holds unicorn mappings, and repeated failed New calls would
+	// otherwise leak engines.
+	defer func() {
+		if err != nil && e != nil {
+			e.be.Close()
+		}
+	}()
 	if cfg.FileResolver != nil {
 		e.fs.SetFallback(cfg.FileResolver)
 	}
@@ -313,8 +321,16 @@ func New(cfg Config) (*Emulator, error) {
 	}
 
 	if err := e.boot(); err != nil {
-		_ = be.Close()
-		return nil, err
+		return nil, err // cleanup via the deferred Close above
+	}
+	// ReplaceFns second pass: exports of the freshly loaded modules are only
+	// in e.syms now. Names bound as import overrides during linking are not
+	// in e.syms (they resolved to stubs) and are naturally skipped; exported
+	// symbols get their entry patched.
+	for name, fn := range cfg.ReplaceFns {
+		if addr, ok := e.syms[name]; ok {
+			e.Replace(addr, fn)
+		}
 	}
 	return e, nil
 }

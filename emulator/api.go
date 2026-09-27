@@ -190,8 +190,15 @@ func (e *Emulator) Replace(addr uint64, fn ReplaceFunc) {
 		_ = b.RegWrite(emu.RegX0, ret)
 	}
 	// svc #0 ; ret  — trap to onInterrupt, which dispatches to e.replaced[addr].
-	e.privatize(addr, 8) // patching shared read-only pages corrupts every engine sharing them
-	_ = e.be.MemWrite(addr, []byte{0x01, 0x00, 0x00, 0xd4, 0xc0, 0x03, 0x5f, 0xd6})
+	// Patching a shared read-only page would corrupt every engine sharing
+	// those bytes, so privatize first. A privatization failure is fatal: the
+	// patch must never silently half-apply.
+	if err := e.privatize(addr, 8); err != nil {
+		panic(fmt.Sprintf("emulator: Replace %#x: %v", addr, err))
+	}
+	if err := e.be.MemWrite(addr, []byte{0x01, 0x00, 0x00, 0xd4, 0xc0, 0x03, 0x5f, 0xd6}); err != nil {
+		panic(fmt.Sprintf("emulator: Replace %#x: patch write: %v", addr, err))
+	}
 	_ = e.be.FlushCache() // drop any stale translation of the old code
 }
 

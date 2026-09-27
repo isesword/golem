@@ -99,3 +99,27 @@ func TestSharedEngineJNI(t *testing.T) {
 	}
 	_ = dvm.Ref(0)
 }
+
+// Phase A/B review regression: ReplaceFns entries naming symbols EXPORTED by
+// the loaded modules must be entry-patched AFTER boot (the pre-boot pass only
+// sees an empty symbol table and binds import overrides).
+func TestReplaceFnsPostBootExportPatch(t *testing.T) {
+	e, err := New(Config{
+		SOPath:    "../examples/native/native.so",
+		AssetRoot: "../assets",
+		ReplaceFns: map[string]func(h *Hook) uint64{
+			"add": func(h *Hook) uint64 { return h.Arg(0)*10 + h.Arg(1) },
+		},
+	})
+	if err != nil {
+		t.Skipf("boot: %v", err)
+	}
+	defer e.Close()
+	r, err := e.CallSymbol("add", 2, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r != 23 {
+		t.Fatalf("ReplaceFns export patch inactive: add(2,3)=%d, want 23 (2*10+3)", r)
+	}
+}

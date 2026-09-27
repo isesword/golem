@@ -1,6 +1,9 @@
 package dvm
 
-import "testing"
+import (
+	"encoding/binary"
+	"testing"
+)
 
 // JNI reference-lifecycle conformance tests. These pin the semantics the
 // framework promises guests: local refs die with their call's frame (one-beat
@@ -297,5 +300,34 @@ func TestRefStatsBoundedAcrossCalls(t *testing.T) {
 	// bound is "at most one call's worth" — the O(1) memory claim, verified
 	if g != 0 || f != 1 || l > 8 {
 		t.Fatalf("after 2000 calls: globals=%d frames=%d locals=%d, want 0/1/<=8", g, f, l)
+	}
+}
+
+// Review regression: a malformed DEX must fail WITHOUT half-registering
+// classes into the VM (two-phase parse/commit).
+func TestLoadDexMalformedLeavesVMUntouched(t *testing.T) {
+	vm := NewVM()
+	before := len(vm.classes)
+
+	// valid magic, but methodIdsSize=1 with an out-of-range table offset:
+	// phase-1 parsing must panic-recover into an error with the VM untouched
+	good := make([]byte, 112)
+	copy(good[0:4], "dex\n")
+	le := binary.LittleEndian
+	le.PutUint32(good[88:], 1)        // methodIdsSize = 1
+	le.PutUint32(good[92:], 0xFFFF00) // methodIdsOff far beyond the buffer
+	if _, err := vm.LoadDex(good); err == nil {
+		t.Fatal("out-of-range dex table must error")
+	}
+	if len(vm.classes) != before {
+		t.Fatalf("VM mutated by failed LoadDex: classes %d -> %d", before, len(vm.classes))
+	}
+
+	bad := []byte("not a dex at all")
+	if _, err := vm.LoadDex(bad); err == nil {
+		t.Fatal("bad magic must error")
+	}
+	if len(vm.classes) != before {
+		t.Fatalf("VM mutated by bad-magic LoadDex: classes %d -> %d", before, len(vm.classes))
 	}
 }

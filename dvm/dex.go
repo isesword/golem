@@ -26,6 +26,9 @@ func (vm *VM) LoadDexFile(path string) (int, error) {
 }
 
 // LoadDex parses raw .dex bytes and registers classes/methods/fields.
+// Two-phase: the whole structure is parsed into local storage FIRST and only
+// committed to the VM on full success — a malformed DEX leaves the VM
+// completely untouched (no half-registered classes).
 func (vm *VM) LoadDex(d []byte) (n int, err error) {
 	defer func() { // malformed input -> error, never panic
 		if r := recover(); r != nil {
@@ -94,32 +97,67 @@ func (vm *VM) LoadDex(d []byte) (n int, err error) {
 		return sig + ")" + typeDesc(retIdx)
 	}
 
-	// Register every referenced method, grouped by its defining class.
+	// Phase 1 — parse into LOCAL structures only. Malformed input panics out
+	// of the readers and is recovered into an error above with the VM still
+	// untouched: a half-registered DEX must never linger after a failure.
+	type dexMethod struct{ name, sig string }
+	type dexField struct{ name, desc string }
+	type dexClass struct {
+		methods []dexMethod
+		fields  []dexField
+		super   string // empty = none seen
+	}
+	parsed := map[string]*dexClass{}
+	order := []string{}
+	classFor := func(name string) *dexClass {
+		if c, ok := parsed[name]; ok {
+			return c
+		}
+		c := &dexClass{}
+		parsed[name] = c
+		order = append(order, name)
+		return c
+	}
+
 	for i := uint32(0); i < methodIdsSize; i++ {
 		base := methodIdsOff + i*8
 		clsIdx := uint32(le.Uint16(d[base:]))
 		protoIdx := uint32(le.Uint16(d[base+2:]))
 		nameIdx := u32(base + 4)
-		cls := vm.ResolveClass(descToName(typeDesc(clsIdx)))
-		cls.MethodID(vm, str(nameIdx), protoSig(protoIdx), false)
+		c := classFor(descToName(typeDesc(clsIdx)))
+		c.methods = append(c.methods, dexMethod{str(nameIdx), protoSig(protoIdx)})
 	}
-	// Register every referenced field, grouped by its defining class.
 	for i := uint32(0); i < fieldIdsSize; i++ {
 		base := fieldIdsOff + i*8
 		clsIdx := uint32(le.Uint16(d[base:]))
 		typeIdx := uint32(le.Uint16(d[base+2:]))
 		nameIdx := u32(base + 4)
-		cls := vm.ResolveClass(descToName(typeDesc(clsIdx)))
-		cls.FieldID(vm, str(nameIdx), typeDesc(typeIdx), false)
+		c := classFor(descToName(typeDesc(clsIdx)))
+		c.fields = append(c.fields, dexField{str(nameIdx), typeDesc(typeIdx)})
 	}
-	// Class defs carry the superclass relationship.
 	for i := uint32(0); i < classDefsSize; i++ {
 		base := classDefsOff + i*32
 		clsIdx := u32(base)
 		superIdx := u32(base + 8)
-		cls := vm.ResolveClass(descToName(typeDesc(clsIdx)))
 		if superIdx != dexNoIndex {
-			cls.Super = vm.ResolveClass(descToName(typeDesc(superIdx)))
+			classFor(descToName(typeDesc(clsIdx))).super = descToName(typeDesc(superIdx))
+		} else {
+			classFor(descToName(typeDesc(clsIdx)))
+		}
+	}
+
+	// Phase 2 — commit the fully parsed result to the VM.
+	for _, name := range order {
+		c := parsed[name]
+		cls := vm.ResolveClass(name)
+		for _, m := range c.methods {
+			cls.MethodID(vm, m.name, m.sig, false)
+		}
+		for _, f := range c.fields {
+			cls.FieldID(vm, f.name, f.desc, false)
+		}
+		if c.super != "" {
+			cls.Super = vm.ResolveClass(c.super)
 		}
 	}
 	return int(classDefsSize), nil
