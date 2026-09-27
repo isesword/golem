@@ -1,0 +1,203 @@
+**简体中文** | [English](README.en.md)
+
+# gonidbg
+
+[![CI](https://github.com/sisi0318/gonidbg/actions/workflows/ci.yml/badge.svg)](https://github.com/sisi0318/gonidbg/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/sisi0318/gonidbg.svg)](https://pkg.go.dev/github.com/sisi0318/gonidbg)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
+gonidbg 是 [unidbg](https://github.com/zhkl0228/unidbg) 的一个 Go 精简实现:在本机加载一个 Android AArch64 native 库(`.so`),不借助 JVM、真机或 Android 系统就能直接调用里面的函数。它给这个 `.so` 搭出一套够用的 Android 进程环境(动态链接器、真实的 bionic libc、一部分 Linux 系统调用、JNI/JavaVM),你就能从 Go 里调它的导出函数、读写它的内存。
+
+和 unidbg 一样,CPU 引擎通过接口抽象解耦:本变体内置 [Unicorn](https://www.unicorn-engine.org/) 解释器后端——用 [purego](https://github.com/ebitengine/purego) 在运行时 `dlopen` 原版 libunicorn,**构建期零 cgo**(`CGO_ENABLED=0` 即可构建,无需 C 编译器)。
+
+```go
+e, _ := emulator.New(emulator.Config{SOPath: "libfoo.so"})
+defer e.Close()
+sum, _ := e.CallSymbol("add", 2, 3) // -> 5,作为真实 AArch64 代码执行
+```
+
+> 当前状态:Unicorn(purego)后端完整跑通,具体包括加载并链接 bionic 和目标 `.so`、执行 `init_array` 与 `JNI_OnLoad`、调用导出函数、处理 syscall 与 JNI。它是 unidbg 的一个子集,缺哪些能力见 [对标 unidbg](#对标-unidbg)。
+
+---
+
+## 为什么
+
+unidbg 是模拟 Android native 库的事实标准,但它跑在 JVM 上,依赖也偏重。gonidbg 想用 Go 把最核心的那部分重新做一遍:
+
+- 不需要 JVM。编译产物就是单个 Go 二进制,启动快、占用低。
+- 引擎可换。CPU 引擎藏在 `emu.Backend` 接口之后,Unicorn(purego 运行时加载)作为内置默认,跟 unidbg 的 backend 思路一致。
+- 复用真实 bionic。直接加载并模拟执行 AOSP sysroot 里的 `libc/libm/libdl`,省得自己重写一套 libc。
+- 代码量小。框架本体是几千行还算好读的 Go,外加一个很薄的 CPU 引擎绑定(纯 Go)。
+
+## 特性
+
+- AArch64 ELF 加载与动态链接(`RELATIVE` / `JUMP_SLOT` / `GLOB_DAT` / `ABS64`),`DT_INIT` + `init_array`。
+- 复用真实 bionic `libc/libm/libdl`(内置 AOSP sdk23 sysroot),支持跨模块符号解析。
+- Linux/AArch64 系统调用子集(mmap/mprotect/openat/read/write/clock_gettime/getrandom/futex/…),配一套小型虚拟文件系统(`/system/lib64`、`/proc/self/*`、属性、tzdata)。
+- JNI/JavaVM:guest 的 `JNIEnv`/`JavaVM` 调用会陷回到你用 Go 实现的处理器(`FindClass`、`GetMethodID`、`Call*Method*`、`RegisterNatives`、字符串、字节数组等)。
+- 按符号名或按模块偏移调用 native 函数,最多 8 个整型参数,可读取返回值。
+- 用 Go 回调替换 native 函数(`Replace`,入口 hook),或**内联 hook**(`HookAddr`,逐指令,Unicorn)改寄存器 / 重定向 PC;均自动让代码缓存失效。
+- **控制台调试器**:断点 / 单步 / 寄存器 / 内存(Unicorn,I/O 可注入便于脚本化)。
+- 从 **classes.dex 加载真实类/方法/字段元数据**(`Config.DexPath` / `LoadDex`):FindClass/GetMethodID/GetFieldID 按真实签名、父类解析(仅元数据,不执行字节码)。
+- 内存助手:分配、读写字节、C 字符串、小端整数。
+- 单指令 trace;以及完整指令流 trace(`TraceInsns`:每条指令的偏移 + 指令码 + 寄存器增量 + 调用/系统调用注解,Tenet 风格,可与真机 trace 对比;Unicorn)。
+- 引擎可选:`-tags unicorn` 编入 purego 后端,运行期用 `-engine` / `$GONIDBG_ENGINE` 选择。
+
+## 快速开始
+
+### 前置条件
+
+- Go 1.25+
+- 一个 CPU 引擎:Unicorn(默认)。构建**无需任何 C 编译器**;运行期需要系统装有 libunicorn(`brew install unicorn` / `apt install libunicorn2`),或用 `$GONIDBG_UNICORN` 指定其路径。详见 [BUILD.md](BUILD.md)。
+
+### 构建并运行示例
+
+```bash
+# Linux / macOS(纯 Go 构建,无 cgo、无 zig)
+CGO_ENABLED=0 go build -tags unicorn -o bin/gonidbg ./cmd/gonidbg
+GONIDBG_UNICORN=$(brew --prefix unicorn)/lib/libunicorn.dylib \
+  ./bin/gonidbg examples/native/native.so fib 20                # fib([20]) = 6765
+```
+
+完整演示(加载内置 `native.so`,调用导出函数、一个被 import 的 `strlen`、一个写指针的函数,以及一个 Go `Replace` hook):
+
+```bash
+CGO_ENABLED=0 go run -tags unicorn ./examples/run   # 运行期需能找到 libunicorn(见 BUILD.md)
+# engine: unicorn
+# add(2, 3)      = 5
+# fib(20)        = 6765
+# slen(...)      = 14
+# sum_into -> *out = 42
+# add(2, 3) after Replace = 23  (Go hook: a*10+b)
+```
+
+## 作为库使用
+
+```go
+import "github.com/sisi0318/gonidbg/emulator"
+
+e, err := emulator.New(emulator.Config{
+    SOPath:    "libfoo.so",        // 启动时加载并跑 init_array + JNI_OnLoad
+    AssetRoot: emulator.Locate("assets"),
+    Engine:    "",                 // "unicorn" | "" = 自动
+})
+if err != nil { panic(err) }
+defer e.Close()
+
+// 按名调用导出函数(最多 8 个整型/指针参数,返回 X0)。
+r, _ := e.CallSymbol("add", 2, 3)
+
+// 按模块偏移调用非导出入口(= unidbg 的 callFunction(offset))。
+r, _ = e.CallOffset(nil /*主模块*/, 0x1234, argPtr)
+
+// 交换内存。
+p := e.WriteCStringAlloc("hello")
+n, _ := e.CallSymbol("strlen_wrapper", p)
+out := e.Malloc(4); _, _ = e.CallSymbol("sum_into", out, 20, 22)
+v, _ := e.ReadU32(out)
+
+// 用 Go 替换一个 native 函数(hook)。
+e.ReplaceSymbol("add", func(h *emulator.Hook) uint64 { return h.Arg(0) + h.Arg(1) })
+```
+
+### 给 Java 侧建模(JNI)
+
+native 库会通过 JNI 回调 Java。实现 `dvm.Jni`(或 embed `dvm.AbstractJni`,只重写你的库会用到的那几个方法),再传进 `Config.JNI`:
+
+```go
+type MyJni struct{ dvm.AbstractJni }
+
+func (MyJni) CallStaticObjectMethodV(vm *dvm.VM, cls *dvm.Class, sig string, va *dvm.VaList) *dvm.Object {
+    if sig == "com/example/App->token()Ljava/lang/String;" {
+        return &dvm.Object{Class: vm.ResolveClass("java/lang/String"), Value: "secret"}
+    }
+    return nil
+}
+
+e, _ := emulator.New(emulator.Config{SOPath: "libfoo.so", JNI: MyJni{}})
+```
+
+这就是 unidbg 里 `AbstractJni` 的用法:guest 的 `RegisterNatives`/`GetMethodID`/`Call*Method` 会按 `"类->方法(签名)"` 这样的字符串路由到你的 switch。
+
+> 真实案例见 [`examples/douyin`](examples/douyin):用上面这套通用 API,在一个生产级混淆 `.so` 上复现请求签名头(该 `.so` 是第三方专有文件,不随仓库分发,需要自备)。
+
+## CPU 引擎
+
+| 引擎 | 构建标签 | 链接方式 | 速度(热路径) | 许可证 |
+|---|---|---|---|---|
+| **Unicorn2** | `-tags unicorn` | purego 运行时 `dlopen` libunicorn | ~20 ms/次 | GPLv2 |
+
+- 本变体只内置 Unicorn 后端;接口(`emu.Backend`)与注册表机制保留了多引擎扩展点。
+- 每个模拟器第一次调用要花几百毫秒(预热),之后复用同一个模拟器就很快了。
+- 许可证提示:Unicorn 是 GPLv2,静态链接它会让整个二进制都变成 GPLv2,所以 gonidbg 把它放在运行时 `dlopen` 的边界之后——purego 后端延续了这一设计。
+
+## 工作原理
+
+`emulator.New` 对照 unidbg `Emulator` 的启动流程:
+
+1. 地址空间:铺好 guest 栈、TLS(`TPIDR_EL0` 加一个 `pthread_internal_t`)和 SVC 跳板区,并选定 CPU 后端。
+2. 加载与链接:先处理真实 bionic 的 `libc/libm/libdl`,再处理你的 `.so`,也就是解析 ELF、映射段、处理重定位、跨模块解析符号;没解析到的 import 指向一个 `svc` 跳板,陷回 Go。
+3. 初始化:跑 `DT_INIT` 和 `init_array`,如果导出了 `JNI_OnLoad` 也一并调用(传入合成的 `JavaVM`)。
+4. 调用:`CallSymbol`/`CallOffset` 把参数写进 `X0..X7`,把 `LR` 设成哨兵地址,然后一直跑到返回。SVC 陷入之后再分派给 syscall 层(`internal/kernel`)、JNI 层,或某个用 Go 实现的 libc 函数、被 Replace 的函数。
+
+guest 的内存和寄存器通过 `Backend` 接口交换,Unicorn purego 后端实现了这个接口(运行时 `dlopen` 的 libunicorn 直接读写宿主侧映射的 guest 内存)。
+
+### 目录结构
+
+```
+gonidbg/
+├── emulator/     公开 API:New、LoadLibrary、CallSymbol/CallOffset、Replace、内存助手
+├── dvm/          公开:假 Dalvik VM —— VM、Object、Class、Jni、AbstractJni、VaList
+├── internal/
+│   ├── emu/      CPU 后端接口 + 注册表;unicorn 后端(purego 运行时加载 libunicorn)
+│   ├── loader/   ELF 解析 + 动态链接器
+│   ├── kernel/   AArch64 Linux 系统调用子集
+│   ├── memory/   guest 地址空间分配器
+│   └── vfs/      guest 虚拟文件系统(/system/lib64、/proc/self、属性、tzdata)
+├── cmd/
+│   ├── gonidbg/  CLI:加载 .so 并调用某个符号
+│   ├── elfscan/  分析 .so(导入/导出/init)
+│   ├── loadplan/ 重定位直方图 / 链接复杂度
+│   └── bsmoke/   引擎自检
+├── examples/
+│   ├── native/   一个自建的小 AArch64 .so(源码 + 预编译),供示例 + 测试用
+│   └── douyin/   真实案例:在一个生产 .so 上复现签名(.so 需自备,不入库)
+└── assets/android/sdk23/  内置 AOSP bionic sysroot(见 NOTICE)
+```
+
+## 对标 unidbg
+
+已实现:AArch64 ELF 加载与动态链接 · 复用真实 bionic · Unicorn(purego)后端 · Linux syscall 子集(含 uname/sysinfo/getdents64/readlinkat/statx/prlimit64/sched_getaffinity 等)· 带 Go 处理器的 JNI/JavaVM(字符串、字节/对象数组、异常、更多 Call 变体)· 按名或按偏移调用 · 函数 `Replace` 与**内联 hook** · **控制台调试器**(断点/单步/寄存器/内存)· 从 **classes.dex 加载真实类/方法/字段元数据** · 内存助手 · 指令 trace。
+
+还没做的(路线图,欢迎 PR):
+
+- ARM32,目前只支持 AArch64。
+- JNI / syscall 仍是子集:覆盖常见用法,但不是全部 ~232 个 JNI 槽位 / 完整 syscall 表。
+- DEX 是**元数据级**:解析类/方法/字段(签名、父类)供 FindClass/GetMethodID/GetFieldID 解析,但**不执行 DEX 字节码**(无 JVM);Java 侧行为仍由你用 `dvm.Jni` 建模。
+- 内联 hook 与控制台调试器需 Unicorn 引擎(本变体内置的即 Unicorn)。
+- 真并发线程(已有单核协作式调度器:`pthread_create` 建 fiber、按时间片切换、在 futex/sleep 处保存并恢复 CPU 上下文 —— 但非真并发)、信号、iOS / Mach-O。
+
+## 从源码构建 / 引擎
+
+纯 Go 层与引擎层的构建、交叉编译以及 libunicorn 的运行期定位,都在 [BUILD.md](BUILD.md) 里。
+
+```bash
+# 纯 Go 层随处可 build/test(无引擎):
+CGO_ENABLED=0 go build ./...
+CGO_ENABLED=0 go test ./...
+
+# 引擎集成测试(加载内置 native.so 并运行;CGO_ENABLED=0 全程零 cgo):
+CGO_ENABLED=0 go test -tags unicorn ./emulator
+```
+
+## 致谢与许可证
+
+- [unidbg](https://github.com/zhkl0228/unidbg)(Apache-2.0):本项目重新实现的对象。
+- [Unicorn Engine](https://github.com/unicorn-engine/unicorn)(GPLv2):默认 CPU 后端,运行时加载。
+- AOSP bionic(Apache-2.0)等:`assets/` 下内置的 sysroot,见 [NOTICE](NOTICE)。
+
+gonidbg 自身的代码采用 Apache-2.0(见 [LICENSE](LICENSE))。引擎的许可证见上表:Unicorn 后端走动态加载,把它的 GPLv2 限制在库边界之内。
+
+## 免责声明
+
+gonidbg 是一个科研和教育用途的工具,用来分析你有权研究的 native 库。仓库里不含任何第三方应用的代码或专有二进制,只有一套通用的模拟框架,以及一个用本仓库源码自建的小示例库。请合理使用,并遵守适用的法律以及你所分析软件的相关条款。
