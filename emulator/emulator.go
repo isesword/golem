@@ -31,6 +31,14 @@ type Config struct {
 	// AssetRoot is the directory containing android/sdk23/... (bionic libs +
 	// synthetic /proc, properties, tzdata). Empty = auto-locate (see Locate).
 	AssetRoot string
+	// NoSharedModules opts out of Phase B page sharing: by default, read-only
+	// segments of every loaded module are mapped zero-copy from ONE set of
+	// host buffers (uc_mem_map_ptr), so a pool of engines loads each .so's
+	// read-only pages into physical RAM exactly once. Writes that would touch
+	// a shared range (Replace/HookAddr patching) transparently privatize the
+	// module's pages in that engine first. Set true to disable (fresh
+	// anonymous memory per engine, pre-Phase-B behavior).
+	NoSharedModules bool
 	// SOPath is an optional "main" shared object to load+init at boot (its
 	// DT_INIT/init_array run, and JNI_OnLoad if exported). Empty = boot bionic
 	// only; load libraries yourself with LoadLibrary.
@@ -120,12 +128,14 @@ type Emulator struct {
 	getEnvStub  uint64         // JavaVM->GetEnv svc stub (special-cased)
 	jniDispatch map[uint64]int // JNIEnv stub addr -> JNINativeInterface index
 	classRefs   map[string]dvm.Ref
+	shared      []sharedRange          // guest ranges mapped via MemMapPtr (privatize-on-write)
 	classMeta   *dvm.Class             // java/lang/Class
 	natives     map[string]uint64      // "class.name+sig" -> registered native fn ptr
 	methods     map[dvm.Ref]*methodRef // jmethodID -> (class, method)
 	fields      map[dvm.Ref]*fieldRef  // jfieldID -> (class, field)
 	classFilter map[string]bool        // FindClass allow-set (nil = allow all)
-	arrayPins   map[uint64]dvm.Ref     // GetByteArrayElements ptr -> array ref (copy-back)
+	arrayPins   map[uint64]pinEntry    // GetByteArrayElements ptr -> array ref (copy-back)
+	pinGen      uint64                 // bumped per host-initiated native call
 	pendingExc  bool                   // a pending JNI exception (Throw/ThrowNew)
 
 	hostByName map[string]hostFn // libc funcs we implement in Go (override bionic)
@@ -222,10 +232,11 @@ func New(cfg Config) (*Emulator, error) {
 		replaced:    map[uint64]hostFn{},
 		jniDispatch: map[uint64]int{},
 		classRefs:   map[string]dvm.Ref{},
+		shared:      []sharedRange{},
 		natives:     map[string]uint64{},
 		methods:     map[dvm.Ref]*methodRef{},
 		fields:      map[dvm.Ref]*fieldRef{},
-		arrayPins:   map[uint64]dvm.Ref{},
+		arrayPins:   map[uint64]pinEntry{},
 	}
 	if cfg.FileResolver != nil {
 		e.fs.SetFallback(cfg.FileResolver)
@@ -352,7 +363,10 @@ func (e *Emulator) LoadLibrary(path string) (*Module, error) {
 
 // LoadModule maps + links a shared object and records its exports (no init run).
 func (e *Emulator) LoadModule(path, name string) (*Module, error) {
-	img, err := loader.Parse(path)
+	// CompileOnce: a pool of engines parses each .so exactly once, and the
+	// Image's cached Plan carries the shared host buffers that make read-only
+	// pages exist once in RAM across all engines.
+	img, err := loader.CompileOnce(path)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", name, err)
 	}
@@ -360,7 +374,11 @@ func (e *Emulator) LoadModule(path, name string) (*Module, error) {
 	span := (img.LoadSpan + 0xfff) &^ 0xfff
 	e.nextBase = base + span + 0x100000 // gap between modules
 
-	if err := img.Apply(e.be, base, e.resolveSymbol); err != nil {
+	plan, err := img.Plan()
+	if err != nil {
+		return nil, fmt.Errorf("plan %s: %w", name, err)
+	}
+	if err := e.applyPlan(plan, base, e.resolveSymbol); err != nil {
 		return nil, fmt.Errorf("link %s: %w", name, err)
 	}
 	for n, off := range img.Exports {

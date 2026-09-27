@@ -260,8 +260,12 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 		if cls := e.derefClass(e.jarg(b, 1)); cls != nil {
 			ret = uint64(e.vm.NewObject(cls, nil))
 		}
-	case 232: // GetObjectRefType -> JNILocalRefType
-		ret = 1
+	case 232: // GetObjectRefType: global=2, local=1 (weak globals unimplemented -> never 3)
+		if e.vm.IsGlobalRef(dvm.Ref(int32(e.jarg(b, 1)))) {
+			ret = 2
+		} else {
+			ret = 1
+		}
 
 	case jniGetFieldID, jniGetStaticFieldID:
 		// Intern a real field id keyed to (class, name, sig) so the field
@@ -401,7 +405,7 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 	case jniGetByteArrayElements: // (jarray, jboolean* isCopy) -> jbyte*
 		data := e.gbytes(e.jarg(b, 1))
 		p := e.WriteScratch(data)
-		e.arrayPins[p] = dvm.Ref(int32(e.jarg(b, 1)))
+		e.arrayPins[p] = pinEntry{ref: dvm.Ref(int32(e.jarg(b, 1))), gen: e.pinGen}
 		ret = p
 		if cp := e.jarg(b, 2); cp != 0 {
 			_ = e.be.MemWrite(cp, []byte{1})

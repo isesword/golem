@@ -254,6 +254,13 @@ func (vm *VM) NewGlobalRef(r Ref) Ref {
 // ART-lenient resolution of the spec's UB on double delete).
 func (vm *VM) DeleteGlobalRef(r Ref) { delete(vm.globals, r) }
 
+// IsGlobalRef reports whether r currently names a global reference. Used by
+// GetObjectRefType (and available to hosts for diagnostics).
+func (vm *VM) IsGlobalRef(r Ref) bool {
+	_, ok := vm.globals[r]
+	return ok
+}
+
 // DeleteLocalRef removes r from the innermost frame holding it; unknown
 // handles are a no-op (spec UB, resolved leniently like ART).
 func (vm *VM) DeleteLocalRef(r Ref) {

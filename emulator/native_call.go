@@ -64,6 +64,25 @@ func ArgBytes(b []byte) JavaArg { return JavaArg{kind: argBytes, b: b} }
 // ArgObject boxes o (a *dvm.Object) as a fresh jobject handle for the call.
 func ArgObject(o *dvm.Object) JavaArg { return JavaArg{kind: argObject, obj: o} }
 
+// pinEntry tracks one GetByteArrayElements pin: the array ref for copy-back
+// and the call generation it was last touched in.
+type pinEntry struct {
+	ref dvm.Ref
+	gen uint64
+}
+
+// sweepStalePins drops pins from generations older than the previous call —
+// a guest that never called ReleaseByteArrayElements held the array ref
+// forever (unbounded table + silent copy-back loss). Real ART requires
+// Release for pointers held across calls; this is the lenient equivalent.
+func (e *Emulator) sweepStalePins() {
+	for k, pin := range e.arrayPins {
+		if pin.gen+1 < e.pinGen {
+			delete(e.arrayPins, k)
+		}
+	}
+}
+
 // ArgRef passes an existing handle directly, preserving object identity for
 // the duration of the call. Only GLOBAL handles (e.g. jclass handles from the
 // class cache) remain valid across calls — a local handle from a previous
@@ -130,6 +149,8 @@ func (e *Emulator) callNative(className, name, sig string, receiver uint64, args
 	// they recycle when the next ref is boxed (the host still reads return
 	// values through NativeObject in the one-beat window before that).
 	defer e.vm.EndCall()
+	e.pinGen++
+	defer e.sweepStalePins()
 	if e.cfg.Verbose {
 		fmt.Printf("[call] %s (fn=0x%x, %d args)\n", key, fn, len(args))
 	}

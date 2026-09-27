@@ -189,7 +189,8 @@ func (e *Emulator) Restore(snap *Snapshot) error {
 	e.threadCap, e.threadOps, e.yieldReason, e.yieldAddr = 0, 0, 0, 0
 	e.scCount = 0
 	e.pendingExc = false
-	e.arrayPins = map[uint64]dvm.Ref{}
+	e.arrayPins = map[uint64]pinEntry{}
+	e.pinGen++
 	return nil
 }
 

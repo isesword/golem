@@ -190,6 +190,7 @@ func (e *Emulator) Replace(addr uint64, fn ReplaceFunc) {
 		_ = b.RegWrite(emu.RegX0, ret)
 	}
 	// svc #0 ; ret  — trap to onInterrupt, which dispatches to e.replaced[addr].
+	e.privatize(addr, 8) // patching shared read-only pages corrupts every engine sharing them
 	_ = e.be.MemWrite(addr, []byte{0x01, 0x00, 0x00, 0xd4, 0xc0, 0x03, 0x5f, 0xd6})
 	_ = e.be.FlushCache() // drop any stale translation of the old code
 }

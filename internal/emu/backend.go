@@ -1,7 +1,8 @@
 // Package emu defines the CPU backend abstraction — the single component that
 // cannot be written in pure Go. It mirrors the surface unidbg's
 // com.github.unidbg.arm.backend.Backend exposes and that unidbg uses:
-// register access, guest memory map/read/write/protect, code hooks, and
+// register access, guest memory map/read/write/protect (including zero-copy
+// mapping of caller-provided host memory via MemMapPtr), code hooks, and
 // run/stop.
 //
 // Like unidbg, the engine is selectable. Concrete backends are compiled in via
@@ -15,7 +16,10 @@
 // testable without a C toolchain (a pure-Go build registers no backend).
 package emu
 
-import "errors"
+import (
+	"errors"
+	"unsafe"
+)
 
 // ErrNoBackend is returned when no CPU backend is compiled in (a pure-Go build
 // without the `unicorn` build tag).
@@ -80,6 +84,11 @@ type Backend interface {
 	MemProtect(addr, size uint64, prot int) error
 	MemWrite(addr uint64, data []byte) error
 	MemRead(addr uint64, size uint64) ([]byte, error)
+	// MemMapPtr maps the CALLER-PROVIDED host memory [host, host+size) as guest
+	// memory at addr (uc_mem_map_ptr). No copy: guest reads/writes land directly
+	// in the host buffer, so several engines mapping the same buffer share it.
+	// host must be page-aligned; size page-aligned. The caller keeps host alive.
+	MemMapPtr(addr, size uint64, prot int, host unsafe.Pointer) error
 
 	// Hooks
 	HookCode(start, end uint64, fn CodeHookFunc) (HookHandle, error)

@@ -85,8 +85,12 @@ func TestJNI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if int32(r) != 12 { // GetVersion + GetStringUTFLength(5) + GetArrayLength(3) + same + pending + cleared
-		t.Fatalf("jni_probe = %d, want 12", int32(r))
+	// GetVersion(1) + GetStringUTFLength(5) + GetArrayLength(3) + same + pending
+	// + cleared = 12, plus Phase A reference-lifecycle checks (global survive
+	// delete + GetObjectRefType==global + frame pop re-box + IsSameObject +
+	// stale-global NULL) = 5 more.
+	if int32(r) != 17 {
+		t.Fatalf("jni_probe = %d, want 17", int32(r))
 	}
 	t.Logf("engine %s: JNI strings/object-arrays/exceptions OK", e.Engine())
 }

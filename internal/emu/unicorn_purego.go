@@ -123,24 +123,25 @@ func regMap(r Reg) int32 {
 // below cover every call this backend makes (integer args only).
 
 var (
-	pOpen     func(arch int32, mode int32, out unsafe.Pointer) int32                               // uc_open
-	pClose    func(uc unsafe.Pointer) int32                                                        // uc_close
-	pRegRead  func(uc unsafe.Pointer, regid int32, val unsafe.Pointer) int32                       // uc_reg_read
-	pRegWrite func(uc unsafe.Pointer, regid int32, val unsafe.Pointer) int32                       // uc_reg_write
-	pRegRdBat func(uc unsafe.Pointer, regs unsafe.Pointer, vals unsafe.Pointer, count int32) int32 // uc_reg_read_batch (void** vals)
-	pMemMap   func(uc unsafe.Pointer, addr uint64, size uint64, prot uint32) int32
-	pMemUnmap func(uc unsafe.Pointer, addr uint64, size uint64) int32
-	pMemProt  func(uc unsafe.Pointer, addr uint64, size uint64, prot uint32) int32
-	pMemWrite func(uc unsafe.Pointer, addr uint64, p unsafe.Pointer, size uint64) int32
-	pMemRead  func(uc unsafe.Pointer, addr uint64, p unsafe.Pointer, size uint64) int32
-	pStart    func(uc unsafe.Pointer, begin, until, timeout uint64, count uint64) int32                           // uc_emu_start
-	pStop     func(uc unsafe.Pointer) int32                                                                       // uc_emu_stop
-	pHookAdd  func(uc unsafe.Pointer, hh *uint64, htype int32, cb uintptr, user uintptr, begin, end uint64) int32 // uc_hook_add
-	pHookDel  func(uc unsafe.Pointer, hook uint64) int32                                                          // uc_hook_del
-	pStrerror func(err int32) string                                                                              // uc_strerror
+	pOpen      func(arch int32, mode int32, out unsafe.Pointer) int32                               // uc_open
+	pClose     func(uc unsafe.Pointer) int32                                                        // uc_close
+	pRegRead   func(uc unsafe.Pointer, regid int32, val unsafe.Pointer) int32                       // uc_reg_read
+	pRegWrite  func(uc unsafe.Pointer, regid int32, val unsafe.Pointer) int32                       // uc_reg_write
+	pRegRdBat  func(uc unsafe.Pointer, regs unsafe.Pointer, vals unsafe.Pointer, count int32) int32 // uc_reg_read_batch (void** vals)
+	pMemMap    func(uc unsafe.Pointer, addr uint64, size uint64, prot uint32) int32
+	pMemMapPtr func(uc unsafe.Pointer, addr uint64, size uint64, prot uint32, ptr unsafe.Pointer) int32 // uc_mem_map_ptr
+	pMemUnmap  func(uc unsafe.Pointer, addr uint64, size uint64) int32
+	pMemProt   func(uc unsafe.Pointer, addr uint64, size uint64, prot uint32) int32
+	pMemWrite  func(uc unsafe.Pointer, addr uint64, p unsafe.Pointer, size uint64) int32
+	pMemRead   func(uc unsafe.Pointer, addr uint64, p unsafe.Pointer, size uint64) int32
+	pStart     func(uc unsafe.Pointer, begin, until, timeout uint64, count uint64) int32                           // uc_emu_start
+	pStop      func(uc unsafe.Pointer) int32                                                                       // uc_emu_stop
+	pHookAdd   func(uc unsafe.Pointer, hh *uint64, htype int32, cb uintptr, user uintptr, begin, end uint64) int32 // uc_hook_add
+	pHookDel   func(uc unsafe.Pointer, hook uint64) int32                                                          // uc_hook_del
+	pStrerror  func(err int32) string                                                                              // uc_strerror
 
-	pCtl        func(uc unsafe.Pointer, control uint32) int32     // uc_ctl (optional)
-	pCtxAlloc   func(uc unsafe.Pointer, out unsafe.Pointer) int32 // uc_context_alloc (optional)
+	pCtl        func(uc unsafe.Pointer, control uint32, args ...unsafe.Pointer) int32 // uc_ctl (optional); SysV expands the variadic args in order, which matches uc_ctl's C variadic for integer/pointer arguments
+	pCtxAlloc   func(uc unsafe.Pointer, out unsafe.Pointer) int32                     // uc_context_alloc (optional)
 	pCtxSave    func(uc unsafe.Pointer, ctx unsafe.Pointer) int32
 	pCtxRestore func(uc unsafe.Pointer, ctx unsafe.Pointer) int32
 	pCtxFree    func(ctx unsafe.Pointer) int32 // takes only the context (post-1.0.1rc5 API)
@@ -171,6 +172,7 @@ func loadUnicorn() error {
 		"uc_reg_write":      &pRegWrite,
 		"uc_reg_read_batch": &pRegRdBat,
 		"uc_mem_map":        &pMemMap,
+		"uc_mem_map_ptr":    &pMemMapPtr,
 		"uc_mem_unmap":      &pMemUnmap,
 		"uc_mem_protect":    &pMemProt,
 		"uc_mem_write":      &pMemWrite,
@@ -336,8 +338,9 @@ func lookupCB(id uint64) *hookReg {
 func init() { Register("unicorn", newUnicornBackend) }
 
 type unicornBackend struct {
-	uc  unsafe.Pointer
-	cbs []uint64
+	uc       unsafe.Pointer
+	cbs      []uint64
+	pageSize uint64 // unicorn's guest page size (4 KiB on aarch64 — NOT the host page size)
 }
 
 func newUnicornBackend() (Backend, error) {
@@ -348,7 +351,9 @@ func newUnicornBackend() (Backend, error) {
 	if e := pOpen(ucArchARM64, ucModeARM, unsafe.Pointer(&uc)); e != ucOK {
 		return nil, ucErr("uc_open", e)
 	}
-	return &unicornBackend{uc: uc}, nil
+	// Guest map alignment follows unicorn's GUEST page size (4 KiB on aarch64 —
+	// the QEMU target page), NOT the host page size (16 KiB on darwin/arm64).
+	return &unicornBackend{uc: uc, pageSize: 4096}, nil
 }
 
 func ucErr(op string, e int32) error {
@@ -385,6 +390,36 @@ func (b *unicornBackend) ReadGPRegs() ([34]uint64, error) {
 func (b *unicornBackend) MemMap(addr, size uint64, prot int) error {
 	if e := pMemMap(b.uc, addr, size, uint32(prot)); e != ucOK {
 		return ucErr("mem_map", e)
+	}
+	return nil
+}
+
+// MemMapPtr maps the caller-provided host buffer [host, host+size) as guest
+// memory at addr (uc_mem_map_ptr) — zero-copy: guest reads/writes land directly
+// in the host buffer, so engines mapping the same buffer share it. The caller
+// must keep host valid and page-sized for the engine's lifetime; the buffer
+// must stay host-readable/writable per the requested prot (unicorn reads guest
+// code from the buffer as plain host data, so PROT_EXEC is never needed on it).
+//
+// Two different page sizes matter here and conflating them is a bug:
+//   - guest addr/size align to unicorn's GUEST page size (4 KiB on aarch64,
+//     queried via uc_ctl — the loader's segments are 4 KiB granular);
+//   - the host pointer aligns to the HOST page size (16 KiB on darwin/arm64),
+//     which syscall.Mmap allocations satisfy.
+func (b *unicornBackend) MemMapPtr(addr, size uint64, prot int, host unsafe.Pointer) error {
+	if host == nil {
+		return fmt.Errorf("emu: mem_map_ptr: nil host pointer (use MemMap for engine-owned memory)")
+	}
+	gmask := b.pageSize - 1
+	if b.pageSize == 0 || addr&gmask != 0 || size == 0 || size&gmask != 0 {
+		return fmt.Errorf("emu: mem_map_ptr: guest addr %#x and size %#x must be aligned to the unicorn page size %d", addr, size, b.pageSize)
+	}
+	hmask := uintptr(os.Getpagesize() - 1)
+	if uintptr(host)&hmask != 0 {
+		return fmt.Errorf("emu: mem_map_ptr: host pointer %p is not page-aligned (host page size %d)", host, os.Getpagesize())
+	}
+	if e := pMemMapPtr(b.uc, addr, size, uint32(prot), host); e != ucOK {
+		return ucErr("mem_map_ptr", e)
 	}
 	return nil
 }

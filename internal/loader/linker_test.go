@@ -5,24 +5,33 @@ import (
 	"encoding/binary"
 	"os"
 	"testing"
+	"unsafe"
 
 	"github.com/sisi0318/gonidbg/internal/emu"
 )
 
 // memBE is an in-memory emu.Backend (sparse pages) for testing the linker
 // without a CPU engine. It exercises MemMap/MemWrite/MemRead/MemProtect.
-type memBE struct{ pages map[uint64][]byte }
+type memBE struct {
+	pages map[uint64][]byte
+	ptrs  []ptrRange
+}
 
 func newMemBE() *memBE { return &memBE{pages: map[uint64][]byte{}} }
 
 func (m *memBE) page(a uint64) []byte {
-	p := a &^ 0xfff
-	pg := m.pages[p]
-	if pg == nil {
-		pg = make([]byte, 0x1000)
-		m.pages[p] = pg
+	pg := a &^ 0xfff
+	for _, pr := range m.ptrs { // aliased host buffers (uc_mem_map_ptr semantics)
+		if pg >= pr.addr && pg+0x1000 <= pr.addr+pr.size {
+			return pr.buf[pg-pr.addr : pg-pr.addr+0x1000]
+		}
 	}
-	return pg
+	pgm := m.pages[pg]
+	if pgm == nil {
+		pgm = make([]byte, 0x1000)
+		m.pages[pg] = pgm
+	}
+	return pgm
 }
 func (m *memBE) MemMap(addr, size uint64, _ int) error {
 	for a := addr &^ 0xfff; a < addr+size; a += 0x1000 {
@@ -45,8 +54,34 @@ func (m *memBE) MemRead(addr, size uint64) ([]byte, error) {
 	}
 	return out, nil
 }
-func (m *memBE) MemUnmap(uint64, uint64) error           { return nil }
-func (m *memBE) MemProtect(uint64, uint64, int) error    { return nil }
+func (m *memBE) MemUnmap(uint64, uint64) error        { return nil }
+func (m *memBE) MemProtect(uint64, uint64, int) error { return nil }
+
+// ptrRange is one uc_mem_map_ptr-style alias: guest [addr, addr+size) reads
+// and writes hit the caller's host buffer directly (zero-copy).
+type ptrRange struct {
+	addr, size uint64
+	buf        []byte
+}
+
+// MemMapPtr registers an ALIAS to the caller's host buffer, so Plan.ApplyShared
+// memory images are observable through this stub just like real unicorn.
+func (m *memBE) MemMapPtr(addr, size uint64, prot int, host unsafe.Pointer) error {
+	buf := unsafe.Slice((*byte)(host), size)
+	m.ptrs = append(m.ptrs, ptrRange{addr, size, buf})
+	return nil
+}
+
+func (m *memBE) ptrPage(pg uint64) ([]byte, bool) {
+	for _, pr := range m.ptrs {
+		if pg >= pr.addr && pg+0x1000 <= pr.addr+pr.size {
+			return pr.buf[pg-pr.addr : pg-pr.addr+0x1000], true
+		}
+	}
+	return nil, false
+}
+
+// (page() consults m.ptrs directly; ptrPage kept for direct range probes in tests.)
 func (m *memBE) RegRead(emu.Reg) (uint64, error)         { return 0, nil }
 func (m *memBE) RegWrite(emu.Reg, uint64) error          { return nil }
 func (m *memBE) ReadGPRegs() ([34]uint64, error)         { return [34]uint64{}, nil }

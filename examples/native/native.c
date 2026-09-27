@@ -65,5 +65,23 @@ int jni_probe(void *env) {
     int   pend = ((unsigned char (*)(void *))t[228])(env) ? 1 : 0;                // ExceptionCheck -> 1
     ((void (*)(void *))t[17])(env);                                               // ExceptionClear
     int   clr  = ((unsigned char (*)(void *))t[228])(env) ? 0 : 1;                // -> 1
-    return (ver == 0x10006) + ul + al + same + pend + clr;
+
+    // --- Phase A reference-lifecycle conformance (guest-side end to end) ---
+    int refs = 0;
+    void *g = ((void *(*)(void *, void *))t[21])(env, s);                         // NewGlobalRef(s)
+    ((void (*)(void *, void *))t[23])(env, s);                                    // DeleteLocalRef(s)
+    refs += ((void *(*)(void *, void *))t[25])(env, g) != 0;                      // NewLocalRef(global) alive
+    int rt = ((int (*)(void *, void *))t[232])(env, g);                           // GetObjectRefType
+    refs += (rt == 2);                                                            // global
+    if (((int (*)(void *))t[19])(env) == 0) {                                     // PushLocalFrame
+        void *obj = ((void *(*)(void *, void *))t[27])(env, cls);                 // AllocObject
+        void *res = ((void *(*)(void *, void *))t[20])(env, obj);                 // PopLocalFrame(result)
+        refs += (res != 0) && (res != obj);                                       // re-boxed in parent
+    }
+    void *s2 = ((void *(*)(void *, void *))t[25])(env, g);                        // NewLocalRef again
+    refs += ((unsigned char (*)(void *, void *, void *))t[24])(env, s2, g) ? 1 : 0; // IsSameObject -> TRUE
+    ((void (*)(void *, void *))t[22])(env, g);                                    // DeleteGlobalRef
+    refs += ((void *(*)(void *, void *))t[25])(env, g) == 0;                      // stale global -> NULL
+
+    return (ver == 0x10006) + ul + al + same + pend + clr + refs;
 }

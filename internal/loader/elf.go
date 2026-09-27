@@ -1,15 +1,19 @@
 // Package loader parses an Android ARM64 ELF shared object into a backend-
 // agnostic load plan: segments to map, relocations to apply, symbols to
-// export/import, and init functions to run. It is the data layer of the
-// dynamic linker — applying the plan against guest memory lives in the linker
-// once a CPU backend is wired up. Pure stdlib (debug/elf), no cgo.
+// export/import, and init functions to run. The work is split compile/
+// instantiate style: Parse+Image+Plan describe one load completely (the
+// compile step, done once per .so), and Plan.Apply/ApplyShared execute the
+// plan against guest memory (the instantiate step, one per engine — read-only
+// pages can be shared across engines via host-backed mappings). Pure stdlib
+// (debug/elf), no cgo.
 package loader
 
 import (
-	"os"
 	"debug/elf"
 	"encoding/binary"
 	"fmt"
+	"os"
+	"sync"
 )
 
 // Segment is one PT_LOAD region copied into guest memory at Vaddr+base.
@@ -40,7 +44,10 @@ type Sym struct {
 	Type  elf.SymType
 }
 
-// Image is the parsed, ready-to-map representation of one .so.
+// Image is the parsed, ready-to-map representation of one .so. It is immutable
+// once Parse returns it (all fields are fixed; segment contents are sliced
+// from the captured file bytes), and stays reusable: per-base/per-resolver
+// derivations live in Plan, not here.
 type Image struct {
 	Path          string
 	Machine       elf.Machine
@@ -55,11 +62,27 @@ type Image struct {
 	Init          uint64            // DT_INIT (0 if none)
 	Needed        []string
 	LoadSpan      uint64 // total virtual span to reserve
+
+	// raw is the whole ELF file image captured at Parse time, so segment
+	// contents can be sliced (sharing the backing array, no copy) without
+	// re-reading the file at plan/apply time. Unexported: the Image is
+	// immutable after Parse.
+	raw []byte
+
+	// plan caches the compiled instantiation plan (write-once, guarded by
+	// planMu). Caching is what makes cross-engine page sharing real: every
+	// engine instantiating this Image maps the SAME host buffers.
+	planMu sync.Mutex
+	plan   *Plan
 }
 
 // Parse reads the ELF and builds the Image. base is not applied here; all
 // addresses are image-relative (load bias added at map time).
 func Parse(path string) (*Image, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
 	f, err := elf.Open(path)
 	if err != nil {
 		return nil, err
@@ -70,6 +93,7 @@ func Parse(path string) (*Image, error) {
 		Path:    path,
 		Machine: f.Machine,
 		Exports: map[string]uint64{},
+		raw:     raw,
 	}
 	img.Needed, _ = f.DynString(elf.DT_NEEDED)
 
