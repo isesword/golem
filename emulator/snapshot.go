@@ -153,6 +153,10 @@ func (e *Emulator) Restore(snap *Snapshot) error {
 	//    it — reset the cursor so the next Alloc maps a fresh chunk instead of
 	//    carving into unmapped VA.
 	e.mem.SetLayout(snap.layout, snap.mmapTop)
+	// classRefs caches GLOBAL handles; handles created after the snapshot die
+	// with the rewind (and their numbers get reissued), so the cache must be
+	// dropped — it is a pure interning cache and rebuilds lazily.
+	e.classRefs = map[string]dvm.Ref{}
 	e.alloc = snap.arena
 	if e.alloc.base != 0 {
 		if _, ok := e.mem.Find(e.alloc.base); !ok {

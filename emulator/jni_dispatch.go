@@ -250,8 +250,16 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 			detail = sig
 		}
 
-	case 19, 20, 26, 27: // Push/PopLocalFrame, EnsureLocalCapacity, AllocObject
+	case 19: // PushLocalFrame: open a nested frame (capacity arg ignored)
+		ret = uint64(e.vm.PushLocalFrame())
+	case 20: // PopLocalFrame: drop frame, promote result to parent per spec
+		ret = uint64(e.vm.PopLocalFrame(dvm.Ref(int32(e.jarg(b, 1)))))
+	case 26: // EnsureLocalCapacity: frames grow dynamically
 		ret = 0
+	case 27: // AllocObject -> fresh boxed instance of the class
+		if cls := e.derefClass(e.jarg(b, 1)); cls != nil {
+			ret = uint64(e.vm.NewObject(cls, nil))
+		}
 	case 232: // GetObjectRefType -> JNILocalRefType
 		ret = 1
 
@@ -427,8 +435,10 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 			}
 		}
 
-	case jniNewGlobalRef, jniNewLocalRef:
-		ret = e.jarg(b, 1) // same handle
+	case jniNewGlobalRef:
+		ret = uint64(e.vm.NewGlobalRef(dvm.Ref(int32(e.jarg(b, 1)))))
+	case jniNewLocalRef:
+		ret = uint64(e.vm.NewLocalRef(dvm.Ref(int32(e.jarg(b, 1)))))
 
 	case 13, 14: // Throw, ThrowNew -> record a pending exception
 		e.pendingExc = true
@@ -443,7 +453,11 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 		}
 	case jniExceptionClear, jniExceptionDescribe:
 		e.pendingExc = false
-	case jniDeleteGlobalRef, jniDeleteLocalRef:
+	case jniDeleteGlobalRef:
+		e.vm.DeleteGlobalRef(dvm.Ref(int32(e.jarg(b, 1))))
+		ret = 0
+	case jniDeleteLocalRef:
+		e.vm.DeleteLocalRef(dvm.Ref(int32(e.jarg(b, 1))))
 		ret = 0
 
 	case 28, 29, 30: // NewObject[V/A](clazz, methodID, ...) -> Jni.NewObjectV, else fresh boxed object
@@ -495,7 +509,13 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 		ret = 0
 
 	case jniIsSameObject:
-		if e.jarg(b, 1) == e.jarg(b, 2) {
+		// Spec: compares object identity, not handle value — two handles to
+		// one object compare equal; IsSameObject(null, null) is TRUE.
+		a := e.vm.Deref(dvm.Ref(int32(e.jarg(b, 1))))
+		bObj := e.vm.Deref(dvm.Ref(int32(e.jarg(b, 2))))
+		if a == nil && bObj == nil {
+			ret = 1
+		} else if a != nil && a == bObj {
 			ret = 1
 		}
 
@@ -633,13 +653,16 @@ func (e *Emulator) callInstanceInfo(b emu.Backend, isV bool) (*dvm.Object, strin
 	return obj, mr.cls.Name + "->" + mr.m.Name + mr.m.Sig, dvm.NewVaList(e.vm, args)
 }
 
-// classRef returns (interning) a jclass handle for a class name.
+// classRef returns (interning) a jclass handle for a class name. Classes are
+// process-wide, so the handle is a GLOBAL reference (unidbg's addGlobalObject
+// semantics): the interning cache outlives any call's local frame, and guest
+// code may retain the jclass across calls — as it validly can on ART.
 func (e *Emulator) classRef(name string) dvm.Ref {
 	if r, ok := e.classRefs[name]; ok {
 		return r
 	}
 	cls := e.vm.ResolveClass(name)
-	r := e.vm.NewObject(e.classMeta, cls)
+	r := e.vm.NewGlobalRef(e.vm.NewObject(e.classMeta, cls))
 	e.classRefs[name] = r
 	return r
 }

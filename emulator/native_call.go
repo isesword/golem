@@ -64,8 +64,11 @@ func ArgBytes(b []byte) JavaArg { return JavaArg{kind: argBytes, b: b} }
 // ArgObject boxes o (a *dvm.Object) as a fresh jobject handle for the call.
 func ArgObject(o *dvm.Object) JavaArg { return JavaArg{kind: argObject, obj: o} }
 
-// ArgRef passes an existing handle (e.g. a cached instance from NewInstance, or
-// a jclass) directly, preserving object identity across calls.
+// ArgRef passes an existing handle directly, preserving object identity for
+// the duration of the call. Only GLOBAL handles (e.g. jclass handles from the
+// class cache) remain valid across calls — a local handle from a previous
+// call's return value dies when the next ref is boxed (frame lifecycle), so
+// re-box via ArgObject instead of caching local handles.
 func ArgRef(r dvm.Ref) JavaArg { return JavaArg{kind: argRef, u: uint64(r)} }
 
 // boxArg lowers a JavaArg to the integer register value the native expects.
@@ -122,6 +125,11 @@ func (e *Emulator) callNative(className, name, sig string, receiver uint64, args
 	for _, a := range args {
 		regs = append(regs, e.boxArg(a))
 	}
+	// JNI reference lifecycle: everything boxed for this call (args + anything
+	// the guest creates during it) is frame-local; EndCall seals the frames so
+	// they recycle when the next ref is boxed (the host still reads return
+	// values through NativeObject in the one-beat window before that).
+	defer e.vm.EndCall()
 	if e.cfg.Verbose {
 		fmt.Printf("[call] %s (fn=0x%x, %d args)\n", key, fn, len(args))
 	}

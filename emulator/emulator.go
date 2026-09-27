@@ -342,6 +342,7 @@ func (e *Emulator) LoadLibrary(path string) (*Module, error) {
 		if _, err := e.CallFunc(jni, e.JavaVM(), 0); err != nil {
 			return nil, fmt.Errorf("JNI_OnLoad: %w", err)
 		}
+		e.vm.EndCall() // seal locals boxed during boot (RegisterNatives etc.)
 		if exited, code := e.GuestExited(); exited {
 			return nil, fmt.Errorf("guest exit_group(%d) during JNI_OnLoad", code)
 		}

@@ -87,20 +87,80 @@ type Jni interface {
 	NewObjectV(vm *VM, cls *Class, sig string, args *VaList) *Object
 }
 
-// VM is the JavaVM: class registry + handle table.
+// VM is the JavaVM: class registry + JNI reference tables.
+//
+// Reference lifecycle follows the JNI specification — the environment this
+// framework promises the guest is ART, and ART enforces exactly these rules:
+//
+//   - Local refs live in frames. A frame opens when the first ref is boxed for
+//     a host-initiated native call and EndCall seals every frame the call
+//     touched; the next boxed ref (or next call) recycles them. Steady-state
+//     memory is O(one call's worth of objects), never O(everything boxed).
+//     Sealed frames stay resolvable for one beat so the host can read return
+//     values through NativeObject after the call returned.
+//   - Global refs are explicit (NewGlobalRef), keep their handle value for the
+//     VM's lifetime, and are the only thing VMState snapshots preserve — some
+//     native anti-tamper code is sensitive to handle stability.
+//   - Handles are monotonic and never reused, so a stale handle dereferences
+//     to nil and is reported, never silently aliased to a newer object.
+//
+// A VM is NOT safe for concurrent use: it belongs to the single goroutine that
+// owns its Emulator. Share emulators across goroutines via emulator.Pool.
 type VM struct {
-	mu      sync.Mutex
 	classes map[string]*Class
-	objs    map[Ref]*Object
+	globals map[Ref]*Object
+	frames  []*refFrame // stack: index 0 oldest, last is current
 	nextRef Ref
 	nextID  Ref
 	jni     Jni
 }
 
+// refFrame is one JNI local-reference frame: the refs boxed within a single
+// host-initiated native call, plus any guest PushLocalFrame nesting. Frames
+// are pooled — the hot path allocates no map, it reuses the slice buffers.
+type refFrame struct {
+	refs   []Ref
+	objs   []*Object // parallel to refs
+	sealed bool
+}
+
+var framePool = sync.Pool{New: func() any { return new(refFrame) }}
+
+// handleLimit keeps object handles below the method/field ID range (nextID
+// starts at 0x7000_0001) and far away from int32 wraparound; exhaustion is a
+// loud panic instead of silent handle aliasing.
+const handleLimit = Ref(0x7000_0000)
+
+func (f *refFrame) reset() {
+	f.refs = f.refs[:0]
+	// clear the full capacity: stale *Object pointers beyond len would pin
+	// last-beat objects for as long as the pooled frame sits in the pool
+	clear(f.objs[:cap(f.objs)])
+	f.objs = f.objs[:0]
+	f.sealed = false
+}
+
+func (f *refFrame) find(r Ref) int {
+	for i := range f.refs {
+		if f.refs[i] == r {
+			return i
+		}
+	}
+	return -1
+}
+
+func (f *refFrame) removeAt(i int) {
+	last := len(f.refs) - 1
+	f.refs[i], f.refs[last] = f.refs[last], f.refs[i]
+	f.objs[i], f.objs[last] = f.objs[last], f.objs[i]
+	f.refs = f.refs[:last]
+	f.objs = f.objs[:last]
+}
+
 func NewVM() *VM {
 	return &VM{
 		classes: map[string]*Class{},
-		objs:    map[Ref]*Object{},
+		globals: map[Ref]*Object{},
 		nextRef: 0x100, // start handles away from 0/low ints
 		nextID:  0x7000_0001,
 	}
@@ -111,8 +171,6 @@ func (vm *VM) Jni() Jni     { return vm.jni }
 
 // ResolveClass registers (or returns) a class by JNI name ("a/b/C").
 func (vm *VM) ResolveClass(name string, super ...*Class) *Class {
-	vm.mu.Lock()
-	defer vm.mu.Unlock()
 	if c, ok := vm.classes[name]; ok {
 		return c
 	}
@@ -124,67 +182,190 @@ func (vm *VM) ResolveClass(name string, super ...*Class) *Class {
 	return c
 }
 
-// NewObject boxes a Go value as an instance of cls and returns a handle.
+// openFrame recycles every sealed frame into the pool and pushes a fresh one.
+func (vm *VM) openFrame() {
+	kept := vm.frames[:0]
+	for _, f := range vm.frames {
+		if f.sealed {
+			f.reset()
+			framePool.Put(f)
+			continue
+		}
+		kept = append(kept, f)
+	}
+	vm.frames = kept
+	vm.frames = append(vm.frames, framePool.Get().(*refFrame))
+}
+
+// boxInto pins o in the current frame (opening one if needed) under a fresh
+// monotonic handle.
+func (vm *VM) boxInto(o *Object) Ref {
+	if n := len(vm.frames); n == 0 || vm.frames[n-1].sealed {
+		vm.openFrame()
+	}
+	f := vm.frames[len(vm.frames)-1]
+	if vm.nextRef >= handleLimit {
+		panic("dvm: JNI handle space exhausted (int32 Ref); recycle or rebuild the emulator")
+	}
+	r := vm.nextRef
+	vm.nextRef++
+	f.refs = append(f.refs, r)
+	f.objs = append(f.objs, o)
+	return r
+}
+
+// NewObject boxes a Go value as an instance of cls and returns a local handle.
 func (vm *VM) NewObject(cls *Class, value any) Ref {
-	vm.mu.Lock()
-	defer vm.mu.Unlock()
-	r := vm.nextRef
-	vm.nextRef++
-	vm.objs[r] = &Object{Class: cls, Value: value}
-	return r
+	return vm.boxInto(&Object{Class: cls, Value: value})
 }
 
-// Box registers an already-constructed Object and returns a fresh handle.
-func (vm *VM) Box(o *Object) Ref {
-	vm.mu.Lock()
-	defer vm.mu.Unlock()
-	r := vm.nextRef
-	vm.nextRef++
-	vm.objs[r] = o
-	return r
-}
+// Box registers an already-constructed Object and returns a local handle.
+func (vm *VM) Box(o *Object) Ref { return vm.boxInto(o) }
 
-// VMState snapshots the object-handle table so a reused VM hands out the same
-// jobject/jstring/... handles on every call (some native anti-tamper code is
-// sensitive to handle values). Class/method/field interning is deliberately
-// left untouched: those IDs are stable, deterministic caches and resetting the
-// counter without the caches would risk ID collisions.
-type VMState struct {
-	nextRef Ref
-	objs    map[Ref]*Object
-}
-
-// Snapshot captures the current object-handle table.
-func (vm *VM) Snapshot() VMState {
-	vm.mu.Lock()
-	defer vm.mu.Unlock()
-	objs := make(map[Ref]*Object, len(vm.objs))
-	for k, v := range vm.objs {
-		objs[k] = v
-	}
-	return VMState{nextRef: vm.nextRef, objs: objs}
-}
-
-// Restore rewinds the handle table to a prior Snapshot, dropping every object
-// handed out since (transient local refs from previous calls).
-func (vm *VM) Restore(st VMState) {
-	vm.mu.Lock()
-	defer vm.mu.Unlock()
-	vm.nextRef = st.nextRef
-	vm.objs = make(map[Ref]*Object, len(st.objs))
-	for k, v := range st.objs {
-		vm.objs[k] = v
+// EndCall seals every frame the finished native call touched. Sealed frames
+// stay resolvable for exactly one beat (the host reading return values) and
+// are recycled when the next ref is boxed. Call it (via defer) when a
+// host-initiated native invocation returns.
+func (vm *VM) EndCall() {
+	for _, f := range vm.frames {
+		f.sealed = true
 	}
 }
 
-// Deref resolves a handle back to its object (nil for 0/unknown).
+// NewGlobalRef registers r's object in the global table and returns a global
+// handle for it (same numeric value; handles are monotonic and unique per
+// object). Spec semantics: the ORIGINAL local stays valid — the global is an
+// additional reference, not a move. Returns 0 for a stale/zero handle.
+func (vm *VM) NewGlobalRef(r Ref) Ref {
+	if r == 0 {
+		return 0
+	}
+	if _, ok := vm.globals[r]; ok {
+		return r // already global
+	}
+	if o := vm.Deref(r); o != nil {
+		vm.globals[r] = o
+		return r
+	}
+	return 0
+}
+
+// DeleteGlobalRef releases a global ref (no-op for unknown handles — the
+// ART-lenient resolution of the spec's UB on double delete).
+func (vm *VM) DeleteGlobalRef(r Ref) { delete(vm.globals, r) }
+
+// DeleteLocalRef removes r from the innermost frame holding it; unknown
+// handles are a no-op (spec UB, resolved leniently like ART).
+func (vm *VM) DeleteLocalRef(r Ref) {
+	for i := len(vm.frames) - 1; i >= 0; i-- {
+		if j := vm.frames[i].find(r); j >= 0 {
+			vm.frames[i].removeAt(j)
+			return
+		}
+	}
+}
+
+// NewLocalRef returns a fresh local handle for r's object (spec: usable to
+// re-create a local from a global). Returns 0 for a stale/zero handle.
+func (vm *VM) NewLocalRef(r Ref) Ref {
+	if o := vm.Deref(r); o != nil {
+		return vm.boxInto(o)
+	}
+	return 0
+}
+
+// PushLocalFrame opens a nested local frame (spec: locals created after this
+// die together at PopLocalFrame). Returns JNI_OK (0).
+func (vm *VM) PushLocalFrame() int {
+	vm.frames = append(vm.frames, framePool.Get().(*refFrame))
+	return 0
+}
+
+// PopLocalFrame discards the current frame; if result is non-zero its object
+// is re-boxed as a local of the parent frame and that handle is returned
+// (spec: "the result object is a local reference in the previous frame").
+// Lenient resolutions of spec UB: popping the last frame is a no-op, and a
+// result that resolves outside the popped frame (parent/global) is accepted.
+func (vm *VM) PopLocalFrame(result Ref) Ref {
+	if len(vm.frames) <= 1 {
+		return result
+	}
+	var o *Object
+	if result != 0 {
+		o = vm.Deref(result)
+		if o == nil {
+			return 0
+		}
+	}
+	top := vm.frames[len(vm.frames)-1]
+	vm.frames = vm.frames[:len(vm.frames)-1]
+	top.reset()
+	framePool.Put(top)
+	if result != 0 {
+		return vm.boxInto(o)
+	}
+	return 0
+}
+
+// Deref resolves a handle back to its object (nil for 0/stale/unknown — a
+// stale handle is reported as nil, never aliased to a newer object).
 func (vm *VM) Deref(r Ref) *Object {
 	if r == 0 {
 		return nil
 	}
-	vm.mu.Lock()
-	defer vm.mu.Unlock()
-	return vm.objs[r]
+	for i := len(vm.frames) - 1; i >= 0; i-- {
+		if j := vm.frames[i].find(r); j >= 0 {
+			return vm.frames[i].objs[j]
+		}
+	}
+	return vm.globals[r]
+}
+
+// RefStats reports reference-table occupancy: global refs, frame count, and
+// total live local refs. Diagnostic aid for long-lived emulators — flat
+// numbers across calls mean the lifecycle is working.
+func (vm *VM) RefStats() (globals, frames, locals int) {
+	for _, f := range vm.frames {
+		locals += len(f.refs)
+	}
+	return len(vm.globals), len(vm.frames), locals
+}
+
+// VMState snapshots the global-reference table so a reused VM hands out the
+// same global handles on every call (some native anti-tamper code is sensitive
+// to handle values). Class/method/field interning is deliberately left
+// untouched: those IDs are stable, deterministic caches and resetting the
+// counter without the caches would risk ID collisions.
+type VMState struct {
+	nextRef Ref
+	globals map[Ref]*Object
+}
+
+// Snapshot captures the global-reference table (and the handle counter, so
+// post-restore handles never collide with pre-snapshot ones). Local frames
+// are transient by design and are not preserved: after Restore the next
+// boxed ref opens a fresh frame, exactly like a fresh call.
+func (vm *VM) Snapshot() VMState {
+	globals := make(map[Ref]*Object, len(vm.globals))
+	for k, v := range vm.globals {
+		globals[k] = v
+	}
+	return VMState{nextRef: vm.nextRef, globals: globals}
+}
+
+// Restore rewinds the global table and handle counter to a prior Snapshot and
+// recycles any local frames.
+func (vm *VM) Restore(st VMState) {
+	for _, f := range vm.frames {
+		f.reset()
+		framePool.Put(f)
+	}
+	vm.frames = vm.frames[:0]
+	vm.globals = make(map[Ref]*Object, len(st.globals))
+	for k, v := range st.globals {
+		vm.globals[k] = v
+	}
+	vm.nextRef = st.nextRef
 }
 
 // MethodID / FieldID interning, keyed by "name(sig)".
@@ -193,10 +374,8 @@ func (c *Class) MethodID(vm *VM, name, sig string, static bool) *Method {
 	if m, ok := c.methods[key]; ok {
 		return m
 	}
-	vm.mu.Lock()
 	id := vm.nextID
 	vm.nextID++
-	vm.mu.Unlock()
 	m := &Method{ID: id, Name: name, Sig: sig, Static: static}
 	c.methods[key] = m
 	return m
@@ -208,10 +387,8 @@ func (c *Class) FieldID(vm *VM, name, sig string, static bool) *Field {
 	if f, ok := c.fields[key]; ok {
 		return f
 	}
-	vm.mu.Lock()
 	id := vm.nextID
 	vm.nextID++
-	vm.mu.Unlock()
 	f := &Field{ID: id, Name: name, Sig: sig, Static: static}
 	c.fields[key] = f
 	return f
@@ -237,16 +414,12 @@ func (c *Class) Fields() []*Field {
 
 // LookupClass returns an already-registered class (without creating one).
 func (vm *VM) LookupClass(name string) (*Class, bool) {
-	vm.mu.Lock()
-	defer vm.mu.Unlock()
 	c, ok := vm.classes[name]
 	return c, ok
 }
 
 // Classes returns every registered class (e.g. all classes loaded from a DEX).
 func (vm *VM) Classes() []*Class {
-	vm.mu.Lock()
-	defer vm.mu.Unlock()
 	out := make([]*Class, 0, len(vm.classes))
 	for _, c := range vm.classes {
 		out = append(out, c)
