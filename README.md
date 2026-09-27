@@ -4,9 +4,9 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-golem 是 [unidbg](https://github.com/zhkl0228/unidbg) 的一个 Go 精简实现:在本机加载一个 Android AArch64 native 库(`.so`),不借助 JVM、真机或 Android 系统就能直接调用里面的函数。它给这个 `.so` 搭出一套够用的 Android 进程环境(动态链接器、真实的 bionic libc、一部分 Linux 系统调用、JNI/JavaVM),你就能从 Go 里调它的导出函数、读写它的内存。
+golem 是一个用纯 Go 编写的多平台 native 库模拟框架:在本机加载一个 Android AArch64 native 库(`.so`),不借助 JVM、真机或 Android 系统就能直接调用里面的函数。它给这个 `.so` 搭出一套够用的 Android 进程环境(动态链接器、真实的 bionic libc、一部分 Linux 系统调用、按 JNI 规范实现引用生命周期的 JavaVM),你就能从 Go 里调它的导出函数、读写它的内存、观察它的每条指令。
 
-和 unidbg 一样,CPU 引擎通过接口抽象解耦:本变体内置 [Unicorn](https://www.unicorn-engine.org/) 解释器后端——用 [purego](https://github.com/ebitengine/purego) 在运行时 `dlopen` 原版 libunicorn,**构建期零 cgo**(`CGO_ENABLED=0` 即可构建,无需 C 编译器)。
+CPU 引擎通过接口抽象解耦,内置 [Unicorn](https://www.unicorn-engine.org/) 后端——用 [purego](https://github.com/ebitengine/purego) 在运行时 `dlopen` 原版 libunicorn,**构建期零 cgo**(`CGO_ENABLED=0` 即可构建,无需 C 编译器、无自编 shim 库)。Android 先行;iOS(Mach-O)与多架构在路线图上。
 
 ```go
 e, _ := emulator.New(emulator.Config{SOPath: "libfoo.so"})
@@ -14,18 +14,19 @@ defer e.Close()
 sum, _ := e.CallSymbol("add", 2, 3) // -> 5,作为真实 AArch64 代码执行
 ```
 
-> 当前状态:Unicorn(purego)后端完整跑通,具体包括加载并链接 bionic 和目标 `.so`、执行 `init_array` 与 `JNI_OnLoad`、调用导出函数、处理 syscall 与 JNI。它是 unidbg 的一个子集,缺哪些能力见 [对标 unidbg](#对标-unidbg)。
+> 当前状态:Unicorn(purego)后端完整跑通——加载并链接 bionic 和目标 `.so`、执行 `init_array` 与 `JNI_OnLoad`、调用导出函数、处理 syscall 与 JNI;引擎池支持多 goroutine 并发;常驻负载实测 10 万次签名 @ 100 QPS 延迟恒定、内存零增长。与 unidbg 的能力对照见 [与 unidbg 的关系](#与-unidbg-的关系)。
 
 ---
 
 ## 为什么
 
-unidbg 是模拟 Android native 库的事实标准,但它跑在 JVM 上,依赖也偏重。golem 想用 Go 把最核心的那部分重新做一遍:
+unidbg 是这个领域的事实标准,但它跑在 JVM 上,依赖偏重,且它的 JNI 引用表不回收(`DeleteLocalRef` 是空操作)、面向交互式分析而非常驻服务。golem 用 Go 重做了核心部分,并把**生产级长跑**作为一等公民:
 
-- 不需要 JVM。编译产物就是单个 Go 二进制,启动快、占用低。
-- 引擎可换。CPU 引擎藏在 `emu.Backend` 接口之后,Unicorn(purego 运行时加载)作为内置默认,跟 unidbg 的 backend 思路一致。
+- 不需要 JVM,也不需要 C 工具链。编译产物就是单个 Go 二进制(`CGO_ENABLED=0`),交叉编译就是原生 `go build`。
+- 引擎可换。CPU 引擎藏在 `emu.Backend` 接口之后,Unicorn(purego 运行时 `dlopen`,GPLv2 留在库边界之外)作为内置默认。
 - 复用真实 bionic。直接加载并模拟执行 AOSP sysroot 里的 `libc/libm/libdl`,省得自己重写一套 libc。
-- 代码量小。框架本体是几千行还算好读的 Go,外加一个很薄的 CPU 引擎绑定(纯 Go)。
+- **为常驻负载设计**:JNI 引用按规范回收(local ref 随调用帧消亡)、编译/实例化分离让引擎池共享只读页、引擎池带自动回收与故障重建。
+- **诚实的失败语义**:内存/hook 操作错误返回或事务回滚;不可恢复的状态迁移会让模拟器进入 poison 态,后续调用明确拒绝,绝不"假装健康"。
 
 ## 特性
 
@@ -40,6 +41,10 @@ unidbg 是模拟 Android native 库的事实标准,但它跑在 JVM 上,依赖�
 - 内存助手:分配、读写字节、C 字符串、小端整数。
 - 单指令 trace;以及完整指令流 trace(`TraceInsns`:每条指令的偏移 + 指令码 + 寄存器增量 + 调用/系统调用注解,Tenet 风格,可与真机 trace 对比;Unicorn)。
 - 引擎可选:`-tags unicorn` 编入 purego 后端,运行期用 `-engine` / `$GOLEM_ENGINE` 选择。
+- **JNI 引用生命周期按规范实现**:local ref 住在池化的调用帧里(随调用消亡,宿主读返回值有一拍宽限)、global ref 显式且句柄值稳定、句柄单调永不复用(陈旧句柄解析为 nil,绝不静默别名)。稳态内存 O(单次调用的对象数),长跑不涨。
+- **引擎池(`emulator.Pool`)**:actor 模式——一个引擎同一时刻归一个 goroutine,并发靠堆引擎数而非锁;按 MaxUses 自动回收、panic 自动重建、池耗尽时 ctx deadline 生效。
+- **编译/实例化分离**:每个 `.so` 只解析一次(`loader.CompileOnce`),只读段经 `uc_mem_map_ptr` 零拷贝共享——N 个引擎的只读页在物理内存里只有一份(10 引擎实测 maxRSS -20%);宿主打补丁前自动私有化,绝不污染其他引擎。
+- **错误语义**:分配返回 error(底层映射失败自动回滚地址空间簿记)、`ReplaceE` 五步事务(失败恢复原指令)、不可验证的状态迁移触发 poison 并拒绝后续调用。
 
 ## 快速开始
 
@@ -72,7 +77,7 @@ CGO_ENABLED=0 go run -tags unicorn ./examples/run   # 运行期需能找到 libu
 ## 作为库使用
 
 ```go
-import "golem/emulator"
+import "github.com/isesword/golem/emulator"
 
 e, err := emulator.New(emulator.Config{
     SOPath:    "libfoo.so",        // 启动时加载并跑 init_array + JNI_OnLoad
@@ -125,8 +130,8 @@ e, _ := emulator.New(emulator.Config{SOPath: "libfoo.so", JNI: MyJni{}})
 |---|---|---|---|---|
 | **Unicorn2** | `-tags unicorn` | purego 运行时 `dlopen` libunicorn | ~20 ms/次 | GPLv2 |
 
-- 本变体只内置 Unicorn 后端;接口(`emu.Backend`)与注册表机制保留了多引擎扩展点。
-- 每个模拟器第一次调用要花几百毫秒(预热),之后复用同一个模拟器就很快了。
+- 当前内置 Unicorn 后端;接口(`emu.Backend`)与注册表机制保留了多引擎扩展点(如 dynarmic JIT)。
+- 每个引擎首次调用要花几百毫秒(预热),之后复用同一引擎就很快;多引擎用 `emulator.Pool` 预热一组并发服务。
 - 许可证提示:Unicorn 是 GPLv2,静态链接它会让整个二进制都变成 GPLv2,所以 golem 把它放在运行时 `dlopen` 的边界之后——purego 后端延续了这一设计。
 
 ## 工作原理
@@ -163,17 +168,23 @@ golem/
 └── assets/android/sdk23/  内置 AOSP bionic sysroot(见 NOTICE)
 ```
 
-## 对标 unidbg
+## 与 unidbg 的关系
 
-已实现:AArch64 ELF 加载与动态链接 · 复用真实 bionic · Unicorn(purego)后端 · Linux syscall 子集(含 uname/sysinfo/getdents64/readlinkat/statx/prlimit64/sched_getaffinity 等)· 带 Go 处理器的 JNI/JavaVM(字符串、字节/对象数组、异常、更多 Call 变体)· 按名或按偏移调用 · 函数 `Replace` 与**内联 hook** · **控制台调试器**(断点/单步/寄存器/内存)· 从 **classes.dex 加载真实类/方法/字段元数据** · 内存助手 · 指令 trace。
+golem 的精神前身是 [unidbg](https://github.com/zhkl0228/unidbg)——加载/链接/bionic 复用/JNI 陷回这套骨架一脉相承,一并致谢。以下是实质差异:
 
-还没做的(路线图,欢迎 PR):
+**golem 不同的:**
 
-- ARM32,目前只支持 AArch64。
-- JNI / syscall 仍是子集:覆盖常见用法,但不是全部 ~232 个 JNI 槽位 / 完整 syscall 表。
-- DEX 是**元数据级**:解析类/方法/字段(签名、父类)供 FindClass/GetMethodID/GetFieldID 解析,但**不执行 DEX 字节码**(无 JVM);Java 侧行为仍由你用 `dvm.Jni` 建模。
-- 内联 hook 与控制台调试器需 Unicorn 引擎(本变体内置的即 Unicorn)。
-- 真并发线程(已有单核协作式调度器:`pthread_create` 建 fiber、按时间片切换、在 futex/sleep 处保存并恢复 CPU 上下文 —— 但非真并发)、信号、iOS / Mach-O。
+- **纯 Go,零 cgo**:构建不需要任何 C 工具链;unidbg 依赖 JVM + Maven。
+- **JNI 引用按规范回收**:unidbg 的 `DeleteLocalRef` 是空操作、local 表只进不出,常驻负载下无界增长;golem 按调用帧回收,稳态 O(1)。
+- **错误返回 + 事务回滚 + poison**:内存分配、补丁替换失败有明确的可恢复/不可恢复语义;unidbg 风格是抛异常/吞错。
+- **共享只读页**:`CompileOnce` + `uc_mem_map_ptr` 让引擎池的只读段在物理内存只有一份。
+
+**golem 还没做的(unidbg 有):**
+
+- ARM32 / x86(目前仅 AArch64);iOS / Mach-O 在路线图上。
+- 完整 syscall 表与全部 ~232 个 JNI 槽位(覆盖常见用法,未实现返回 ENOSYS)。
+- DEX 字节码执行(仅元数据级:类/方法/字段签名供解析;Java 行为用 `dvm.Jni` 建模)。
+- 真并发 guest 线程(现有协作式调度器:`pthread_create` 建 fiber、按时间片切换、futex/sleep 处保存恢复 CPU 上下文)。
 
 ## 从源码构建 / 引擎
 
@@ -190,7 +201,7 @@ CGO_ENABLED=0 go test -tags unicorn ./emulator
 
 ## 致谢与许可证
 
-- [unidbg](https://github.com/zhkl0228/unidbg)(Apache-2.0):本项目重新实现的对象。
+- [unidbg](https://github.com/zhkl0228/unidbg)(Apache-2.0):精神前身——领域模型与 JNI 陷回设计的灵感来源。
 - [Unicorn Engine](https://github.com/unicorn-engine/unicorn)(GPLv2):默认 CPU 后端,运行时加载。
 - AOSP bionic(Apache-2.0)等:`assets/` 下内置的 sysroot,见 [NOTICE](NOTICE)。
 

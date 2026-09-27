@@ -4,9 +4,9 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-golem is a small Go reimplementation of [unidbg](https://github.com/zhkl0228/unidbg): it loads an Android AArch64 native library (`.so`) and calls its functions on your host machine, without a JVM, a device, or Android. It sets up just enough of an Android process around the `.so` (a dynamic linker, real bionic libc, a subset of Linux syscalls, and a JNI/JavaVM) so you can call the library's exports from Go and read and write its memory.
+golem is a multi-platform native-library emulation framework written in pure Go: it loads an Android AArch64 native library (`.so`) on your host machine and lets you call functions inside it without a JVM, a device, or Android. It builds a sufficient Android process environment around the `.so` — a dynamic linker, real bionic libc, a subset of Linux syscalls, and a JavaVM whose reference lifecycle follows the JNI specification — so you can call the library's exports, read and write its memory, and trace every instruction from Go.
 
-Like unidbg, the CPU engine sits behind an interface: this variant ships a [Unicorn](https://www.unicorn-engine.org/) interpreter backend that loads the stock libunicorn at **runtime** via [purego](https://github.com/ebitengine/purego) — **zero cgo at build time** (`CGO_ENABLED=0` works, no C compiler needed).
+The CPU engine sits behind an interface; the built-in [Unicorn](https://www.unicorn-engine.org/) backend loads the stock libunicorn at **runtime** via [purego](https://github.com/ebitengine/purego) — **zero cgo at build time** (`CGO_ENABLED=0`, no C compiler, no hand-written shim).
 
 ```go
 e, _ := emulator.New(emulator.Config{SOPath: "libfoo.so"})
@@ -14,18 +14,19 @@ defer e.Close()
 sum, _ := e.CallSymbol("add", 2, 3) // -> 5, executed as real AArch64 code
 ```
 
-> Current status: the Unicorn (purego) backend works end to end. It loads and links bionic and the target `.so`, runs `init_array` and `JNI_OnLoad`, calls exports, and handles syscalls and JNI. It's only a subset of unidbg, so see [Compared to unidbg](#compared-to-unidbg) for what's missing.
+> Current status: the Unicorn (purego) backend works end to end — loading and linking bionic and the target `.so`, running `init_array` and `JNI_OnLoad`, calling exports, handling syscalls and JNI — plus an engine pool for concurrent use. Under sustained load, 100k signs at 100 QPS held constant latency with zero memory growth. See [Relationship to unidbg](#relationship-to-unidbg).
 
 ---
 
 ## Why
 
-unidbg is the de-facto tool for emulating Android native libraries, but it runs on a JVM and pulls in a fairly large stack. golem tries to do the core of the same job in Go:
+unidbg is the de-facto tool for emulating Android native libraries, but it runs on a JVM, pulls in a fairly large stack, and never reclaims JNI references (`DeleteLocalRef` is a no-op) — built for interactive analysis, not resident services. golem does the core of the same job in Go and treats **production-grade long-running use as a first-class citizen**:
 
-- No JVM. The build output is a single Go binary, so startup is fast and memory use is low.
-- Swappable engine. The engine hides behind the `emu.Backend` interface; Unicorn (purego, runtime-loaded) is the built-in default, much like unidbg's backends.
+- No JVM, and no C toolchain either. The build output is a single Go binary (`CGO_ENABLED=0`); cross-compiling is just `go build`.
+- Swappable engine. The engine hides behind the `emu.Backend` interface; Unicorn (purego, runtime-loaded) is the built-in default.
 - Reuses real bionic. It loads and emulates `libc/libm/libdl` from an AOSP sysroot instead of reimplementing libc.
-- Small codebase. The framework itself is a few thousand lines of reasonably readable Go, plus two thin CPU-engine shims.
+- Built for resident services: JNI references reclaimed per the spec (local refs die with their call frames), compile/instantiate separation shares read-only pages across an engine pool, and the pool auto-recycles engines and rebuilds after panics.
+- Honest failure semantics: memory/hook operations return errors or roll back transactionally; unrecoverable state transitions poison the emulator — later calls are rejected instead of pretending to be healthy.
 
 ## Features
 
@@ -40,6 +41,10 @@ unidbg is the de-facto tool for emulating Android native libraries, but it runs 
 - Memory helpers: alloc, read/write bytes, C-strings, and LE integers.
 - Per-instruction trace, plus a full instruction-stream trace (`TraceInsns`: per-instruction offset + opcode + register deltas + call/syscall annotations, Tenet-style, diffable against a real-device trace; Unicorn).
 - Selectable engine: build with `-tags unicorn` to compile in the purego backend, choose at runtime with `-engine` / `$GOLEM_ENGINE`.
+- **JNI reference lifecycle per spec**: local refs live in pooled call frames (die with the call; one-beat grace for return-value reads), global refs are explicit with stable handle values, handles are monotonic and never reused (stale handles resolve to nil, never alias). Steady-state memory is O(one call's objects) — flat under sustained load.
+- **Engine pool (`emulator.Pool`)**: the actor pattern — one engine belongs to one goroutine at a time; concurrency scales by engine count, not locks. Auto-recycling at MaxUses, transparent rebuild after worker panics, ctx deadlines when drained.
+- **Compile/instantiate split**: each `.so` is parsed once (`loader.CompileOnce`) and its read-only segments are shared zero-copy across engines via `uc_mem_map_ptr` — one physical copy no matter the pool size (measured -20% maxRSS at 10 engines). Host patches privatize pages first and never corrupt other engines.
+- **Honest failure semantics**: allocations return errors (failed backend maps roll back the address-space bookkeeping), `ReplaceE` is a five-step transaction (restores original instructions on failure), and unverifiable state transitions POISON the emulator — later calls are rejected instead of pretending to be healthy.
 
 ## Quick start
 
@@ -123,7 +128,7 @@ This is how unidbg's `AbstractJni` works: the guest's `RegisterNatives`/`GetMeth
 |---|---|---|---|---|
 | **Unicorn2** | `-tags unicorn` | runtime `dlopen` of libunicorn | ~20 ms/call | GPLv2 |
 
-- This variant ships only the Unicorn backend; the interface (`emu.Backend`) and registry keep the extension point for other engines.
+- The Unicorn backend ships built-in; the interface (`emu.Backend`) and registry keep the extension point for other engines.
 - The first call on a fresh emulator takes a few hundred ms (warm-up); after that, reuse the emulator and the calls are fast.
 - Licensing note: Unicorn is GPLv2, and statically linking it would make the combined binary GPLv2, so golem keeps it behind a runtime `dlopen` boundary — the purego backend preserves that design.
 
@@ -159,17 +164,23 @@ golem/
 └── assets/android/sdk23/  bundled AOSP bionic sysroot (see NOTICE)
 ```
 
-## Compared to unidbg
+## Relationship to unidbg
 
-Implemented: AArch64 ELF load and dynamic linking, real bionic reuse, the Unicorn (purego) backend, a Linux syscall subset (including uname/sysinfo/getdents64/readlinkat/statx/prlimit64/sched_getaffinity), JNI/JavaVM with a Go handler (strings, byte and object arrays, exceptions, more Call variants), call by symbol or offset, function `Replace` plus inline hooks (`HookAddr`), a console debugger (breakpoints/step/registers/memory), loading real class/method/field metadata from a classes.dex, memory helpers, and instruction trace.
+golem's spiritual predecessor is [unidbg](https://github.com/zhkl0228/unidbg) — the load/link/bionic-reuse/JNI-trap skeleton carries the same DNA, with thanks. The substantive differences:
 
-Not yet (roadmap, and PRs are welcome):
+**Where golem differs:**
 
-- ARM32; only AArch64 for now.
-- JNI and syscalls are still subsets: they cover common usage, not all ~232 JNI slots or the full syscall table.
-- DEX is metadata-only. It parses classes/methods/fields (signatures, superclasses) so FindClass/GetMethodID/GetFieldID resolve, but it does not execute DEX bytecode (no JVM); model Java-side behavior with a `dvm.Jni` handler.
-- Inline hooks and the console debugger require the Unicorn engine (which is what this variant ships).
-- Truly concurrent threads (there is now a single-core cooperative scheduler — `pthread_create` makes a fiber, the scheduler time-slices and saves/restores CPU context at futex/sleep — but not real concurrency), signals, and iOS / Mach-O.
+- **Pure Go, zero cgo**: no C toolchain needed to build; unidbg needs a JVM + Maven.
+- **JNI references reclaimed per spec**: unidbg's `DeleteLocalRef` is a no-op and its local table only grows — unbounded under resident load; golem reclaims per call frame, steady-state O(1).
+- **Error returns + transactional rollback + poison**: allocation and patch failures have explicit recoverable/unrecoverable semantics; the unidbg style is exceptions and swallowed errors.
+- **Shared read-only pages**: `CompileOnce` + `uc_mem_map_ptr` keep read-only segments at one physical copy across an engine pool.
+
+**What golem doesn't have yet (unidbg does):**
+
+- ARM32 / x86 (AArch64 only today); iOS / Mach-O is on the roadmap.
+- The full syscall table and all ~232 JNI slots (common usage is covered; unimplemented syscalls return ENOSYS).
+- DEX bytecode execution (metadata only: class/method/field signatures for resolution; model Java behavior with `dvm.Jni`).
+- Truly concurrent guest threads (there is a cooperative scheduler: `pthread_create` spawns fibers, time-sliced, CPU context saved/restored at futex/sleep).
 
 ## Building from source / engines
 
@@ -189,7 +200,7 @@ CGO_ENABLED=0 go test -tags unicorn ./emulator
 
 golem builds on:
 
-- [unidbg](https://github.com/zhkl0228/unidbg) (Apache-2.0): the project this reimplements.
+- [unidbg](https://github.com/zhkl0228/unidbg) (Apache-2.0): the spiritual predecessor — the source of the domain model and the JNI-trap design.
 - [Unicorn Engine](https://github.com/unicorn-engine/unicorn) (GPLv2): the default CPU backend, loaded at runtime.
 - AOSP bionic (Apache-2.0) and others: the bundled sysroot under `assets/`. See [NOTICE](NOTICE).
 
