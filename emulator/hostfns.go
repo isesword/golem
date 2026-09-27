@@ -10,10 +10,16 @@ import (
 // versions need a fully bootstrapped libc (which we don't run). They override
 // the real bionic exports during symbol resolution. Add more here as the .so
 // exercises libc internals (e.g. __system_property_get, pthread_once, ...).
-func registerHostFns(e *Emulator) {
+func registerHostFns(e *Emulator) error {
 	// AT_RANDOM target: 16 bytes used by stack-guard / canary setup.
-	e.atRandom = e.Alloc(16, emu.ProtRead|emu.ProtWrite)
-	_ = e.be.MemWrite(e.atRandom, []byte("golem-randseed"))
+	at, err := e.Alloc(16, emu.ProtRead|emu.ProtWrite)
+	if err != nil {
+		return err
+	}
+	e.atRandom = at
+	if err := e.be.MemWrite(e.atRandom, []byte("golem-randseed")); err != nil {
+		return err
+	}
 
 	e.hostByName["getauxval"] = hostGetauxval
 
@@ -29,6 +35,7 @@ func registerHostFns(e *Emulator) {
 	if e.cfg.PropertyProvider != nil {
 		e.hostByName["__system_property_get"] = hostSystemPropertyGet
 	}
+	return nil
 }
 
 // hostSystemPropertyGet implements __system_property_get(name, value) via

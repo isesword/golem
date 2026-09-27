@@ -129,6 +129,7 @@ type Emulator struct {
 	jniDispatch map[uint64]int // JNIEnv stub addr -> JNINativeInterface index
 	classRefs   map[string]dvm.Ref
 	shared      []sharedRange          // guest ranges mapped via MemMapPtr (privatize-on-write)
+	poisonErr   error                  // set when a failed address-space transition leaves the emulator unusable
 	classMeta   *dvm.Class             // java/lang/Class
 	natives     map[string]uint64      // "class.name+sig" -> registered native fn ptr
 	methods     map[dvm.Ref]*methodRef // jmethodID -> (class, method)
@@ -337,7 +338,9 @@ func New(cfg Config) (e *Emulator, err error) {
 	// symbols get their entry patched.
 	for name, fn := range cfg.ReplaceFns {
 		if addr, ok := e.syms[name]; ok {
-			e.Replace(addr, fn)
+			if err := e.ReplaceE(addr, fn); err != nil {
+				return nil, fmt.Errorf("ReplaceFns %s: %w", name, err)
+			}
 		}
 	}
 	return e, nil
@@ -446,25 +449,25 @@ func (e *Emulator) makeStub(name string) uint64 {
 // GetEnv is special-cased to hand back the JNIEnv. Sets e.javaVM.
 func (e *Emulator) SetupJNI() uint64 {
 	const envSlots = 256 // > 232 JNINativeInterface entries
-	envTable := e.Alloc(envSlots*8, emu.ProtRead|emu.ProtWrite)
+	envTable := e.MustAlloc(envSlots*8, emu.ProtRead|emu.ProtWrite)
 	for i := 0; i < envSlots; i++ {
 		stub := e.makeStub(fmt.Sprintf("JNIEnv[%d]", i))
 		e.jniDispatch[stub] = i // dispatched in onInterrupt -> handleJNI
 		_ = putU64(e.be, envTable+uint64(i)*8, stub)
 	}
-	envPtr := e.Alloc(8, emu.ProtRead|emu.ProtWrite)
+	envPtr := e.MustAlloc(8, emu.ProtRead|emu.ProtWrite)
 	_ = putU64(e.be, envPtr, envTable)
 	e.jniEnv = envPtr
 
 	const vmSlots = 16 // JNIInvokeInterface
-	vmTable := e.Alloc(vmSlots*8, emu.ProtRead|emu.ProtWrite)
+	vmTable := e.MustAlloc(vmSlots*8, emu.ProtRead|emu.ProtWrite)
 	for i := 0; i < vmSlots; i++ {
 		_ = putU64(e.be, vmTable+uint64(i)*8, e.makeStub(fmt.Sprintf("JavaVM[%d]", i)))
 	}
 	e.getEnvStub = e.makeStub("JavaVM!GetEnv")
 	_ = putU64(e.be, vmTable+6*8, e.getEnvStub) // GetEnv
 	_ = putU64(e.be, vmTable+4*8, e.getEnvStub) // AttachCurrentThread (also yields env)
-	vmPtr := e.Alloc(8, emu.ProtRead|emu.ProtWrite)
+	vmPtr := e.MustAlloc(8, emu.ProtRead|emu.ProtWrite)
 	_ = putU64(e.be, vmPtr, vmTable)
 	e.javaVM = vmPtr
 	return vmPtr
@@ -653,6 +656,19 @@ func (e *Emulator) InitArrayPtrs(m *Module) ([]uint64, error) {
 		ptrs = append(ptrs, v)
 	}
 	return ptrs, nil
+}
+
+// poison records that a failed internal transition left the emulator in an
+// unusable state. The FIRST poison wins; every subsequent public entry point
+// returns it instead of operating on inconsistent state. Use for failures
+// whose rollback cannot be verified (e.g. an address-space remap that failed
+// mid-way), never for ordinary errors a caller can handle.
+func (e *Emulator) poison(what string, err error) error {
+	pErr := fmt.Errorf("emulator poisoned (%s): %w", what, err)
+	if e.poisonErr == nil {
+		e.poisonErr = pErr
+	}
+	return e.poisonErr
 }
 
 // Close releases the backend.

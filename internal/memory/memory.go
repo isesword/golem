@@ -107,6 +107,29 @@ func (s *Space) Protect(addr, size uint64, prot int) error {
 	return nil
 }
 
+// RollbackLast removes the most recently Mmap'ed region and rewinds the mmap
+// cursor. The monotonic allocator makes an immediately-failed mapping always
+// the last region, so this is the rollback primitive for a backend map that
+// failed after the bookkeeping was written: the address space returns to
+// exactly the pre-mapping state (no phantom region, no consumed VA).
+func (s *Space) RollbackLast(addr, size uint64) error {
+	n := len(s.regions)
+	if n == 0 {
+		return fmt.Errorf("memory: rollback %#x+#%#x: no regions", addr, size)
+	}
+	last := s.regions[n-1]
+	if last.Addr != addr || last.Size != size {
+		return fmt.Errorf("memory: rollback %#x+#%#x: last region is %#x+#%x (%s) — not the mapping to roll back",
+			addr, size, last.Addr, last.Size, last.Desc)
+	}
+	if s.mmapTop != addr+size {
+		return fmt.Errorf("memory: rollback %#x: mmapTop %#x has advanced past it", addr, s.mmapTop)
+	}
+	s.regions = s.regions[:n-1]
+	s.mmapTop = addr
+	return nil
+}
+
 // Find returns the region containing addr, if any.
 func (s *Space) Find(addr uint64) (Region, bool) {
 	i := sort.Search(len(s.regions), func(i int) bool { return s.regions[i].End() > addr })

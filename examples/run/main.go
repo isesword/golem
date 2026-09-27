@@ -47,7 +47,10 @@ func main() {
 	fmt.Printf("slen(...)      = %d\n", int32(slen))
 
 	// sum_into(&out, 20, 22) — guest writes through a pointer we then read back
-	out := e.Malloc(4)
+	out, err2 := e.Malloc(4)
+	if err2 != nil {
+		panic(err2)
+	}
 	_, _ = e.CallSymbol("sum_into", out, 20, 22)
 	v, _ := e.ReadU32(out)
 	fmt.Printf("sum_into -> *out = %d\n", v)

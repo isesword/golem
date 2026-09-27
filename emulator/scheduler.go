@@ -71,7 +71,7 @@ type fiber struct {
 // its own stack. It runs on the next RunThreads.
 func (e *Emulator) newFiber(routine, arg uint64) *fiber {
 	e.nextFiberID++
-	base := e.Alloc(fiberStackSize, emu.ProtRead|emu.ProtWrite)
+	base := e.MustAlloc(fiberStackSize, emu.ProtRead|emu.ProtWrite) // pthread_create up-call: no error channel
 	f := &fiber{
 		id:      e.nextFiberID,
 		routine: routine,
@@ -101,6 +101,9 @@ func (e *Emulator) PendingThreads() int {
 // run, so a top-level call's stack/registers are unaffected. Returns the number
 // of slices executed.
 func (e *Emulator) RunThreads() (int, error) {
+	if e.poisonErr != nil {
+		return 0, fmt.Errorf("emulator poisoned: %w", e.poisonErr)
+	}
 	if !e.anyRunnable() {
 		return 0, nil
 	}

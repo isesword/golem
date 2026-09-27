@@ -134,6 +134,9 @@ func (e *Emulator) HasNativeMethod(className, name, sig string) bool {
 }
 
 func (e *Emulator) callNative(className, name, sig string, receiver uint64, args []JavaArg) (uint64, error) {
+	if e.poisonErr != nil {
+		return 0, fmt.Errorf("emulator poisoned: %w", e.poisonErr)
+	}
 	key := className + "." + name + sig
 	fn, ok := e.natives[key]
 	if !ok {

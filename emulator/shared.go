@@ -3,6 +3,8 @@ package emulator
 import (
 	"fmt"
 
+	"unsafe"
+
 	"github.com/isesword/golem/internal/loader"
 )
 
@@ -24,8 +26,10 @@ import (
 
 type sharedRange struct {
 	addr, size uint64
-	plan       *loader.Plan // owns the content buffers for privatization
-	mapIdx     int          // index into plan.Maps
+	plan       *loader.Plan   // owns the content buffers for privatization
+	mapIdx     int            // index into plan.Maps
+	hostPtr    unsafe.Pointer // shared host buffer (rollback target)
+	hostLen    uint64
 }
 
 // privatize re-maps every shared range covering [addr, addr+size) as private
@@ -59,18 +63,32 @@ func (e *Emulator) privatize(addr, size uint64) error {
 			kept = append(kept, sr) // unmap failed -> still shared -> keep tracking
 			continue
 		}
-		if err := e.be.MemMap(sr.addr, sr.size, m.Prot); err != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("re-map private %#x: %w", sr.addr, err)
+		// rollback re-maps the ORIGINAL shared host buffer; if that succeeds
+		// the range stays shared and the emulator remains usable (recoverable
+		// failure). If the rollback also fails the emulator is poisoned.
+		rollback := func(failWhat string, failErr error) error {
+			if rb := e.be.MemMapPtr(sr.addr, sr.size, m.Prot, sr.hostPtr); rb != nil {
+				return e.poison(fmt.Sprintf("privatize rollback %#x after %s", sr.addr, failWhat),
+					fmt.Errorf("%v (rollback: %w)", failErr, rb))
 			}
-			continue // unmapped but not re-mapped: dropped from tracking
+			kept = append(kept, sr) // shared mapping restored -> keep tracking
+			if firstErr == nil {
+				firstErr = fmt.Errorf("privatize %#x: %w (shared mapping restored)", sr.addr, failErr)
+			}
+			return firstErr
+		}
+		if err := e.be.MemMap(sr.addr, sr.size, m.Prot); err != nil {
+			if rerr := rollback("private re-map", fmt.Errorf("re-map private %#x: %w", sr.addr, err)); rerr != nil {
+				return rerr
+			}
+			continue
 		}
 		if len(m.Content) > 0 {
 			if err := e.be.MemWrite(sr.addr, m.Content); err != nil {
-				if firstErr == nil {
-					firstErr = fmt.Errorf("restore content %#x: %w", sr.addr, err)
+				if rerr := rollback("content restore", fmt.Errorf("restore content %#x: %w", sr.addr, err)); rerr != nil {
+					return rerr
 				}
-				continue // re-mapped but content unknown: dropped from tracking
+				continue
 			}
 		}
 		// fully privatized: intentionally NOT re-added to e.shared
@@ -95,9 +113,14 @@ func (e *Emulator) applyPlan(plan *loader.Plan, base uint64, resolve loader.Reso
 	}
 	for i := range plan.Maps {
 		if plan.Maps[i].Shareable {
+			ptr, sz, err := plan.SharedBuffer(i)
+			if err != nil {
+				return err
+			}
 			e.shared = append(e.shared, sharedRange{
 				addr: base + plan.Maps[i].Addr, size: plan.Maps[i].Size,
 				plan: plan, mapIdx: i,
+				hostPtr: ptr, hostLen: sz,
 			})
 		}
 	}

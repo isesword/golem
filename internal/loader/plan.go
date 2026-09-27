@@ -178,6 +178,25 @@ func (img *Image) Plan() (*Plan, error) {
 	return p, nil
 }
 
+// SharedBuffer returns the page-aligned host buffer backing shareable map i.
+// Used by the emulator to re-map the ORIGINAL shared pages when a privatize
+// attempt must be rolled back.
+func (p *Plan) SharedBuffer(i int) (unsafe.Pointer, uint64, error) {
+	if i < 0 || i >= len(p.Maps) || !p.Maps[i].Shareable {
+		return nil, 0, fmt.Errorf("loader: map %d is not shareable", i)
+	}
+	if i < len(p.shared) {
+		buf := p.shared[i]
+		return unsafe.Pointer(&buf[0]), uint64(len(buf)), nil
+	}
+	// Plans constructed outside Plan() (tests): the Content IS the shared
+	// buffer in that case.
+	if p.Maps[i].Content != nil {
+		return unsafe.Pointer(&p.Maps[i].Content[0]), uint64(len(p.Maps[i].Content)), nil
+	}
+	return nil, 0, fmt.Errorf("loader: map %d has no shared buffer or content", i)
+}
+
 // symValue resolves a relocation's symbol per engine: defined symbols =>
 // base+value, imported (undef) => via the resolver.
 func (p *Plan) symValue(sym uint32, base uint64, resolve Resolver) (uint64, error) {

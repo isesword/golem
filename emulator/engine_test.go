@@ -35,7 +35,10 @@ func TestNativeSo(t *testing.T) {
 		t.Fatalf("slen(\"hello\") = %d, want 5", int32(r))
 	}
 	// sum_into writes a+b through a guest pointer; read it back.
-	out := e.Malloc(4)
+	out, merr := e.Malloc(4)
+	if merr != nil {
+		t.Fatal(merr)
+	}
 	if _, err := e.CallSymbol("sum_into", out, 20, 22); err != nil {
 		t.Fatal(err)
 	}

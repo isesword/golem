@@ -38,13 +38,20 @@ const (
 // given protection. RW sizes up to arenaMaxAlloc are carved from the arena;
 // anything else maps a dedicated region as before.
 //
-// Panics if the backing uc_mem_map fails: handing the guest allocator an
-// unmapped address is an unrecoverable engine state, and every caller (JNI
-// marshaling, scratch buffers, fiber stacks) lacks a meaningful recovery.
-func (e *Emulator) Alloc(size uint64, prot int) uint64 {
+// The backing uc_mem_map failure is returned as an error AND the address-
+// space bookkeeping is rolled back (no phantom region, no consumed VA).
+// Call sites that cannot propagate errors (guest-initiated JNI up-calls)
+// use MustAlloc instead.
+func (e *Emulator) Alloc(size uint64, prot int) (uint64, error) {
+	return e.doAlloc(size, prot)
+}
+
+// MustAlloc is Alloc with panic-on-error — reserved for call sites inside
+// guest-initiated up-calls (jni_dispatch) where no error channel exists.
+func (e *Emulator) MustAlloc(size uint64, prot int) uint64 {
 	a, err := e.doAlloc(size, prot)
 	if err != nil {
-		panic(fmt.Sprintf("emulator: alloc(%#x, %d): %v — guest memory mapping failed", size, prot, err))
+		panic(fmt.Sprintf("emulator: MustAlloc(%#x, %d): %v — guest memory mapping failed", size, prot, err))
 	}
 	return a
 }
@@ -60,6 +67,12 @@ func (e *Emulator) doAlloc(size uint64, prot int) (uint64, error) {
 			}
 			base := e.mem.Mmap(uint64(chunk), prot, "arena")
 			if err := e.be.MemMap(base, uint64(chunk), prot); err != nil {
+				// transaction: the bookkeeping region must not outlive a
+				// failed backend map; if the rollback itself fails the
+				// emulator is poisoned (address space inconsistent).
+				if rb := e.mem.RollbackLast(base, uint64(chunk)); rb != nil {
+					return 0, fmt.Errorf("map arena chunk %#x: %w (rollback also failed: %v — emulator poisoned)", base, err, rb)
+				}
 				return 0, fmt.Errorf("map arena chunk %#x: %w", base, err)
 			}
 			*a = allocArena{base: base, off: 0, size: uint64(chunk)}
@@ -70,18 +83,22 @@ func (e *Emulator) doAlloc(size uint64, prot int) (uint64, error) {
 	}
 	a := e.mem.Mmap(size, prot, "alloc")
 	if err := e.be.MemMap(a, (size+0xfff)&^0xfff, prot); err != nil {
+		if rb := e.mem.RollbackLast(a, (size+0xfff)&^0xfff); rb != nil {
+			return 0, fmt.Errorf("map %#x: %w (rollback also failed: %v — emulator poisoned)", a, err, rb)
+		}
 		return 0, fmt.Errorf("map %#x: %w", a, err)
 	}
 	return a, nil
 }
 
 // Malloc maps a fresh read/write guest region and returns its base.
-func (e *Emulator) Malloc(size uint64) uint64 { return e.Alloc(size, ProtRead|ProtWrite) }
+func (e *Emulator) Malloc(size uint64) (uint64, error) { return e.Alloc(size, ProtRead|ProtWrite) }
 
 // WriteScratch copies bytes into a fresh RW region and returns the address.
-// Panics if the backing map/write fails (same rationale as Alloc).
+// Panics on failure: its callers live inside guest-initiated JNI up-calls
+// where no error channel exists (use Alloc directly where errors propagate).
 func (e *Emulator) WriteScratch(data []byte) uint64 {
-	a := e.Alloc(uint64(len(data))+16, ProtRead|ProtWrite)
+	a := e.MustAlloc(uint64(len(data))+16, ProtRead|ProtWrite)
 	if err := e.be.MemWrite(a, data); err != nil {
 		panic(fmt.Sprintf("emulator: WriteScratch: %v", err))
 	}
@@ -207,23 +224,58 @@ type ReplaceFunc func(h *Hook) uint64
 // any step fails (privatize/write/flush): a half-applied patch — code
 // patched but stale translation cached, or a registered hook the guest
 // never reaches — is worse than a loud failure at setup time.
-func (e *Emulator) Replace(addr uint64, fn ReplaceFunc) {
-	// Patching a shared read-only page would corrupt every engine sharing
-	// those bytes, so privatize first.
+// ReplaceE entry-patches addr with an SVC trap dispatched to fn — the
+// transactional form: privatize shared pages, save the original instructions,
+// write the patch, flush, and only then register the hook. Any failure rolls
+// the patch back (original instructions restored + flushed); if even the
+// rollback cannot be verified the emulator is POISONED and every later
+// CallFunc/RunThreads rejects with that error. On a recoverable failure the
+// emulator remains usable and the original code still runs.
+func (e *Emulator) ReplaceE(addr uint64, fn ReplaceFunc) error {
+	if e.poisonErr != nil {
+		return fmt.Errorf("emulator poisoned: %w", e.poisonErr)
+	}
+	// 1. privatize (shared -> private with identical content). On a
+	// recoverable privatize failure the original code is intact.
 	if err := e.privatize(addr, 8); err != nil {
-		panic(fmt.Sprintf("emulator: Replace %#x: %v", addr, err))
+		if e.poisonErr != nil {
+			return e.poisonErr
+		}
+		return fmt.Errorf("privatize %#x: %w", addr, err)
 	}
+	// 2. save the original instructions we are about to overwrite.
+	orig, err := e.be.MemRead(addr, 8)
+	if err != nil {
+		return fmt.Errorf("read original %#x: %w", addr, err)
+	}
+	// 3. write the patch. A partial write cannot be verified -> poison.
 	if err := e.be.MemWrite(addr, []byte{0x01, 0x00, 0x00, 0xd4, 0xc0, 0x03, 0x5f, 0xd6}); err != nil {
-		panic(fmt.Sprintf("emulator: Replace %#x: patch write: %v", addr, err))
+		return e.poison(fmt.Sprintf("patch write %#x", addr), err)
 	}
+	// 4. flush stale translations. If it fails, roll the original
+	// instructions back; if even the rollback cannot be verified -> poison.
 	if err := e.be.FlushCache(); err != nil {
-		panic(fmt.Sprintf("emulator: Replace %#x: flush: %v", addr, err))
+		if rerr := e.be.MemWrite(addr, orig); rerr != nil {
+			return e.poison(fmt.Sprintf("rollback write %#x", addr), rerr)
+		}
+		if rerr := e.be.FlushCache(); rerr != nil {
+			return e.poison(fmt.Sprintf("rollback flush %#x", addr), rerr)
+		}
+		return fmt.Errorf("Replace %#x: flush failed (%v) — original instructions restored", addr, err)
 	}
-	// Registered only after the patch is fully in place: a registration that
-	// outlives a failed patch would trap into a hook the dispatch can't serve.
+	// 5. success: register the dispatch hook last.
 	e.replaced[addr] = func(em *Emulator, b emu.Backend) {
 		ret := fn(&Hook{em})
 		_ = b.RegWrite(emu.RegX0, ret)
+	}
+	return nil
+}
+
+// Replace is ReplaceE with panic-on-error, for call sites that cannot
+// propagate errors. Prefer ReplaceE.
+func (e *Emulator) Replace(addr uint64, fn ReplaceFunc) {
+	if err := e.ReplaceE(addr, fn); err != nil {
+		panic(err.Error())
 	}
 }
 
@@ -233,8 +285,7 @@ func (e *Emulator) ReplaceSymbol(name string, fn ReplaceFunc) error {
 	if !ok {
 		return fmt.Errorf("symbol %q not found", name)
 	}
-	e.Replace(addr, fn)
-	return nil
+	return e.ReplaceE(addr, fn)
 }
 
 // ---- inline hooks ----------------------------------------------------------
