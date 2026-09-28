@@ -80,6 +80,10 @@ const (
 	// include/unicorn/unicorn.h on the dev branch). The installed release
 	// headers predate it — do NOT "fix" this from a local unicorn.h.
 	ucCtlUcPrealloc = 19
+
+	// UC_CTL_TCG_BUFFER_SIZE: value 13 in uc_control_type. Write takes a
+	// uint32 (unicorn may round it); readable back with the READ form.
+	ucCtlTcgBufferSize = 13
 )
 
 // UC_ARM64_REG_* values. X0..X28 are contiguous; X29/X30 are early aliases
@@ -391,6 +395,28 @@ func newUnicornBackend() (Backend, error) {
 
 func ucErr(op string, e int32) error {
 	return fmt.Errorf("emu: %s: %s", op, pStrerror(e))
+}
+
+// SetTCGBufferSize caps the engine's translation-buffer size in bytes
+// (unicorn may round the value; UC_CTL_TCG_BUFFER_SIZE). Must be called
+// before the first Start. Primary use: Windows, where the buffer is
+// committed upfront (PREALLOC) and its size is per-instance real memory.
+func SetTCGBufferSize(b Backend, size uint32) error {
+	ub, ok := b.(*unicornBackend)
+	if !ok {
+		return fmt.Errorf("emu: SetTCGBufferSize: backend is not the unicorn engine")
+	}
+	if ub.uc == nil {
+		return fmt.Errorf("emu: SetTCGBufferSize: engine closed")
+	}
+	if pCtl == nil {
+		return fmt.Errorf("emu: SetTCGBufferSize: libunicorn lacks uc_ctl")
+	}
+	sz := size
+	if e := pCtl(ub.uc, ucCtlTcgBufferSize|1<<26|1<<30, unsafe.Pointer(&sz)); e != ucOK {
+		return ucErr("set_tcg_buffer_size", e)
+	}
+	return nil
 }
 
 func (b *unicornBackend) RegRead(r Reg) (uint64, error) {

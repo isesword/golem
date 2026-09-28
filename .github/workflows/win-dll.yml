@@ -47,6 +47,17 @@ jobs:
           git clone https://github.com/unicorn-engine/unicorn.git unicorn-src
           git -C unicorn-src checkout ${{ env.UNICORN_REF }}
 
+      - name: Patch out x64-only setjmp asm for ARM64 (upstream #2193)
+        if: matrix.arch == 'arm64'
+        run: |
+          # setjmp-wrapper-win32.asm is x64 MASM; MASM has no ARM64 backend
+          # (upstream issue #2193). ARM64 MSVC longjmp does not take the
+          # RtlUnwindEx path the wrapper exists to avoid, so dropping the
+          # file from the build is the documented workaround.
+          $cm = "unicorn-src/CMakeLists.txt"
+          (Get-Content $cm) | Where-Object { $_ -notmatch "setjmp-wrapper-win32" } | Set-Content $cm
+          echo "patched CMakeLists (removed setjmp-wrapper-win32.asm)
+
       - name: Configure (VEH compiled out)
         run: |
           cmake -S unicorn-src -B build `
