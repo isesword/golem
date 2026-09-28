@@ -117,7 +117,7 @@ const (
 	scratch = 0x70000000
 )
 
-func newKernelCtxt(t *testing.T) *kernelCtxt {
+func newKernelCtxt(t testing.TB) *kernelCtxt {
 	t.Helper()
 	be := newFakeBE()
 	v := vfs.New(t.TempDir(), testPid, "testproc")
@@ -302,16 +302,26 @@ func TestLseek(t *testing.T) {
 		{"SEEK_SET", 6, 0, 6},
 		{"SEEK_CUR", -3, 1, 3},
 		{"SEEK_END", -5, 2, int64(len(testContent)) - 5},
-		{"SEEK_END past start", -100, 2, int64(len(testContent)) - 100}, // goes negative; see note below
 	}
 	for _, tc := range cases {
 		if got := k.call(SYS_lseek, uint64(fd), uint64(tc.off), tc.whence); got != tc.want {
 			t.Errorf("%s: lseek = %d, want %d", tc.name, got, tc.want)
 		}
 	}
-	// NOTE: a negative resulting position is returned as-is (e.g. -89 reads as
-	// an errno to the caller) instead of a proper -EINVAL — flagged as a
-	// suspected bug; this test pins the current behavior.
+	// A negative resulting position returns -EINVAL and leaves the fd's
+	// position unchanged (real kernels reject the seek, not return a negative
+	// offset that reads as an errno).
+	seekBack := int64(-100)
+	if got := k.call(SYS_lseek, uint64(fd), uint64(seekBack), 2); got != -EINVAL {
+		t.Errorf("SEEK_END past start = %d, want -EINVAL", got)
+	}
+	if f := k.ctx.files[int32(fd)]; f == nil || f.pos != 0 {
+		t.Fatal("rejected lseek must leave the fd at position 0")
+	}
+	// unknown whence -> -EINVAL
+	if got := k.call(SYS_lseek, uint64(fd), 0, 9); got != -EINVAL {
+		t.Errorf("unknown whence = %d, want -EINVAL", got)
+	}
 
 	// seek back and read to prove the position took effect
 	if got := k.call(SYS_lseek, uint64(fd), 6, 0); got != 6 {
@@ -862,5 +872,87 @@ func TestInfoSyscalls(t *testing.T) {
 	k.call(SYS_prlimit64, 0, 99, 0, scratch)
 	if cur := binary.LittleEndian.Uint64(k.memAt(scratch, 8)); cur != ^uint64(0) {
 		t.Errorf("unknown rlimit cur = %#x, want RLIM_INFINITY", cur)
+	}
+}
+
+// --- semantics conformance (kernel-comparison round) ---
+
+// close on an unopened fd must return -EBADF — real kernels reject it, and
+// returning 0 is a fingerprint anti-emulation probes check for.
+func TestCloseUnknownFdEBADF(t *testing.T) {
+	k := newKernelCtxt(t)
+	if got := k.call(SYS_close, 0xdead); got != -EBADF {
+		t.Errorf("close(0xdead) = %d, want %d", got, -EBADF)
+	}
+	// a real close still works afterwards
+	fd := k.openTestFile()
+	if got := k.call(SYS_close, uint64(fd)); got != 0 {
+		t.Errorf("close(open fd) = %d, want 0", got)
+	}
+	// and the second close of the now-closed fd is EBADF again
+	if got := k.call(SYS_close, uint64(fd)); got != -EBADF {
+		t.Errorf("double close = %d, want %d", got, -EBADF)
+	}
+}
+
+// writev must honor the fd's position (lseek then writev overwrites, not
+// appends) — previously it appended unconditionally, corrupting data for
+// guests that seek before vector writes.
+func TestWritevHonorsPosition(t *testing.T) {
+	k := newKernelCtxt(t)
+	const wpath = "/data/local/posiov.bin"
+	fd := k.call(SYS_openat, 0, k.putStr(scratch+0x800, wpath), oWRONLY|oCREAT)
+	if fd < 0 {
+		t.Fatalf("openat = %d", fd)
+	}
+	// write "0123456789" (10 bytes) at pos 0
+	k.be.MemWrite(scratch+0x1000, []byte("0123456789"))
+	if got := k.call(SYS_write, uint64(fd), scratch+0x1000, 10); got != 10 {
+		t.Fatalf("write = %d, want 10", got)
+	}
+	// seek to 3, then writev {"AB",2},{"CD",2} — must overwrite bytes 3..7
+	k.call(SYS_lseek, uint64(fd), 3, 0)
+	k.be.MemWrite(scratch+0x1000, []byte("AB"))
+	k.be.MemWrite(scratch+0x1100, []byte("CD"))
+	var iov [32]byte
+	binary.LittleEndian.PutUint64(iov[0:], scratch+0x1000)
+	binary.LittleEndian.PutUint64(iov[8:], 2)
+	binary.LittleEndian.PutUint64(iov[16:], scratch+0x1100)
+	binary.LittleEndian.PutUint64(iov[24:], 2)
+	k.be.MemWrite(scratch+0x1200, iov[:])
+	if got := k.call(SYS_writev, uint64(fd), scratch+0x1200, 2); got != 4 {
+		t.Fatalf("writev = %d, want 4", got)
+	}
+	// read the whole file back: "012ABC789"
+	fd2 := k.call(SYS_openat, 0, k.putStr(scratch+0x1400, wpath), 0)
+	if got := k.call(SYS_read, uint64(fd2), scratch+0x200, 16); got != 10 {
+		t.Fatalf("read back = %d, want 10", got)
+	}
+	if got := string(k.memAt(scratch+0x200, 10)); got != "012ABCD789" {
+		t.Fatalf("content after seek+writev = %q, want %q", got, "012ABCD789")
+	}
+}
+
+// getrandom: deterministic mode must mix all parameters and a per-call
+// counter (repeated identical calls must NOT return the same bytes).
+func TestGetrandomDeterministicVaries(t *testing.T) {
+	k := newKernelCtxt(t)
+	const buf = scratch + 0x800
+	if got := k.call(SYS_getrandom, buf, 32, 0); got != 32 {
+		t.Fatalf("getrandom = %d, want 32", got)
+	}
+	first := k.memAt(buf, 32)
+	if got := k.call(SYS_getrandom, buf, 32, 0); got != 32 {
+		t.Fatalf("getrandom = %d, want 32", got)
+	}
+	second := k.memAt(buf, 32)
+	same := 0
+	for i := 0; i < 32; i++ {
+		if first[i] == second[i] {
+			same++
+		}
+	}
+	if same == 32 {
+		t.Fatal("two identical getrandom calls returned identical bytes — predictable-stream fingerprint")
 	}
 }

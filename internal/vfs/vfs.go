@@ -82,20 +82,22 @@ func (v *VFS) Read(guest string) ([]byte, error) {
 	return nil, fmt.Errorf("vfs: no such file: %s", guest)
 }
 
-// Exists reports whether a guest path resolves (for faccessat/stat).
+// Exists reports whether a guest path resolves (for faccessat/stat). The
+// lookup order mirrors Read (fallback first) so a path the resolver insists
+// on handling can never be "exists but unreadable".
 func (v *VFS) Exists(guest string) bool {
 	guest = path.Clean(guest)
+	if v.fallback != nil {
+		if _, ok, err := v.fallback(guest); ok {
+			return err == nil
+		}
+	}
 	if _, ok := v.synth[guest]; ok {
 		return true
 	}
 	if hp := v.hostPath(guest); hp != "" {
 		_, err := os.Stat(hp)
 		return err == nil
-	}
-	if v.fallback != nil {
-		if _, ok, err := v.fallback(guest); ok && err == nil {
-			return true
-		}
 	}
 	return false
 }
@@ -109,7 +111,7 @@ func (v *VFS) registerSynthetic() {
 	v.synth["/proc/self/status"] = func() ([]byte, error) {
 		comm := v.procName // /proc/*/status Name is the (≤15 char) comm
 		if len(comm) > 15 {
-			comm = comm[len(comm)-15:]
+			comm = comm[:15] // the kernel keeps the FIRST 15 bytes
 		}
 		return []byte(fmt.Sprintf("Name:\t%s\nPid:\t%d\nPPid:\t1\nTracerPid:\t0\nUid:\t10000\t10000\t10000\t10000\n", comm, v.pid)), nil
 	}

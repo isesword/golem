@@ -10,6 +10,7 @@
 package kernel
 
 import (
+	crand "crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"time"
@@ -84,6 +85,7 @@ const (
 const (
 	ENOSYS = 38
 	EPERM  = 1
+	EIO    = 5
 	EBADF  = 9
 	ENOENT = 2
 	EINVAL = 22
@@ -103,15 +105,21 @@ type Context struct {
 	// Epoch wins over Clock; in Epoch mode the monotonic clocks are zero-based
 	// (boot time == epoch), so uptime reads 0 rather than the wall time.
 	Epoch int64
+	// TrueRandom makes getrandom fill buffers from crypto/rand. Default off:
+	// the deterministic stream keeps runs reproducible, but it is trivially
+	// distinguishable from real entropy — set this for security-sensitive
+	// guests or whenever anti-emulation sampling is a concern.
+	TrueRandom bool
 	// Clock, if non-nil, supplies the guest's wall clock and monotonic origin
 	// (boot time). nil = host clock with the monotonic origin at process start.
 	// The emulator installs a profile-backed clock here when a device liveness
 	// profile is configured, so syscall-time and JNI-time agree.
 	Clock Clock
 
-	brkCur   uint64 // current program break (0 = uninitialized)
-	Exited   bool   // guest called exit/exit_group
-	ExitCode int
+	brkCur         uint64 // current program break (0 = uninitialized)
+	getrandomCalls uint64 // deterministic getrandom stream counter
+	Exited         bool   // guest called exit/exit_group
+	ExitCode       int
 
 	files  map[int32]*openFile
 	nextFd int32
@@ -375,18 +383,7 @@ func sysWrite(c *Context, a [6]uint64) int64 {
 		if err != nil {
 			return -EBADF
 		}
-		w := c.wstore()
-		cur := w[f.path]
-		end := f.pos + int64(len(d))
-		if int64(len(cur)) < end {
-			nb := make([]byte, end)
-			copy(nb, cur)
-			cur = nb
-		}
-		copy(cur[f.pos:end], d)
-		w[f.path] = cur
-		f.pos = end
-		return int64(len(d))
+		return int64(c.writeOverlay(f, d))
 	}
 	// otherwise it's stdout/stderr/log -> surface it only when tracing
 	if c.Verbose && n > 0 && n < 0x10000 {
@@ -395,6 +392,24 @@ func sysWrite(c *Context, a [6]uint64) int64 {
 		}
 	}
 	return int64(n)
+}
+
+// writeOverlay writes d into the writable overlay at the fd's position,
+// zero-filling gaps and advancing f.pos — the single implementation of the
+// pos semantics shared by sysWrite and sysWritev.
+func (c *Context) writeOverlay(f *openFile, d []byte) int {
+	w := c.wstore()
+	cur := w[f.path]
+	end := f.pos + int64(len(d))
+	if int64(len(cur)) < end {
+		nb := make([]byte, end)
+		copy(nb, cur)
+		cur = nb
+	}
+	copy(cur[f.pos:end], d)
+	w[f.path] = cur
+	f.pos = end
+	return len(d)
 }
 
 func sysWritev(c *Context, a [6]uint64) int64 {
@@ -415,10 +430,8 @@ func sysWritev(c *Context, a [6]uint64) int64 {
 		if err != nil {
 			continue
 		}
-		if wf != nil && wf.writable { // append to the writable file overlay
-			w := c.wstore()
-			w[wf.path] = append(w[wf.path], d...)
-			wf.pos += int64(len(d))
+		if wf != nil && wf.writable { // honor the fd's position, like sysWrite
+			c.writeOverlay(wf, d)
 		} else if c.Verbose {
 			fmt.Printf("[writev fd=%d] %s\n", fd, string(d))
 		}
@@ -524,7 +537,11 @@ func sysRead(c *Context, a [6]uint64) int64 {
 }
 
 func sysClose(c *Context, a [6]uint64) int64 {
-	delete(c.fdTable(), int32(a[0]))
+	fd := int32(a[0])
+	if _, ok := c.fdTable()[fd]; !ok {
+		return -EBADF // real kernels reject closing an unopened fd
+	}
+	delete(c.fdTable(), fd)
 	return 0
 }
 
@@ -553,6 +570,12 @@ func sysLseek(c *Context, a [6]uint64) int64 {
 		f.pos += off
 	case 2: // SEEK_END
 		f.pos = int64(len(c.fileData(f))) + off
+	default: // SEEK_DATA/HOLE etc. unmodeled
+		return -EINVAL
+	}
+	if f.pos < 0 {
+		f.pos = 0 // don't leave the fd positioned at a negative offset
+		return -EINVAL
 	}
 	return f.pos
 }
@@ -738,15 +761,34 @@ func sysGettimeofday(c *Context, a [6]uint64) int64 {
 	return 0
 }
 
-// sysGetrandom fills the buffer with a deterministic-ish stream (good enough for
-// emulation; not cryptographically meaningful here).
+// sysGetrandom fills the buffer. Two modes:
+//   - TrueRandom set: crypto/rand — for security-sensitive guests whose
+//     key material must not be predictable.
+//   - default (deterministic): a mixed-parameter LCG stream. Deterministic
+//     so runs stay reproducible, but the seed mixes ALL call parameters plus
+//     a per-call counter, so repeated identical calls no longer return the
+//     same bytes. NOTE: even the deterministic stream is trivially
+//     distinguishable from real entropy — guests that sample it for
+//     anti-emulation checks will see through it; set TrueRandom for those.
 func sysGetrandom(c *Context, a [6]uint64) int64 {
 	n := a[1]
 	buf := make([]byte, n)
-	seed := byte(a[0] ^ n)
+	if c.TrueRandom {
+		if _, err := crand.Read(buf); err != nil {
+			return -EIO
+		}
+		c.B.MemWrite(a[0], buf)
+		return int64(n)
+	}
+	seed := uint64(a[0]) ^ uint64(a[1])<<8 ^ uint64(a[2])<<16 ^ a[3]<<24 ^ a[4]<<32 ^ a[5]<<40 ^ c.getrandomCalls<<56
+	c.getrandomCalls++
+	x := seed
 	for i := range buf {
-		seed = seed*31 + 7
-		buf[i] = seed
+		x += 0x9E3779B97F4A7C15
+		x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9
+		x = (x ^ (x >> 27)) * 0x94D049BB133111EB
+		x ^= x >> 31
+		buf[i] = byte(x >> 56)
 	}
 	c.B.MemWrite(a[0], buf)
 	return int64(n)

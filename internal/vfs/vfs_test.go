@@ -201,8 +201,9 @@ func TestSyntheticProcFiles(t *testing.T) {
 	if !strings.Contains(string(st), "Pid:\t4321\n") {
 		t.Errorf("status missing Pid 4321:\n%s", st)
 	}
-	// comm is capped at 15 chars (implementation keeps the LAST 15).
-	if !strings.Contains(string(st), "Name:\texample.testapp\n") {
+	// comm is capped at the FIRST 15 chars (TASK_COMM_LEN=16 incl NUL — the
+	// kernel truncates the head, never the tail).
+	if !strings.Contains(string(st), "Name:\tcom.example.tes\n") {
 		t.Errorf("status missing truncated Name:\n%s", st)
 	}
 	if !strings.Contains(string(st), "PPid:\t1\n") || !strings.Contains(string(st), "TracerPid:\t0\n") {
