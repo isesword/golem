@@ -183,6 +183,22 @@ jobs:
           .\\golem-cli.exe examples\\native\\native.so add 2 3
           .\\golem-cli.exe examples\\native\\native.so fib 20
 
+      - name: TCG buffer sizing curve (pool 10, PREALLOC = real committed memory)
+        run: |
+          go build -tags unicorn -o tcgsizing.exe ./cmd/tcgsizing
+          # On Windows+PREALLOC each TCG byte is committed per instance, so
+          # this measures the real deployment trade-off (memory vs throughput).
+          .\tcgsizing.exe -so examples\native\native.so -assets assets `
+            -pool 10 -iters 2000 -sizes 8,16,32,64,128,256,1024 |
+            Tee-Object -FilePath tcg-sizing-report.txt
+
+      - name: Upload TCG sizing report
+        uses: actions/upload-artifact@v4
+        with:
+          name: tcg-sizing-report
+          path: tcg-sizing-report.txt
+          if-no-files-found: error
+
   # ------------------------------------------------------------------
   # auto-commit: drop both DLLs + provenance into assets/windows/<arch>/
   # so consumers clone and run. [skip ci] prevents a trigger loop.
