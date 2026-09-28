@@ -58,7 +58,10 @@ jobs:
           # musl setjmp/longjmp, MSVC aarch64 fixes. Upstream-reviewed, not
           # yet merged (#2193 stays open until then).
           cd unicorn-src
-          curl -L https://github.com/unicorn-engine/unicorn/pull/2286.diff -o woarm64.patch
+          # the .diff URL intermittently 503s (patch-diff CDN); the .patch
+          # form (mbox) is served from github.com directly and git-am's it.
+          curl -sfL --retry 3 https://github.com/unicorn-engine/unicorn/pull/2286.patch -o woarm64.patch
+          git apply --check woarm64.patch || { echo "patch does not apply to ${{ env.UNICORN_REF }} — likely needs rebase"; exit 1; }
           git apply woarm64.patch
           echo "PR #2286 applied"
 
