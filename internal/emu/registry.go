@@ -12,11 +12,11 @@ import (
 // its own build-tag-gated file and registers itself from an init():
 //
 //	unicorn_purego.go (//go:build unicorn && darwin||linux) -> Register("unicorn", ...)
-//	winengine/       (//go:build windows)    -> [PLANNED, not implemented —
-//	                                           solution pending the Windows minimal repro; see
-//	                                           ARCHITECTURE.md "待验证决策". Until it lands, a
-//	                                               Windows build with -tags unicorn registers NO
-//	                                               engine and New returns ErrNoBackend.]
+//	windows build    (//go:build windows)    -> [PLANNED, not implemented —
+//	                                           unicorn dev-branch DLL with WIN32_ENABLE_VEH=OFF
+//	                                           + UC_CTL_UC_PREALLOC; see ARCHITECTURE.md. Until
+//	                                           it lands, a Windows build with -tags unicorn
+//	                                           registers NO engine and New returns ErrNoBackend.]
 //
 // So which engines exist in a binary is decided at build time (`-tags`), and
 // which one is used is decided at run time (arg / $GOLEM_ENGINE / default).

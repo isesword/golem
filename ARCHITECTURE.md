@@ -15,8 +15,7 @@
 │   emu.Backend 接口（唯一契约，方法数以 backend.go 为准）       │
 │   registry.go        引擎选择/平台感知（Windows 缺引擎→明确报错）│
 │   unicorn_purego.go  POSIX 引擎（darwin/linux，已验证）        │
-│   winengine/（规划）  Windows 引擎：CreateThread C 服务线程     │
-│                      + 命令泵 + 回调事件回传                    │
+│   windows 构建路径  unicorn.dll(预提交,PR #2364)+UC_CTL_UC_PREALLOC│
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -27,34 +26,48 @@
    必须为空。当前已满足（32 处引用全部经由接口）。
 
 2. **`emu.Backend` 是唯一契约。** 新平台 = 新 Backend 实现 + registry 注册，
-   上层零改动。Windows 引擎（无论 C 线程泵还是预提交 patch）全部实现在
-   `internal/emu` 包内。
+   上层零改动。Windows 引擎路径（上游预提交方案）全部实现在 `internal/emu`
+   包内。
 
-3. **Windows 引擎级难题在 emu 层终结 —— 但解法尚未选定（2026-09-27 状态：待验证）。**
-   已确认的背景（unicorn2 devblog、unicorn setjmp/longjmp devblog、golang/go#57050）：
-   VEH 是 unicorn 内部 TCG 缓冲的按需提交机制；Go 运行时也安装 Windows 异常
-   处理器，冲突点尚未用最小复现钉死。
+3. **Windows 引擎级难题在 emu 层终结。选定路线（2026-09-27 二轮调研定案）：上游预提交，**
+   **放弃 C 服务线程方案。**
 
-   **待验证决策（禁止当作已定方案引用）：**
-   - [ ] Windows 最小复现程序：原生 uc_open→map→execute、小 TCG buffer、
-         预提交、hook 回调、callback 内反调 backend——固定版本收集崩溃栈，
-         先钉死真实冲突点；
-   - [ ] 若预提交可解，优先 Unicorn 分配路径 patch（注意：调小 buffer ≠
-         预提交，首次写入仍触发提交异常；64MiB 是否够需按指令缓存实测）；
-   - [ ] 若需 C 服务线程：**同步回调协议是关键未解问题**——现有 Backend 的
-         hook 是同步的（hook 内可 RegRead/MemWrite/Stop，我们的测试与
-         demand-map 都依赖此语义），C 线程方案必须提供可重入的请求/响应
-         协议，或改为 Go 回调返回操作列表由 C 线程执行；golang/go#9240 只
-         证明"纯 C 入口的线程合法"，不证明回调可从该线程直接进 Go；
-         逐指令 trace 的事件吞吐需实测；
-   - [ ] Windows 可用 cgo 时，复用 cgo fork 已验证的服务线程方案优于从零
-         写 purego+命令泵；CGO_ENABLED=0 硬约束时，C DLL 预编译/版本锁定/
-         分发纳入方案；
-   - 上层永不出现 `GOOS == "windows"` 分支判断引擎能力——这条**已定**：
-         能力差异只能表现为 Backend 接口的方法或注册与否。
+   **机制背景（已核实）：** unicorn 在 Windows 上对 `VirtualAlloc(MEM_RESERVE)` 的
+   TCG 代码缓冲注册 `AddVectoredExceptionHandler(1, ...)` 惰性提交（unicorn2
+   devblog）。VEH 是进程全局机制——Go 运行时启动时同样注册 first-priority VEH
+   （`runtime/signal_windows.go`），对非 Go 信号按致命崩溃处理（golang/go#56082，
+   至今 open；#56080 已由 CL 442896 部分修复，仅限 windows/arm64 非 Go 线程）。
+   **线程归属与异常处理器链无关——任何 C 服务线程/命令泵方案都不消除该冲突**
+   （且纯 C 线程的同步 hook 回调协议不可行：hook 必须能在未返回时反调 backend，
+   而 go#9240 只保证纯 C 入口线程的创建合法，回调进 Go 无承诺）。C 线程泵
+   方案自 2026-09-27 起从本架构删除。
+
+   **选定方案 = unicorn 上游 PR #2364（wtdcode，2026-07 合入 dev）**：
+   - 编译期 `-DWIN32_ENABLE_VEH=OFF`：编译掉 VEH，预分配成为强制；
+   - 运行期 `UC_CTL_UC_PREALLOC`（write-only, int，**须在首次 uc_emu_start
+     前设置**；仅 Windows+VEH 构建有意义，POSIX 返回 UC_ERR_ARG）：
+     整个 TCG 缓冲 upfront 提交，"avoids installing a process-global
+     vectored exception handler"；
+   - 附带修复 unicorn 自身的 VEH 并发不可靠问题（#2264）；
+   - 佐证：unidbg 在 Windows 量产分发 unicorn.dll 无 VEH 问题——坑在 Go
+     侧的 VEH 优先级，unicorn.dll 本身可工作。
+
+   **实施清单：**
+   - [ ] CI（windows runner）从 unicorn dev 分支以 `-DWIN32_ENABLE_VEH=OFF`
+         构建版本锁定的 unicorn.dll，随项目分发；
+   - [ ] `unicorn_purego.go` build tag 放宽到 windows；`dlopenUnicorn`
+         候选加 `unicorn.dll`；保守起见 `uc_open` 后补一次
+         `UC_CTL_UC_PREALLOC=1`（绑定层已绑 uc_ctl，需修正其签名为变参）；
+   - [ ] TCG buffer 经 `UC_CTL_TCG_BUFFER_SIZE` 按实测调小（默认 1 GiB
+         立即提交，多实例池必须实测指令缓存用量后定值）；
+   - [ ] Windows runner 上跑 fakebe/engine 全套测试 + 最小复现
+         （uc_open→map→hook→start 全链路）验收。
+
+   上层永不出现 `GOOS == "windows"` 分支判断引擎能力——**已定**：
+   能力差异只能表现为 Backend 接口的方法或注册与否。
 
    **registry 现状**：Windows 平台化错误指引尚未实现（registry.go 仅有
-   注释占位）——落地 winengine 或明确放弃时一并实现。
+   注释占位）——落地 windows 构建时一并实现。
 
 4. **错误语义（388b76c 确立）：** 内存分配可恢复错误走 error 返回 +
    `Space.RollbackLast` 事务；不可验证的状态转换走 poison；
