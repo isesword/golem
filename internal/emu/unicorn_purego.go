@@ -378,31 +378,59 @@ func newUnicornBackend() (Backend, error) {
 		return nil, ucErr("uc_open", e)
 	}
 	b := &unicornBackend{uc: uc, pageSize: 4096}
-	// Windows belt-and-braces: commit the whole TCG buffer upfront so unicorn
-	// never installs its process-global VEH (PR #2364, UC_CTL_UC_PREALLOC;
-	// must run before the first uc_emu_start). Ignored on POSIX (UC_ERR_ARG)
-	// and on VEH-less Windows builds, where preallocation is mandatory.
-	if runtime.GOOS == "windows" && pCtl != nil {
-		var preallocCtl uint32 = ucCtlUcPrealloc | 1<<26 | 1<<30 // UC_CTL_WRITE(UC_CTL_UC_PREALLOC, 1)
-		var on int32 = 1
-		if e := pCtl(uc, preallocCtl, unsafe.Pointer(&on)); e != ucOK && e != ucErrArg {
+	if runtime.GOOS == "windows" {
+		if err := b.applyWindowsDefaults(); err != nil {
 			pClose(uc)
-			return nil, ucErr("uc_ctl prealloc", e)
-		}
-		// PREALLOC commits the whole TCG buffer upfront — the default 1 GiB
-		// per instance would bill 10 GiB for a 10-engine pool. Sizing curve
-		// (Windows, pool 10, ONE small-footprint workload — native add):
-		// 16 MiB reached 100% of peak throughput; 256 MiB+ degraded 30-40%.
-		// Larger-footprint guests may need more — measure with cmd/tcgsizing
-		// and raise via UC_CTL_TCG_BUFFER_SIZE if the workload demands it.
-		var tcgMiB uint32 = 16
-		var tcgCtl uint32 = ucCtlTcgBufferSize | 1<<26 | 1<<30 // UC_CTL_WRITE(UC_CTL_TCG_BUFFER_SIZE, 1)
-		if e := pCtl(uc, tcgCtl, unsafe.Pointer(&tcgMiB)); e != ucOK {
-			pClose(uc)
-			return nil, ucErr("uc_ctl tcg buffer size", e)
+			return nil, err
 		}
 	}
 	return b, nil
+}
+
+// preallocWarnOnce makes the stock-DLL warning in applyWindowsDefaults print
+// once per process, no matter how many engines the pool opens.
+var preallocWarnOnce sync.Once
+
+// applyWindowsDefaults applies the Windows-only engine setup, as
+// belt-and-braces against unicorn's process-global VEH: commit the whole TCG
+// buffer upfront so unicorn never installs it (PR #2364, UC_CTL_UC_PREALLOC;
+// must run before the first uc_emu_start), then cap the buffer at a
+// pool-friendly size.
+func (b *unicornBackend) applyWindowsDefaults() error {
+	if pCtl == nil {
+		return nil
+	}
+	var preallocCtl uint32 = ucCtlUcPrealloc | 1<<26 | 1<<30 // UC_CTL_WRITE(UC_CTL_UC_PREALLOC, 1)
+	var on int32 = 1
+	switch e := pCtl(b.uc, preallocCtl, unsafe.Pointer(&on)); e {
+	case ucOK:
+	case ucErrArg:
+		// Expected on the VEH-off build (preallocation is mandatory there,
+		// so the ctl has nothing to do) — but also what a stock release DLL
+		// returns because it predates #2364, in which case the VEH stays
+		// active. Warn once so the second case is not silently "working".
+		preallocWarnOnce.Do(func() {
+			fmt.Fprintf(os.Stderr, "emu: warning: the loaded unicorn DLL does not support UC_CTL_UC_PREALLOC. "+
+				"If this is the golem VEH-off build (assets/windows or $GOLEM_UNICORN), this is expected. "+
+				"Otherwise it is likely a stock release build: unicorn's process-global VEH is active and "+
+				"conflicts with the Go runtime (golang/go#56082) — use the VEH-off build from assets/windows "+
+				"or point GOLEM_UNICORN at one.\n")
+		})
+	default:
+		return ucErr("uc_ctl prealloc", e)
+	}
+	// PREALLOC commits the whole TCG buffer upfront — the default 1 GiB
+	// per instance would bill 10 GiB for a 10-engine pool. Sizing curve
+	// (Windows, pool 10, ONE small-footprint workload — native add):
+	// 16 MiB reached 100% of peak throughput; 256 MiB+ degraded 30-40%.
+	// Larger-footprint guests may need more — measure with cmd/tcgsizing;
+	// users override it via emulator.Config.TCGBufferMiB.
+	var tcgMiB uint32 = 16
+	var tcgCtl uint32 = ucCtlTcgBufferSize | 1<<26 | 1<<30 // UC_CTL_WRITE(UC_CTL_TCG_BUFFER_SIZE, 1)
+	if e := pCtl(b.uc, tcgCtl, unsafe.Pointer(&tcgMiB)); e != ucOK {
+		return ucErr("uc_ctl tcg buffer size", e)
+	}
+	return nil
 }
 
 func ucErr(op string, e int32) error {

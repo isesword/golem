@@ -43,14 +43,6 @@ type Config struct {
 	// DT_INIT/init_array run, and JNI_OnLoad if exported). Empty = boot bionic
 	// only; load libraries yourself with LoadLibrary.
 	SOPath string
-	// JNI is the Java callback handler the guest's JNIEnv calls dispatch to.
-	// nil = dvm.AbstractJni{} (everything returns null/0). Implement dvm.Jni (or
-	// embed dvm.AbstractJni and override a few methods) to model the Java side.
-	JNI dvm.Jni
-	// DexPath optionally loads a classes.dex at boot so FindClass/GetMethodID/
-	// GetFieldID resolve against real class/method/field metadata (signatures,
-	// superclasses) instead of being synthesized. Metadata only — no bytecode.
-	DexPath string
 	// ProcessName is the emulated process name reported via /proc/self/* etc.
 	ProcessName string
 	// Pid reported to the guest (getpid/gettid/...). 0 = a default.
@@ -58,9 +50,6 @@ type Config struct {
 	// Engine selects the CPU backend: "unicorn" | "" (auto /
 	// $GOLEM_ENGINE / first compiled in).
 	Engine string
-	// PropertyProvider, if set, answers the loaded .so's __system_property_get(key)
-	// calls: return (value, true) to supply a value, or ("", false) for "unset".
-	PropertyProvider func(key string) (string, bool)
 	// FileResolver, if set, is consulted for guest file opens the built-in VFS
 	// can't satisfy: return (content, true, nil) to supply a file, (nil, true,
 	// err) to force an error (e.g. a missing/denied path), or (nil, false, nil)
@@ -72,13 +61,45 @@ type Config struct {
 	// fixed Unix time (seconds) instead of the host clock — for deterministic,
 	// reproducible runs (e.g. reverse-engineering a time-dependent signature).
 	Epoch int64
+	// TCGBufferMiB caps the CPU engine's translation (JIT) buffer, in MiB,
+	// applied during construction — BEFORE boot runs any guest code, because
+	// unicorn's UC_CTL_TCG_BUFFER_SIZE only takes effect ahead of the first
+	// uc_emu_start. 0 = engine default: on Windows with PREALLOC the engine
+	// commits 16 MiB upfront (measured: full throughput at 16 MiB, regression
+	// at 256 MiB+); on POSIX the buffer is lazily committed and the engine
+	// leaves the size alone. Unicorn-only — on any other engine (or a build
+	// without the unicorn tag) New returns an error rather than silently
+	// ignoring the value.
+	TCGBufferMiB int
+	// Android is the Android personality of the emulated process (JNI
+	// handler, dex metadata, symbol replacements, system properties). A
+	// future iOS personality would be a sibling of this field and mutually
+	// exclusive with it.
+	Android AndroidConfig
+}
 
+// AndroidConfig is the Android personality of an emulated process: the pieces
+// that only make sense for an Android-flavoured guest, grouped so that a
+// future iOS personality can sit next to them without polluting the
+// platform-agnostic top-level Config.
+type AndroidConfig struct {
+	// JNI is the Java callback handler the guest's JNIEnv calls dispatch to.
+	// nil = dvm.AbstractJni{} (everything returns null/0). Implement dvm.Jni (or
+	// embed dvm.AbstractJni and override a few methods) to model the Java side.
+	JNI dvm.Jni
+	// DexPath optionally loads a classes.dex at boot so FindClass/GetMethodID/
+	// GetFieldID resolve against real class/method/field metadata (signatures,
+	// superclasses) instead of being synthesized. Metadata only — no bytecode.
+	DexPath string
 	// ReplaceFns installs Go implementations by symbol name, with two binding
 	// paths: names the loaded modules import as UNRESOLVED symbols get their
 	// stub bound to the implementation (before linking); names the loaded
 	// modules EXPORT are entry-patched (Replace) after boot completes. Model
 	// NDK/libc functions the guest calls here (e.g. the AAssetManager family).
 	ReplaceFns map[string]func(h *Hook) uint64
+	// PropertyProvider, if set, answers the loaded .so's __system_property_get(key)
+	// calls: return (value, true) to supply a value, or ("", false) for "unset".
+	PropertyProvider func(key string) (string, bool)
 }
 
 const defaultPid = 28859
@@ -123,21 +144,22 @@ type Emulator struct {
 	stubHits map[string]int
 	scCount  int // syscalls in current CallFunc (runaway guard)
 
-	jniEnv      uint64         // guest JNIEnv* (points to a stub function table)
-	javaVM      uint64         // guest JavaVM*
-	getEnvStub  uint64         // JavaVM->GetEnv svc stub (special-cased)
-	jniDispatch map[uint64]int // JNIEnv stub addr -> JNINativeInterface index
-	classRefs   map[string]dvm.Ref
-	shared      []sharedRange          // guest ranges mapped via MemMapPtr (privatize-on-write)
-	poisonErr   error                  // set when a failed address-space transition leaves the emulator unusable
-	classMeta   *dvm.Class             // java/lang/Class
-	natives     map[string]uint64      // "class.name+sig" -> registered native fn ptr
-	methods     map[dvm.Ref]*methodRef // jmethodID -> (class, method)
-	fields      map[dvm.Ref]*fieldRef  // jfieldID -> (class, field)
-	classFilter map[string]bool        // FindClass allow-set (nil = allow all)
-	arrayPins   map[uint64]pinEntry    // GetByteArrayElements ptr -> array ref (copy-back)
-	pinGen      uint64                 // bumped per host-initiated native call
-	pendingExc  bool                   // a pending JNI exception (Throw/ThrowNew)
+	jniEnv       uint64         // guest JNIEnv* (points to a stub function table)
+	javaVM       uint64         // guest JavaVM*
+	getEnvStub   uint64         // JavaVM->GetEnv svc stub (special-cased)
+	jniDispatch  map[uint64]int // JNIEnv stub addr -> JNINativeInterface index
+	classRefs    map[string]dvm.Ref
+	shared       []sharedRange          // guest ranges mapped via MemMapPtr (privatize-on-write)
+	poisonErr    error                  // set when a failed address-space transition leaves the emulator unusable
+	pendingPanic any                    // panic recovered inside a guarded backend callback; poisons at the next run boundary
+	classMeta    *dvm.Class             // java/lang/Class
+	natives      map[string]uint64      // "class.name+sig" -> registered native fn ptr
+	methods      map[dvm.Ref]*methodRef // jmethodID -> (class, method)
+	fields       map[dvm.Ref]*fieldRef  // jfieldID -> (class, field)
+	classFilter  map[string]bool        // FindClass allow-set (nil = allow all)
+	arrayPins    map[uint64]pinEntry    // GetByteArrayElements ptr -> array ref (copy-back)
+	pinGen       uint64                 // bumped per host-initiated native call
+	pendingExc   bool                   // a pending JNI exception (Throw/ThrowNew)
 
 	hostByName map[string]hostFn // libc funcs we implement in Go (override bionic)
 	hostImpl   map[uint64]hostFn // svc addr -> host impl
@@ -217,6 +239,21 @@ func New(cfg Config) (e *Emulator, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("backend(%s): %w", engine, err)
 	}
+	// TCG buffer sizing must land before the first uc_emu_start (boot runs
+	// guest code), and this point precedes the half-booted cleanup defer below
+	// (it only fires once e is assigned) — so failures here close the fresh
+	// backend by hand. A non-unicorn engine reports the setting as an error
+	// via SetTCGBufferSize rather than silently ignoring it.
+	if cfg.TCGBufferMiB != 0 {
+		if cfg.TCGBufferMiB < 0 {
+			be.Close()
+			return nil, fmt.Errorf("backend(%s): TCGBufferMiB must be >= 0, got %d", engine, cfg.TCGBufferMiB)
+		}
+		if err := emu.SetTCGBufferSize(be, uint32(cfg.TCGBufferMiB)<<20); err != nil {
+			be.Close()
+			return nil, fmt.Errorf("backend(%s): set TCG buffer to %d MiB: %w", engine, cfg.TCGBufferMiB, err)
+		}
+	}
 	pid := cfg.Pid
 	if pid == 0 {
 		pid = defaultPid
@@ -264,30 +301,30 @@ func New(cfg Config) (e *Emulator, err error) {
 		e.fs.SetFallback(cfg.FileResolver)
 	}
 	e.classMeta = e.vm.ResolveClass("java/lang/Class")
-	if cfg.JNI != nil {
-		e.vm.SetJni(cfg.JNI)
+	if cfg.Android.JNI != nil {
+		e.vm.SetJni(cfg.Android.JNI)
 	} else {
 		e.vm.SetJni(dvm.AbstractJni{})
 	}
-	if cfg.DexPath != "" {
-		nc, derr := e.vm.LoadDexFile(cfg.DexPath)
+	if cfg.Android.DexPath != "" {
+		nc, derr := e.vm.LoadDexFile(cfg.Android.DexPath)
 		if derr != nil {
 			return nil, fmt.Errorf("load dex: %w", derr)
 		}
 		if cfg.Verbose {
-			fmt.Printf("[dex] %s -> %d classes\n", cfg.DexPath, nc)
+			fmt.Printf("[dex] %s -> %d classes\n", cfg.Android.DexPath, nc)
 		}
 	}
 	registerHostFns(e)
-	for name, fn := range cfg.ReplaceFns {
+	for name, fn := range cfg.Android.ReplaceFns {
 		f := fn
 		if addr, ok := e.syms[name]; ok {
 			e.Replace(addr, f)
 		} else {
-			e.hostByName[name] = func(em *Emulator, b emu.Backend) {
+			e.hostByName[name] = e.guardHostFn(func(em *Emulator, b emu.Backend) {
 				ret := f(&Hook{em})
 				_ = b.RegWrite(emu.RegX0, ret)
-			}
+			})
 		}
 	} // libc functions we implement in Go (need no libc init)
 	e.kctx = &kernel.Context{B: be, Mem: e.mem, VFS: e.fs, Pid: pid, Verbose: cfg.Verbose, Epoch: cfg.Epoch}
@@ -319,18 +356,20 @@ func New(cfg Config) (e *Emulator, err error) {
 	_ = putU64(be, tlsBase+tlsSlotThreadID*8, pthreadStruct)
 
 	// Route SVC: distinguish import-stub calls (by PC) from real syscalls.
-	if _, err := be.HookInterrupt(e.onInterrupt); err != nil {
+	// Every Go callback handed to the backend goes through the panic guard
+	// (guard.go): a panic must never escape across the purego trampoline.
+	if _, err := be.HookInterrupt(e.guardInterrupt(e.onInterrupt)); err != nil {
 		return nil, err
 	}
 	// Diagnose unmapped/protected accesses during bring-up.
-	if _, err := be.HookMemInvalid(func(b emu.Backend, typ int, addr uint64, size int, val int64) bool {
+	if _, err := be.HookMemInvalid(e.guardMemInvalid(func(b emu.Backend, typ int, addr uint64, size int, val int64) bool {
 		pc, _ := b.RegRead(emu.RegPC)
 		if e.cfg.Verbose {
 			fmt.Printf("[mem] INVALID access type=%d addr=0x%x size=%d value=0x%x pc=0x%x (%s)\n",
 				typ, addr, size, uint64(val), pc, e.NearestSym(pc))
 		}
 		return false // do not auto-recover; surface the error
-	}); err != nil {
+	})); err != nil {
 		return nil, err
 	}
 
@@ -341,7 +380,7 @@ func New(cfg Config) (e *Emulator, err error) {
 	// in e.syms now. Names bound as import overrides during linking are not
 	// in e.syms (they resolved to stubs) and are naturally skipped; exported
 	// symbols get their entry patched.
-	for name, fn := range cfg.ReplaceFns {
+	for name, fn := range cfg.Android.ReplaceFns {
 		if addr, ok := e.syms[name]; ok {
 			if err := e.ReplaceE(addr, fn); err != nil {
 				return nil, fmt.Errorf("ReplaceFns %s: %w", name, err)
@@ -554,6 +593,9 @@ func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
 // CallFunc invokes guest code at addr with up to 8 integer args (X0..X7),
 // returning X0. LR is set to a sentinel so emulation stops on return.
 func (e *Emulator) CallFunc(addr uint64, args ...uint64) (uint64, error) {
+	if e.poisonErr != nil {
+		return 0, fmt.Errorf("emulator poisoned: %w", e.poisonErr)
+	}
 	regs := []emu.Reg{emu.RegX0, emu.RegX1, emu.RegX2, emu.RegX3, emu.RegX4, emu.RegX5, emu.RegX6, emu.RegX7}
 	if len(args) > len(regs) {
 		return 0, fmt.Errorf("CallFunc: >8 args not supported")
@@ -569,6 +611,11 @@ func (e *Emulator) CallFunc(addr uint64, args ...uint64) (uint64, error) {
 	e.scCount = 0
 	if err := e.be.Start(addr, sentinel); err != nil {
 		return 0, fmt.Errorf("emu_start @0x%x: %w", addr, err)
+	}
+	// A panic inside a guest up-call was recovered at the trampoline boundary
+	// (guard.go); surface it here — the run's caller — instead of across C.
+	if err := e.checkGuestPanic(); err != nil {
+		return 0, err
 	}
 	return e.be.RegRead(emu.RegX0)
 }

@@ -11,12 +11,15 @@ import (
 // where you pick the CPU engine at VM creation. Each concrete backend lives in
 // its own build-tag-gated file and registers itself from an init():
 //
-//	unicorn_purego.go (//go:build unicorn && darwin||linux) -> Register("unicorn", ...)
-//	windows build    (//go:build windows)    -> [PLANNED, not implemented —
-//	                                           unicorn dev-branch DLL with WIN32_ENABLE_VEH=OFF
-//	                                           + UC_CTL_UC_PREALLOC; see ARCHITECTURE.md. Until
-//	                                           it lands, a Windows build with -tags unicorn
-//	                                           registers NO engine and New returns ErrNoBackend.]
+//	unicorn_purego.go (//go:build unicorn) -> Register("unicorn", ...)
+//	                                           on every platform, Windows
+//	                                           included. The Windows DLL must
+//	                                           be the VEH-off build
+//	                                           (-DWIN32_ENABLE_VEH=OFF, PR #2364;
+//	                                           see ARCHITECTURE.md) — a stock
+//	                                           release DLL loads but its
+//	                                           process-global VEH fights the
+//	                                           Go runtime (golang/go#56082).
 //
 // So which engines exist in a binary is decided at build time (`-tags`), and
 // which one is used is decided at run time (arg / $GOLEM_ENGINE / default).

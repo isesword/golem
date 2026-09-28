@@ -16,9 +16,10 @@ import (
 // diff an emulated run against a real-device trace to find where they diverge —
 // but it is golem's own, built on the engine's per-instruction code hook.
 //
-// It needs the Unicorn engine (it traces one instruction at a time,
-// hook). Tracing is slow (one register-file read per instruction) and produces
-// large output; wrap the writer in your own gzip/buffer if you like.
+// It needs an engine with per-instruction code hooks (unicorn) — it traces
+// one instruction at a time. Tracing is slow (one register-file read per
+// instruction) and produces large output; wrap the writer in your own
+// gzip/buffer if you like.
 
 // gpRegNames indexes the [34]uint64 ReadGPRegs returns.
 var gpRegNames = [34]string{
@@ -57,18 +58,16 @@ type insnTracer struct {
 // TraceInsns installs a full instruction tracer over [start, end) and writes the
 // trace to w. base is subtracted from each PC so the trace uses module-relative
 // offsets (pass the module base). Returns a stop function that removes the hook
-// and flushes; call it after the traced call returns. Unicorn only.
+// and flushes; call it after the traced call returns. Requires per-instruction
+// code hooks (errors wrap emu.ErrUnsupported on engines without them).
 func (e *Emulator) TraceInsns(w io.Writer, start, end, base uint64) (func(), error) {
-	if e.engine != "unicorn" {
-		return nil, fmt.Errorf("TraceInsns: full instruction trace requires the unicorn engine (current %q)", e.engine)
-	}
 	t := &insnTracer{e: e, w: bufio.NewWriterSize(w, 1<<20), base: base, buf: make([]byte, 0, 256)}
 	fmt.Fprintf(t.w, "# golem instruction trace  base=0x%x range=[0x%x,0x%x)\n", base, start, end)
-	h, err := e.be.HookCode(start, end, func(b emu.Backend, addr uint64, size uint32) {
+	h, err := e.be.HookCode(start, end, e.guardCode(func(b emu.Backend, addr uint64, size uint32) {
 		t.onInsn(addr)
-	})
+	}))
 	if err != nil {
-		return nil, err
+		return nil, e.capabilityErr("TraceInsns", err)
 	}
 	return func() {
 		_ = h.Remove()

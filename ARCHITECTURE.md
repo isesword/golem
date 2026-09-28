@@ -61,16 +61,22 @@
    - [x] **Windows runner 上全套 fakebe/engine 测试 + CLI 实弹验收通过**
          （dvm 引用生命周期 15 测、privatize 三态、Pool 七态、ELF/syscall/
          hook 集成——VEH 消除实证完成）；
-   - [ ] TCG buffer 经 `UC_CTL_TCG_BUFFER_SIZE` 按实测调小（默认 1 GiB
-         立即提交，多实例池须实测指令缓存用量后定值——当前单机全绿，
-         池化压测定值后勾掉）；
-   - [ ] windows/arm64 构建矩阵行（DLL 需 arm64 版，当前仅 amd64）。
+   - [x] TCG buffer 经 `UC_CTL_TCG_BUFFER_SIZE` 定值（2026-09-28 定案）：
+         Windows+PREALLOC 下引擎默认 16 MiB（实测：16 MiB 即达吞吐平台期，
+         256 MiB+ 反降 30-40%），POSIX 下引擎不管（惰性提交）；用户经
+         `emulator.Config.TCGBufferMiB` 在构造期覆盖（boot 前应用，
+         非 unicorn 引擎显式报错而非静默忽略）；实测工具 `cmd/tcgsizing`；
+   - [ ] windows/arm64 DLL 实弹验证：win-dll workflow 已构建 arm64 DLL
+         （fork = dev + PR #2286），但引擎测试仅在 amd64 runner 上跑——
+         待 windows-11-arm runner 上加 smoke job 闭环。
 
    上层永不出现 `GOOS == "windows"` 分支判断引擎能力——**已定**：
    能力差异只能表现为 Backend 接口的方法或注册与否。
 
-   **registry 现状**：Windows 平台化错误指引尚未实现（registry.go 仅有
-   注释占位）——落地 windows 构建时一并实现。
+   **registry 现状**：`registry.go` 已实现引擎选择（显式参数 /
+   `$GOLEM_ENGINE` / 默认序）与可操作的错误指引（请求了未编译的引擎时报
+   "rebuild with -tags ..."）；Windows 缺 DLL 时的定位指引在
+   `dlopenUnicorn` 的候选列表错误里。
 
 4. **错误语义（388b76c 确立）：** 内存分配可恢复错误走 error 返回 +
    `Space.RollbackLast` 事务；不可验证的状态转换走 poison；
@@ -85,6 +91,11 @@
 
 7. **性能契约：** 长生命周期引擎稳态 O(1)（arena 池 + 帧池 + 引用两域表）；
    共享只读页跨引擎一次物理驻留（loader Plan 缓存 + uc_mem_map_ptr）。
+
+8. **引擎能力差异经 `emu.ErrUnsupported` 哨兵表达，上层不做引擎名分支。**
+   后端对不支持的操作返回包装该哨兵的错误；上层用 `errors.Is` 判定并包装成
+   含引擎名的友好错误。禁止 `if engine != "unicorn"` 式字符串门控——能力
+   探测走接口调用，不走名字。
 
 ## 平台支持矩阵（随实现更新）
 

@@ -194,6 +194,12 @@ func (e *Emulator) runFiberSlice(f *fiber) error {
 		f.state = fsDone // a fault in a worker thread shouldn't kill the process
 		return nil
 	}
+	// A guest up-call panicked inside the slice (recovered at the trampoline
+	// boundary, guard.go): guest state is untrusted — poison and abort the run.
+	if err := e.checkGuestPanic(); err != nil {
+		f.state = fsDone
+		return err
+	}
 	if exited, code := e.GuestExited(); exited {
 		return fmt.Errorf("guest exit_group(%d) in fiber %d", code, f.id)
 	}

@@ -37,7 +37,7 @@ unidbg is the de-facto tool for emulating Android native libraries, but it runs 
 - Call native functions by symbol or by module offset, pass up to 8 integer args, and read the return value.
 - Replace a native function with a Go callback (`ReplaceE`, transactional entry patch that restores the original instructions on failure), or **inline hook** (`HookAddr`, per-instruction, Unicorn) to rewrite registers / redirect PC; memory-writing paths flush the code cache automatically.
 - **Console debugger**: breakpoints / single-step / registers / memory (Unicorn; I/O is injectable for scripting).
-- Load **real class/method/field metadata from a classes.dex** (`Config.DexPath` / `LoadDex`): FindClass/GetMethodID/GetFieldID resolve against true signatures and superclasses (metadata only, no bytecode).
+- Load **real class/method/field metadata from a classes.dex** (`Config.Android.DexPath` / `LoadDex`): FindClass/GetMethodID/GetFieldID resolve against true signatures and superclasses (metadata only, no bytecode).
 - Memory helpers: alloc, read/write bytes, C-strings, and LE integers.
 - Per-instruction trace, plus a full instruction-stream trace (`TraceInsns`: per-instruction offset + opcode + register deltas + call/syscall annotations, Tenet-style, diffable against a real-device trace; Unicorn).
 - Selectable engine: build with `-tags unicorn` to compile in the purego backend, choose at runtime with `-engine` / `$GOLEM_ENGINE`.
@@ -105,7 +105,7 @@ e.ReplaceSymbol("add", func(h *emulator.Hook) uint64 { return h.Arg(0) + h.Arg(1
 
 ### Modeling the Java side (JNI)
 
-Native libraries call back into Java via JNI. Implement `dvm.Jni` (or embed `dvm.AbstractJni` and override the few methods your library uses), then pass it in `Config.JNI`:
+Native libraries call back into Java via JNI. Implement `dvm.Jni` (or embed `dvm.AbstractJni` and override the few methods your library uses), then pass it in `Config.Android.JNI`:
 
 ```go
 type MyJni struct{ dvm.AbstractJni }
@@ -117,7 +117,7 @@ func (MyJni) CallStaticObjectMethodV(vm *dvm.VM, cls *dvm.Class, sig string, va 
     return nil
 }
 
-e, _ := emulator.New(emulator.Config{SOPath: "libfoo.so", JNI: MyJni{}})
+e, _ := emulator.New(emulator.Config{SOPath: "libfoo.so", Android: emulator.AndroidConfig{JNI: MyJni{}}})
 ```
 
 This is how unidbg's `AbstractJni` works: the guest's `RegisterNatives`/`GetMethodID`/`Call*Method` route to your switch on the `"class->method(sig)"` string.

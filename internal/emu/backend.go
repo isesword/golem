@@ -25,6 +25,12 @@ import (
 // without the `unicorn` build tag).
 var ErrNoBackend = errors.New("emu: no CPU backend compiled in (build with -tags unicorn)")
 
+// ErrUnsupported is the sentinel a backend returns (wrapped) for an operation
+// the engine cannot perform — e.g. per-instruction code hooks on an engine
+// without them. Callers test it with errors.Is and degrade or re-report with
+// engine context; they must NOT branch on the engine's name instead.
+var ErrUnsupported = errors.New("emu: operation unsupported by this engine")
+
 // Prot bits for mem_map / mem_protect (match Unicorn UC_PROT_*).
 const (
 	ProtNone  = 0

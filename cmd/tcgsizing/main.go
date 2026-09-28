@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/isesword/golem/emulator"
-	"github.com/isesword/golem/internal/emu"
 )
 
 func main() {
@@ -66,16 +65,17 @@ func main() {
 	for _, mib := range miBs {
 		engines := make([]*emulator.Emulator, *poolSize)
 		for i := range engines {
+			// TCG sizing goes through Config (not a post-boot ctl): the ctl only
+			// takes effect before the first uc_emu_start, and boot runs guest
+			// code (init_array/JNI_OnLoad) — setting it after New would be a
+			// silent no-op for any .so with initializers.
 			e, err := emulator.New(emulator.Config{
-				SOPath:    *so,
-				AssetRoot: *assets,
+				SOPath:       *so,
+				AssetRoot:    *assets,
+				TCGBufferMiB: int(mib),
 			})
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "size %dMiB: boot engine %d: %v\n", mib, i, err)
-				os.Exit(1)
-			}
-			if err := emu.SetTCGBufferSize(e.Backend(), uint32(mib)<<20); err != nil {
-				fmt.Fprintf(os.Stderr, "size %dMiB: set tcg buffer: %v\n", mib, err)
 				os.Exit(1)
 			}
 			engines[i] = e

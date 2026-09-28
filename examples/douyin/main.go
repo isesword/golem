@@ -45,7 +45,7 @@ func main() {
 		SOPath:      *so,
 		AssetRoot:   emulator.Locate("assets"),
 		ProcessName: "com.ss.android.ugc.aweme",
-		JNI:         douyinJni{},
+		Android:     emulator.AndroidConfig{JNI: douyinJni{}},
 		Engine:      *engine,
 		Verbose:     *verbose,
 		Epoch:       1700000000, // pin guest clock -> deterministic protobuf/heap across runs (reproducible captures)

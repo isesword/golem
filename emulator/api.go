@@ -2,10 +2,27 @@ package emulator
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"github.com/isesword/golem/internal/emu"
 )
+
+// capabilityErr rewrites an engine-capability failure (an error wrapping
+// emu.ErrUnsupported) into one that names the operation and the engine;
+// ordinary backend errors pass through unchanged. This replaces engine-NAME
+// gating ("if engine != unicorn") with capability gating, so a future backend
+// without per-instruction hooks degrades through emu.ErrUnsupported instead
+// of a string check.
+func (e *Emulator) capabilityErr(op string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, emu.ErrUnsupported) {
+		return fmt.Errorf("%s: %w (engine %q)", op, err, e.engine)
+	}
+	return err
+}
 
 // Guest memory protection bits (mirror the CPU backend's UC_PROT_*).
 const (
@@ -264,10 +281,10 @@ func (e *Emulator) ReplaceE(addr uint64, fn ReplaceFunc) error {
 		return fmt.Errorf("Replace %#x: flush failed (%v) — original instructions restored", addr, err)
 	}
 	// 5. success: register the dispatch hook last.
-	e.replaced[addr] = func(em *Emulator, b emu.Backend) {
+	e.replaced[addr] = e.guardHostFn(func(em *Emulator, b emu.Backend) {
 		ret := fn(&Hook{em})
 		_ = b.RegWrite(emu.RegX0, ret)
-	}
+	})
 	return nil
 }
 
@@ -295,17 +312,15 @@ func (e *Emulator) ReplaceSymbol(name string, fn ReplaceFunc) error {
 // registers via *Hook — rewrite an argument, capture a value, or SetPC to skip
 // or redirect. Returns a remover.
 //
-// Requires the Unicorn engine (needs per-instruction code hooks):
-// hook, so HookAddr errors there (use Replace for function-entry interception).
+// Inline hooks need per-instruction code hooks; an engine without them
+// returns an error wrapping emu.ErrUnsupported (use Replace for entry
+// interception, which works on any engine — it is a trap, not an inline patch).
 func (e *Emulator) HookAddr(addr uint64, fn func(h *Hook)) (func(), error) {
-	if e.engine != "unicorn" {
-		return nil, fmt.Errorf("HookAddr: inline hooks require the unicorn engine (current %q); use Replace for entry hooks", e.engine)
-	}
-	h, err := e.be.HookCode(addr, addr, func(b emu.Backend, a uint64, size uint32) {
+	h, err := e.be.HookCode(addr, addr, e.guardCode(func(b emu.Backend, a uint64, size uint32) {
 		fn(&Hook{e})
-	})
+	}))
 	if err != nil {
-		return nil, err
+		return nil, e.capabilityErr("HookAddr", err)
 	}
 	return func() { _ = h.Remove() }, nil
 }
@@ -320,46 +335,40 @@ func (e *Emulator) HookSymbol(name string, fn func(h *Hook)) (func(), error) {
 }
 
 // HookRange installs a per-instruction hook over [start,end); fn gets the Hook
-// and the current PC. Like HookAddr but for a whole region (Unicorn only).
+// and the current PC. Like HookAddr but for a whole region (needs an engine
+// with per-instruction code hooks; see HookAddr).
 func (e *Emulator) HookRange(start, end uint64, fn func(h *Hook, addr uint64)) (func(), error) {
-	if e.engine != "unicorn" {
-		return nil, fmt.Errorf("HookRange requires the unicorn engine (current %q)", e.engine)
-	}
-	h, err := e.be.HookCode(start, end, func(b emu.Backend, a uint64, size uint32) {
+	h, err := e.be.HookCode(start, end, e.guardCode(func(b emu.Backend, a uint64, size uint32) {
 		fn(&Hook{e}, a)
-	})
+	}))
 	if err != nil {
-		return nil, err
+		return nil, e.capabilityErr("HookRange", err)
 	}
 	return func() { _ = h.Remove() }, nil
 }
 
 // HookMemRead fires on every valid memory READ in [start,end]; fn gets the Hook
-// (h.PC() = the reading instruction) and the read (addr,size). Unicorn only.
+// (h.PC() = the reading instruction) and the read (addr,size). Needs an engine
+// with memory-access hooks (errors wrap emu.ErrUnsupported otherwise).
 func (e *Emulator) HookMemRead(start, end uint64, fn func(h *Hook, addr uint64, size int)) (func(), error) {
-	if e.engine != "unicorn" {
-		return nil, fmt.Errorf("HookMemRead requires the unicorn engine (current %q)", e.engine)
-	}
-	h, err := e.be.HookMemRead(start, end, func(b emu.Backend, addr uint64, size int) {
+	h, err := e.be.HookMemRead(start, end, e.guardMemRead(func(b emu.Backend, addr uint64, size int) {
 		fn(&Hook{e}, addr, size)
-	})
+	}))
 	if err != nil {
-		return nil, err
+		return nil, e.capabilityErr("HookMemRead", err)
 	}
 	return func() { _ = h.Remove() }, nil
 }
 
 // HookMemWrite fires on every valid memory WRITE in [start,end]; fn gets the Hook
-// (h.PC() = the writing instruction), the (addr,size), and the value being written. Unicorn only.
+// (h.PC() = the writing instruction), the (addr,size), and the value being
+// written. Needs an engine with memory-access hooks (see HookMemRead).
 func (e *Emulator) HookMemWrite(start, end uint64, fn func(h *Hook, addr uint64, size int, value int64)) (func(), error) {
-	if e.engine != "unicorn" {
-		return nil, fmt.Errorf("HookMemWrite requires the unicorn engine (current %q)", e.engine)
-	}
-	h, err := e.be.HookMemWrite(start, end, func(b emu.Backend, addr uint64, size int, value int64) {
+	h, err := e.be.HookMemWrite(start, end, e.guardMemWrite(func(b emu.Backend, addr uint64, size int, value int64) {
 		fn(&Hook{e}, addr, size, value)
-	})
+	}))
 	if err != nil {
-		return nil, err
+		return nil, e.capabilityErr("HookMemWrite", err)
 	}
 	return func() { _ = h.Remove() }, nil
 }
@@ -368,11 +377,12 @@ func (e *Emulator) HookMemWrite(start, end uint64, fn func(h *Hook, addr uint64,
 
 // Trace prints every executed instruction's PC (with nearest symbol) in
 // [start,end). Returns a remover. Requires a backend with per-instruction
+// code hooks.
 
 func (e *Emulator) Trace(start, end uint64) (func(), error) {
-	h, err := e.be.HookCode(start, end, func(b emu.Backend, addr uint64, size uint32) {
+	h, err := e.be.HookCode(start, end, e.guardCode(func(b emu.Backend, addr uint64, size uint32) {
 		fmt.Printf("[trace] 0x%x  %s\n", addr, e.NearestSym(addr))
-	})
+	}))
 	if err != nil {
 		return nil, err
 	}

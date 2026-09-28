@@ -20,7 +20,8 @@ import (
 //
 //	b ADDR (breakpoint) · q (stop).
 //
-// Requires the Unicorn engine (it traces through a per-instruction code hook).
+// Requires an engine with per-instruction code hooks (unicorn); on one
+// without them NewDebugger returns an error wrapping emu.ErrUnsupported.
 type Debugger struct {
 	e      *Emulator
 	bps    map[uint64]bool
@@ -34,17 +35,14 @@ type Debugger struct {
 
 // NewDebugger attaches a debugger (installs the per-instruction hook).
 func (e *Emulator) NewDebugger() (*Debugger, error) {
-	if e.engine != "unicorn" {
-		return nil, fmt.Errorf("debugger requires the unicorn engine (current %q)", e.engine)
-	}
 	d := &Debugger{e: e, bps: map[uint64]bool{}, In: os.Stdin, Out: os.Stdout}
-	h, err := e.be.HookCode(1, 0, func(b emu.Backend, addr uint64, size uint32) { // begin>end => global
+	h, err := e.be.HookCode(1, 0, e.guardCode(func(b emu.Backend, addr uint64, size uint32) { // begin>end => global
 		if d.step || d.bps[addr] {
 			d.repl(addr)
 		}
-	})
+	}))
 	if err != nil {
-		return nil, err
+		return nil, e.capabilityErr("NewDebugger", err)
 	}
 	d.remove = func() { _ = h.Remove() }
 	return d, nil

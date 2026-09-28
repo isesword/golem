@@ -41,7 +41,7 @@ unidbg 是这个领域的事实标准,但它跑在 JVM 上,依赖偏重,且它�
 - 按符号名或按模块偏移调用 native 函数,最多 8 个整型参数,可读取返回值。
 - 用 Go 回调替换 native 函数(`ReplaceE` 事务化入口补丁,失败恢复原指令),或**内联 hook**(`HookAddr`,逐指令,Unicorn)改寄存器 / 重定向 PC;写内存的路径自动刷新代码缓存。
 - **控制台调试器**:断点 / 单步 / 寄存器 / 内存(Unicorn,I/O 可注入便于脚本化)。
-- 从 **classes.dex 加载真实类/方法/字段元数据**(`Config.DexPath` / `LoadDex`):FindClass/GetMethodID/GetFieldID 按真实签名、父类解析(仅元数据,不执行字节码)。
+- 从 **classes.dex 加载真实类/方法/字段元数据**(`Config.Android.DexPath` / `LoadDex`):FindClass/GetMethodID/GetFieldID 按真实签名、父类解析(仅元数据,不执行字节码)。
 - 内存助手:分配、读写字节、C 字符串、小端整数。
 - 单指令 trace;以及完整指令流 trace(`TraceInsns`:每条指令的偏移 + 指令码 + 寄存器增量 + 调用/系统调用注解,Tenet 风格,可与真机 trace 对比;Unicorn)。
 - 引擎可选:`-tags unicorn` 编入 purego 后端,运行期用 `-engine` / `$GOLEM_ENGINE` 选择。
@@ -114,7 +114,7 @@ err = e.ReplaceSymbol("add", func(h *emulator.Hook) uint64 { return h.Arg(0) + h
 
 ### 给 Java 侧建模(JNI)
 
-native 库会通过 JNI 回调 Java。实现 `dvm.Jni`(或 embed `dvm.AbstractJni`,只重写你的库会用到的那几个方法),再传进 `Config.JNI`:
+native 库会通过 JNI 回调 Java。实现 `dvm.Jni`(或 embed `dvm.AbstractJni`,只重写你的库会用到的那几个方法),再传进 `Config.Android.JNI`:
 
 ```go
 type MyJni struct{ dvm.AbstractJni }
@@ -126,7 +126,7 @@ func (MyJni) CallStaticObjectMethodV(vm *dvm.VM, cls *dvm.Class, sig string, va 
     return nil
 }
 
-e, _ := emulator.New(emulator.Config{SOPath: "libfoo.so", JNI: MyJni{}})
+e, _ := emulator.New(emulator.Config{SOPath: "libfoo.so", Android: emulator.AndroidConfig{JNI: MyJni{}}})
 ```
 
 这就是 unidbg 里 `AbstractJni` 的用法:guest 的 `RegisterNatives`/`GetMethodID`/`Call*Method` 会按 `"类->方法(签名)"` 这样的字符串路由到你的 switch。
