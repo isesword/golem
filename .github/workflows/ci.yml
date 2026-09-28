@@ -82,6 +82,8 @@ jobs:
         run: go test -tags unicorn ./...
       - name: Race detector (dvm + emulator, the concurrency-critical packages)
         run: go test -race ./dvm/ ./emulator/ ./internal/memory/
+        env:
+          CGO_ENABLED: "1" # -race requires cgo; step-level overrides the job's "0"
 
   # ------------------------------------------------------------------
   # End-to-end on Linux: boot a real engine, load real bionic + a real

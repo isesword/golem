@@ -2,8 +2,6 @@ package emulator
 
 import (
 	"errors"
-	"os"
-	"syscall"
 	"testing"
 	"unsafe"
 
@@ -112,7 +110,7 @@ func (f *faultBE) FlushCache() error { f.flushes++; return f.flushErr }
 
 func testPlan(t *testing.T, content []byte) *loader.Plan {
 	t.Helper()
-	buf, err := syscall.Mmap(-1, 0, len(content), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_ANON|syscall.MAP_PRIVATE)
+	buf, err := allocTestSharedBuffer(len(content))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,6 +295,3 @@ func TestReplaceSuccess(t *testing.T) {
 		t.Fatalf("patch bytes not in place: % x", got)
 	}
 }
-
-// os referenced to keep the import set stable if tests evolve
-var _ = os.Getpagesize
