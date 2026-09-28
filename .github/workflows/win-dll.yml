@@ -34,7 +34,7 @@ jobs:
           - { os: windows-2022,      arch: arm64, cmake_arch: ARM64 }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Cache unicorn source
         id: cache
@@ -50,8 +50,13 @@ jobs:
 
       - name: Configure (VEH compiled out)
         run: |
+          # VS generator cross builds: CMAKE_SYSTEM_PROCESSOR reports the BUILD
+          # machine (AMD64), which makes unicorn's arch detection pick the x64
+          # MASM path on the arm64 job. Setting the processor at configure time
+          # targets the generator at the right arch and fixes the detection.
           cmake -S unicorn-src -B build `
             -A ${{ matrix.cmake_arch }} `
+            -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.cmake_arch }} `
             -DWIN32_ENABLE_VEH=OFF `
             -DUNICORN_ARCH="arm64;aarch64" `
             -DCMAKE_BUILD_TYPE=Release
@@ -134,8 +139,8 @@ jobs:
     env:
       CGO_ENABLED: "0"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -184,7 +189,7 @@ jobs:
     needs: [build-unicorn-dll, engine-windows]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.ref_name }} # commit back to the triggering branch
 
