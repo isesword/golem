@@ -66,9 +66,10 @@
          256 MiB+ 反降 30-40%），POSIX 下引擎不管（惰性提交）；用户经
          `emulator.Config.TCGBufferMiB` 在构造期覆盖（boot 前应用，
          非 unicorn 引擎显式报错而非静默忽略）；实测工具 `cmd/tcgsizing`；
-   - [ ] windows/arm64 DLL 实弹验证：win-dll workflow 已构建 arm64 DLL
-         （fork = dev + PR #2286），但引擎测试仅在 amd64 runner 上跑——
-         待 windows-11-arm runner 上加 smoke job 闭环。
+   - [ ] windows/arm64 实弹验证：win-dll workflow 的 engine-windows-arm64
+         job（windows-11-arm runner）已加入并 gate auto-commit——arm64 DLL
+         的卖点是 PR #2286 的运行时正确性（musl setjmp/longjmp），交叉编译
+         通过证明不了；待该 job 首次跑绿后勾掉。
 
    上层永不出现 `GOOS == "windows"` 分支判断引擎能力——**已定**：
    能力差异只能表现为 Backend 接口的方法或注册与否。

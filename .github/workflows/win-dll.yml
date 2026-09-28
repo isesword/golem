@@ -206,11 +206,51 @@ jobs:
           if-no-files-found: error
 
   # ------------------------------------------------------------------
+  # engine-windows-arm64 (windows-11-arm runner): the arm64 DLL is only
+  # cross-COMPILED on amd64 — its whole point is PR #2286's runtime
+  # correctness (musl setjmp/longjmp instead of the CRT's always-unwind
+  # longjmp), which a compile check cannot prove. Run the engine suite +
+  # CLI smoke natively on WoA. This gates auto-commit: an arm64 DLL that
+  # never ran is not worth committing.
+  # ------------------------------------------------------------------
+  engine-windows-arm64:
+    needs: build-unicorn-dll
+    runs-on: windows-11-arm
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download the VEH-off arm64 unicorn.dll
+        uses: actions/download-artifact@v4
+        with:
+          name: unicorn-dll-veh-off-arm64
+          path: unicorn-dll # unicorn-dll/unicorn.dll + PROVENANCE
+
+      - name: Expose the absolute DLL path to the tests
+        run: |
+          $dll = (Get-ChildItem -Recurse -Filter unicorn.dll | Select-Object -First 1).FullName
+          echo "GOLEM_UNICORN=$dll" >> $env:GITHUB_ENV
+          echo "DLL: $dll"
+
+      - name: Engine tests on Windows ARM64 (fakebe contract + full suite)
+        run: go test -tags unicorn ./... -v
+
+      - name: Engine smoke — CLI on a real .so
+        run: |
+          go build -tags unicorn -o golem-cli.exe ./cmd/golem
+          .\golem-cli.exe examples\native\native.so add 2 3
+          .\golem-cli.exe examples\native\native.so fib 20
+
+  # ------------------------------------------------------------------
   # auto-commit: drop both DLLs + provenance into assets/windows/<arch>/
   # so consumers clone and run. [skip ci] prevents a trigger loop.
   # ------------------------------------------------------------------
   auto-commit:
-    needs: [build-unicorn-dll, engine-windows]
+    needs: [build-unicorn-dll, engine-windows, engine-windows-arm64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
