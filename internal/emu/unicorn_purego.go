@@ -240,10 +240,10 @@ func dlopenUnicorn() (uintptr, error) {
 	switch runtime.GOOS {
 	case "windows":
 		// MUST be the VEH-off build (see header comment); candidates start
-		// with the bundled assets copy, then the loader search path.
+		// with the bundled per-arch assets copy, then the loader search path.
 		candidates = append(candidates,
 			"unicorn.dll",
-			filepath.Join("assets", "windows", "amd64", "unicorn.dll"),
+			filepath.Join("assets", "windows", runtime.GOARCH, "unicorn.dll"),
 		)
 	case "darwin":
 		candidates = append(candidates,
