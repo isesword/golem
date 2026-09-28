@@ -56,7 +56,7 @@ jobs:
           # file from the build is the documented workaround.
           $cm = "unicorn-src/CMakeLists.txt"
           (Get-Content $cm) | Where-Object { $_ -notmatch "setjmp-wrapper-win32" } | Set-Content $cm
-          echo "patched CMakeLists (removed setjmp-wrapper-win32.asm)
+          echo "patched CMakeLists (removed setjmp-wrapper-win32.asm)"
 
       - name: Configure (VEH compiled out)
         run: |
