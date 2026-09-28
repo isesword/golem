@@ -101,11 +101,23 @@ jobs:
       - name: Locate + stage
         id: locate
         run: |
-          $dll = Get-ChildItem -Recurse -Filter unicorn.dll | Select-Object -First 1
-          New-Item -ItemType Directory -Force -Path "stage/${{ matrix.arch }}" | Out-Null
-          Copy-Item $dll.FullName "stage/${{ matrix.arch }}/unicorn.dll"
+          # Stage FLAT: upload-artifact preserves the directory structure
+          # below the common ancestor of the uploaded paths, so staging at
+          # stage/<arch>/ would make the artifact contain
+          # stage/<arch>/unicorn.dll and every consumer would have to know
+          # the nesting. Each matrix leg has its own workspace, so a flat
+          # stage/ is unambiguous and downloads land at unicorn-dll/unicorn.dll.
+          # Locate the DLL in the BUILD TREE only — the checkout contains
+          # committed assets/windows/*/unicorn.dll copies and a repo-wide
+          # recursive search could pick one of those (stale AND possibly
+          # the wrong arch) instead of the artifact this job just built.
+          $dll = Get-ChildItem -Recurse -Filter unicorn.dll -Path build |
+                 Select-Object -First 1
+          if (-not $dll) { throw "no unicorn.dll found under build/" }
+          New-Item -ItemType Directory -Force -Path "stage" | Out-Null
+          Copy-Item $dll.FullName "stage/unicorn.dll"
           Copy-Item "PROVENANCE-${{ matrix.arch }}.txt" "stage/"
-          echo "dll=stage/${{ matrix.arch }}/unicorn.dll" >> $env:GITHUB_OUTPUT
+          echo "dll=stage/unicorn.dll" >> $env:GITHUB_OUTPUT
 
       - name: Smoke — the DLL must export uc_open and uc_ctl
         run: |
@@ -148,9 +160,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: unicorn-dll-veh-off-${{ matrix.arch }}
+          # Both files sit in stage/, so the artifact is flat:
+          # unicorn-dll/unicorn.dll + unicorn-dll/PROVENANCE-<arch>.txt.
           path: |
-            ${{ steps.locate.outputs.dll }}
-            PROVENANCE-${{ matrix.arch }}.txt
+            stage/unicorn.dll
+            stage/PROVENANCE-${{ matrix.arch }}.txt
           if-no-files-found: error
 
   # ------------------------------------------------------------------
