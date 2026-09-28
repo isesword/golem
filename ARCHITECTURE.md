@@ -52,16 +52,19 @@
    - 佐证：unidbg 在 Windows 量产分发 unicorn.dll 无 VEH 问题——坑在 Go
      侧的 VEH 优先级，unicorn.dll 本身可工作。
 
-   **实施清单：**
-   - [ ] CI（windows runner）从 unicorn dev 分支以 `-DWIN32_ENABLE_VEH=OFF`
-         构建版本锁定的 unicorn.dll，随项目分发；
-   - [ ] `unicorn_purego.go` build tag 放宽到 windows；`dlopenUnicorn`
-         候选加 `unicorn.dll`；保守起见 `uc_open` 后补一次
-         `UC_CTL_UC_PREALLOC=1`（绑定层已绑 uc_ctl，需修正其签名为变参）；
+   **实施状态（2026-09-28）：**
+   - [x] CI（win-dll workflow）从 unicorn 锁定 commit（938efd1）以
+         `-DWIN32_ENABLE_VEH=OFF` 构建 unicorn.dll，artifact+provenance 分发；
+   - [x] `unicorn_purego.go` build tag 放宽到 windows；`dlopenUnicorn`
+         候选加 `unicorn.dll`；`uc_open` 后补 `UC_CTL_UC_PREALLOC=1`
+         （值 19，经 dev 头文件核实；UC_ERR_ARG 容忍）；
+   - [x] **Windows runner 上全套 fakebe/engine 测试 + CLI 实弹验收通过**
+         （dvm 引用生命周期 15 测、privatize 三态、Pool 七态、ELF/syscall/
+         hook 集成——VEH 消除实证完成）；
    - [ ] TCG buffer 经 `UC_CTL_TCG_BUFFER_SIZE` 按实测调小（默认 1 GiB
-         立即提交，多实例池必须实测指令缓存用量后定值）；
-   - [ ] Windows runner 上跑 fakebe/engine 全套测试 + 最小复现
-         （uc_open→map→hook→start 全链路）验收。
+         立即提交，多实例池须实测指令缓存用量后定值——当前单机全绿，
+         池化压测定值后勾掉）；
+   - [ ] windows/arm64 构建矩阵行（DLL 需 arm64 版，当前仅 amd64）。
 
    上层永不出现 `GOOS == "windows"` 分支判断引擎能力——**已定**：
    能力差异只能表现为 Backend 接口的方法或注册与否。
@@ -89,7 +92,7 @@
 |---|---|---|---|
 | linux amd64/arm64 | ✅ CI | ✅ CI 实弹 | unicorn_purego |
 | darwin amd64/arm64 | ✅ CI | ✅ 本机验证（e2e 1000） | unicorn_purego |
-| windows amd64/arm64 | ✅ CI | **未验证**（先做最小复现，再选预提交或 C 线程） | 待验证决策，见上 |
+| windows amd64 | ✅ CI | ✅ **CI 实弹全套绿**（VEH-off DLL + PREALLOC，win-dll workflow） | unicorn_purego + 版本锁定 unicorn.dll（unicorn@938efd1，WIN32_ENABLE_VEH=OFF） |
 | （全部平台兜底） | — | WSL2 / 进程外签名服务 | 部署形态，上层零改动 |
 
 ## 改动判据

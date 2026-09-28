@@ -1,12 +1,15 @@
-//go:build unicorn && (darwin || linux)
+//go:build unicorn
 
 // Pure-Go Unicorn2 backend: emu.Backend over the STOCK libunicorn, loaded at
 // runtime through purego (dlopen + assembly trampolines). No cgo, no C
 // compiler, no shim library — the only runtime dependency is libunicorn itself,
 // findable through $GOLEM_UNICORN or the platform loader's search path:
 //
-//	macOS: libunicorn.2.dylib / libunicorn.dylib
-//	Linux: libunicorn.so.2    / libunicorn.so
+//	macOS:   libunicorn.2.dylib / libunicorn.dylib
+//	Linux:   libunicorn.so.2    / libunicorn.so
+//	Windows: unicorn.dll — MUST be built from unicorn dev with
+//	         -DWIN32_ENABLE_VEH=OFF (PR #2364); stock releases rely on a
+//	         process-global VEH that fights the Go runtime (ARCHITECTURE.md).
 //
 // Build (note CGO_ENABLED=0 — this file never imports "C"):
 //
@@ -17,9 +20,10 @@
 // and is resolved through a registry, so the 2000-callback process budget is
 // never touched. Engine calls run directly on the calling (Go) thread — safe
 // on POSIX because unicorn services guest-memory faults in software (softmmu,
-// no signal/VEH dependency). Windows is excluded: unicorn's VEH lazy
-// page-commit fights the Go runtime's exception handler there (see the cgo
-// fork's uc_shim engine-thread pump for why).
+// no signal/VEH dependency). On Windows, newUnicornBackend sets
+// UC_CTL_UC_PREALLOC=1 so unicorn commits its TCG buffer upfront and never
+// installs a process-global VEH (PR #2364; the DLL must be the VEH-off
+// build — see ARCHITECTURE.md).
 //
 // C signatures pinned against unicorn2 headers (uc_hook = size_t, ints are
 // C int = int32); variadic uc_hook_add / uc_ctl are called through fixed-arity
@@ -30,6 +34,7 @@ package emu
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -65,6 +70,16 @@ const (
 	// UC_CTL_WRITE(UC_CTL_TB_FLUSH, 0): UC_CTL packs type | (nr<<26) | (rw<<30),
 	// UC_CTL_TB_FLUSH = 10, UC_CTL_IO_WRITE = 1, no extra args.
 	ctlTBFlush = uint32(10) | 0<<26 | 1<<30
+
+	// UC_ERR_ARG in unicorn2's uc_err enum — returned by UC_CTL_UC_PREALLOC
+	// on POSIX builds where it does not apply.
+	ucErrArg = 4
+
+	// UC_CTL_UC_PREALLOC: value 19 in unicorn dev's uc_control_type
+	// (PR #2364 appends it after UC_CTL_INVALID_ADDR=18; verified against
+	// include/unicorn/unicorn.h on the dev branch). The installed release
+	// headers predate it — do NOT "fix" this from a local unicorn.h.
+	ucCtlUcPrealloc = 19
 )
 
 // UC_ARM64_REG_* values. X0..X28 are contiguous; X29/X30 are early aliases
@@ -185,7 +200,7 @@ func loadUnicorn() error {
 	}
 	var missing []string
 	for name, dst := range required {
-		sym, err := purego.Dlsym(handle, name)
+		sym, err := findSymbol(handle, name)
 		if err != nil {
 			missing = append(missing, name)
 			continue
@@ -199,7 +214,7 @@ func loadUnicorn() error {
 
 	// Optional symbols — absent on very old unicorn builds; degrade to no-ops.
 	tryRegister := func(name string, dst any) {
-		if sym, err := purego.Dlsym(handle, name); err == nil {
+		if sym, err := findSymbol(handle, name); err == nil {
 			purego.RegisterFunc(dst, sym)
 		}
 	}
@@ -222,10 +237,14 @@ func dlopenUnicorn() (uintptr, error) {
 	if p := strings.TrimSpace(os.Getenv("GOLEM_UNICORN")); p != "" {
 		candidates = append(candidates, p)
 	}
-	if p := strings.TrimSpace(os.Getenv("GOLEM_UNICORN")); p != "" { // legacy alias
-		candidates = append(candidates, p)
-	}
 	switch runtime.GOOS {
+	case "windows":
+		// MUST be the VEH-off build (see header comment); candidates start
+		// with the bundled assets copy, then the loader search path.
+		candidates = append(candidates,
+			"unicorn.dll",
+			filepath.Join("assets", "windows", "amd64", "unicorn.dll"),
+		)
 	case "darwin":
 		candidates = append(candidates,
 			"libunicorn.2.dylib", "libunicorn.dylib", // loader search path
@@ -244,7 +263,7 @@ func dlopenUnicorn() (uintptr, error) {
 	}
 	var lastErr error
 	for _, c := range candidates {
-		h, err := purego.Dlopen(c, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+		h, err := loadLibrary(c)
 		if err == nil {
 			return h, nil
 		}
@@ -354,9 +373,20 @@ func newUnicornBackend() (Backend, error) {
 	if e := pOpen(ucArchARM64, ucModeARM, unsafe.Pointer(&uc)); e != ucOK {
 		return nil, ucErr("uc_open", e)
 	}
-	// Guest map alignment follows unicorn's GUEST page size (4 KiB on aarch64 —
-	// the QEMU target page), NOT the host page size (16 KiB on darwin/arm64).
-	return &unicornBackend{uc: uc, pageSize: 4096}, nil
+	b := &unicornBackend{uc: uc, pageSize: 4096}
+	// Windows belt-and-braces: commit the whole TCG buffer upfront so unicorn
+	// never installs its process-global VEH (PR #2364, UC_CTL_UC_PREALLOC;
+	// must run before the first uc_emu_start). Ignored on POSIX (UC_ERR_ARG)
+	// and on VEH-less Windows builds, where preallocation is mandatory.
+	if runtime.GOOS == "windows" && pCtl != nil {
+		var preallocCtl uint32 = ucCtlUcPrealloc | 1<<26 | 1<<30 // UC_CTL_WRITE(UC_CTL_UC_PREALLOC, 1)
+		var on int32 = 1
+		if e := pCtl(uc, preallocCtl, unsafe.Pointer(&on)); e != ucOK && e != ucErrArg {
+			pClose(uc)
+			return nil, ucErr("uc_ctl prealloc", e)
+		}
+	}
+	return b, nil
 }
 
 func ucErr(op string, e int32) error {

@@ -1,0 +1,156 @@
+name: win-dll
+
+# Windows engine path end to end:
+#   1. build a version-locked unicorn.dll from the unicorn dev branch with
+#      -DWIN32_ENABLE_VEH=OFF (PR #2364: VEH compiled out, preallocation
+#      mandatory) and upload it as an artifact;
+#   2. THE REAL PRIZE — run golem's full engine test suite on a Windows
+#      runner against that DLL: uc_open → UC_CTL_UC_PREALLOC → map → hooks
+#      (incl. callbacks re-entering the backend) → emu_start, the whole
+#      fakebe-contract and engine integration surface. This is the final
+#      proof that the VEH/Go-runtime conflict is resolved (ARCHITECTURE.md).
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev-win]
+
+env:
+  # Version lock: unicorn dev commit verified green (VEH-off DLL, golem suite
+  # passed on Windows). Bump deliberately, re-running the full suite.
+  UNICORN_REF: 938efd13aeab73155f31cf707a2094c6ccaa36dd
+
+jobs:
+  build-unicorn-dll:
+    runs-on: windows-2022
+    steps:
+      - name: Cache unicorn source
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: unicorn-src
+          key: unicorn-src-${{ env.UNICORN_REF }}
+
+      - name: Checkout unicorn at locked commit
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/unicorn-engine/unicorn.git unicorn-src
+          git -C unicorn-src checkout ${{ env.UNICORN_REF }}
+
+      - name: Configure (VEH compiled out)
+        run: |
+          cmake -S unicorn-src -B build `
+            -A x64 `
+            -DWIN32_ENABLE_VEH=OFF `
+            -DUNICORN_ARCH="arm64;aarch64" `
+            -DCMAKE_BUILD_TYPE=Release
+      - name: Build unicorn.dll
+        run: cmake --build build --config Release --parallel
+
+      - name: Locate artifacts
+        id: locate
+        run: |
+          $dll = Get-ChildItem -Recurse -Filter unicorn.dll | Select-Object -First 1
+          echo "dll=$($dll.FullName)" >> $env:GITHUB_OUTPUT
+      - name: Build provenance
+        run: |
+          $prov = @(
+            "unicorn commit : ${{ env.UNICORN_REF }}",
+            "cmake          : -A x64 -DWIN32_ENABLE_VEH=OFF -DUNICORN_ARCH=arm64;aarch64 -DCMAKE_BUILD_TYPE=Release",
+            "built           : $(Get-Date -AsUTC -Format 'yyyy-MM-ddTHH:mm:ssZ')",
+            "golem suite     : see engine-windows job of the same run"
+          )
+          $prov | Out-File -Encoding ascii PROVENANCE.txt
+          cat PROVENANCE.txt
+      - name: Upload unicorn.dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: unicorn-dll-veh-off
+          path: |
+            ${{ steps.locate.outputs.dll }}
+            PROVENANCE.txt
+          if-no-files-found: error
+
+      - name: Smoke — the DLL must export uc_open and uc_ctl
+        run: |
+          $dll = "${{ steps.locate.outputs.dll }}"
+          # Parse the PE export table with .NET — no dumpbin (MSVC optional
+          # component, not on the runner PATH) needed.
+          $bytes = [IO.File]::ReadAllBytes($dll)
+          $peOff = [BitConverter]::ToInt32($bytes, 0x3C)
+          $optOff = $peOff + 24
+          $magic = [BitConverter]::ToUInt16($bytes, $optOff)
+          if ($magic -eq 0x20B) { $dataDirOff = $optOff + 112 } else { $dataDirOff = $optOff + 96 }
+          $expRva = [BitConverter]::ToUInt32($bytes, $dataDirOff)
+          if ($expRva -eq 0) { throw "DLL has no export table" }
+          # RVA->file offset via the first section header
+          $numSec = [BitConverter]::ToUInt16($bytes, $peOff + 6)
+          $secOff = $optOff + [BitConverter]::ToUInt16($bytes, $peOff + 20)
+          function RvaToOff($rva) {
+            for ($i = 0; $i -lt $numSec; $i++) {
+              $s = $secOff + $i * 40
+              $va = [BitConverter]::ToUInt32($bytes, $s + 12)
+              $sz = [BitConverter]::ToUInt32($bytes, $s + 8)
+              $raw = [BitConverter]::ToUInt32($bytes, $s + 20)
+              if ($rva -ge $va -and $rva -lt $va + $sz) { return $raw + ($rva - $va) }
+            }
+            throw "RVA $rva not in any section"
+          }
+          $namesRva = [BitConverter]::ToUInt32($bytes, (RvaToOff $expRva) + 32)
+          $namesCnt = [BitConverter]::ToUInt32($bytes, (RvaToOff $expRva) + 24)
+          $names = @()
+          for ($i = 0; $i -lt $namesCnt; $i++) {
+            $p = RvaToOff ([BitConverter]::ToUInt32($bytes, (RvaToOff $namesRva) + $i * 4))
+            $end = $p; while ($bytes[$end] -ne 0) { $end++ }
+            $names += [Text.Encoding]::ASCII.GetString($bytes, $p, $end - $p)
+          }
+          $need = @("uc_open", "uc_ctl")
+          foreach ($n in $need) {
+            if ($names -notcontains $n) { throw "export $n missing (have $($names -join ', '))" }
+          }
+          echo "exports OK: $($names -join ', ')"
+          $names | Out-File -Encoding ascii export-list.txt
+      - name: Upload export list
+        uses: actions/upload-artifact@v4
+        with:
+          name: export-list
+          path: export-list.txt
+
+  # ------------------------------------------------------------------
+  # engine-windows: run golem's engine suite for real on Windows against
+  # the VEH-off DLL. Each job runs on a FRESH runner — the DLL must be
+  # passed via artifacts, and tests locate it through GOLEM_UNICORN
+  # (absolute path; relative candidates would resolve against each test
+  # package's working directory).
+  # ------------------------------------------------------------------
+  engine-windows:
+    needs: build-unicorn-dll
+    runs-on: windows-2022
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download the VEH-off unicorn.dll
+        uses: actions/download-artifact@v4
+        with:
+          name: unicorn-dll-veh-off
+          path: unicorn-dll # lands as unicorn-dll/unicorn.dll
+
+      - name: Expose the absolute DLL path to the tests
+        run: |
+          $dll = (Get-ChildItem -Recurse -Filter unicorn.dll | Select-Object -First 1).FullName
+          echo "GOLEM_UNICORN=$dll" >> $env:GITHUB_ENV
+          echo "DLL: $dll"
+
+      - name: Engine tests on Windows (fakebe contract + full suite)
+        run: go test -tags unicorn ./... -v
+
+      - name: Engine smoke — CLI on a real .so
+        run: |
+          go build -tags unicorn -o golem-cli.exe ./cmd/golem
+          .\golem-cli.exe examples\native\native.so add 2 3
+          .\golem-cli.exe examples\native\native.so fib 20
