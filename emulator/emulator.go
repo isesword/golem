@@ -193,6 +193,11 @@ func (e *Emulator) GuestExited() (bool, int) { return e.kctx.Exited, e.kctx.Exit
 // as resolved from Config.Engine / $GOLEM_ENGINE / the default.
 func (e *Emulator) Engine() string { return e.engine }
 
+// Backend exposes the CPU engine (for engine-level capabilities such as
+// emu.SetTCGBufferSize). Prefer the Emulator's own APIs when they cover the
+// need; this is the escape hatch for backend-specific configuration.
+func (e *Emulator) Backend() emu.Backend { return e.be }
+
 // MemStats reports guest address-space bookkeeping: the region count and the
 // mmap high-water cursor. Diagnostic aid for long-lived emulators — a region
 // count that grows on every call indicates the guest (or the call path) is
