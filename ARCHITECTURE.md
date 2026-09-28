@@ -66,10 +66,10 @@
          256 MiB+ 反降 30-40%），POSIX 下引擎不管（惰性提交）；用户经
          `emulator.Config.TCGBufferMiB` 在构造期覆盖（boot 前应用，
          非 unicorn 引擎显式报错而非静默忽略）；实测工具 `cmd/tcgsizing`；
-   - [ ] windows/arm64 实弹验证：win-dll workflow 的 engine-windows-arm64
-         job（windows-11-arm runner）已加入并 gate auto-commit——arm64 DLL
-         的卖点是 PR #2286 的运行时正确性（musl setjmp/longjmp），交叉编译
-         通过证明不了；待该 job 首次跑绿后勾掉。
+   - [x] windows/arm64 实弹验证：win-dll workflow 的 engine-windows-arm64
+         job（windows-11-arm runner）全套引擎测试 + CLI 实弹全绿——
+         PR #2286 的运行时正确性（musl setjmp/longjmp）实证完成，且
+         该 job gate auto-commit，未实跑的 arm64 DLL 不会进 assets/。
 
    上层永不出现 `GOOS == "windows"` 分支判断引擎能力——**已定**：
    能力差异只能表现为 Backend 接口的方法或注册与否。
@@ -105,6 +105,7 @@
 | linux amd64/arm64 | ✅ CI | ✅ CI 实弹 | unicorn_purego |
 | darwin amd64/arm64 | ✅ CI | ✅ 本机验证（e2e 1000） | unicorn_purego |
 | windows amd64 | ✅ CI | ✅ **CI 实弹全套绿**（VEH-off DLL + PREALLOC，win-dll workflow） | unicorn_purego + 版本锁定 unicorn.dll（unicorn@938efd1，WIN32_ENABLE_VEH=OFF） |
+| windows arm64 | ✅ CI（交叉编译） | ✅ **CI 实弹全套绿**（windows-11-arm runner，engine-windows-arm64 job） | 同上 + PR #2286（musl setjmp/longjmp） |
 | （全部平台兜底） | — | WSL2 / 进程外签名服务 | 部署形态，上层零改动 |
 
 ## 改动判据
