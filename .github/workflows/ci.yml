@@ -12,6 +12,9 @@ name: CI
 #     runtime's exception handler — documented in BUILD.md). macOS compiles and
 #     runs the pure-Go layer; a local `brew install unicorn` enables the engine.
 #
+# NOTE on env syntax: `VAR=value cmd` inline env is bash-only and breaks on the
+# Windows runners' PowerShell — CGO_ENABLED is always set via `env:` blocks.
+#
 # The real-network e2e suite is NOT run here: it needs fresh session
 # credentials and hits a production gateway. Everything else is covered.
 
@@ -34,17 +37,19 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-      - name: Build (CGO_ENABLED=0)
-        run: CGO_ENABLED=0 go build ./...
+      - name: Build
+        run: go build ./...
       - name: Vet
-        run: CGO_ENABLED=0 go vet ./...
+        run: go vet ./...
       - name: "Test (pure-Go layer: linker vs bundled bionic, allocator, dvm)"
-        run: CGO_ENABLED=0 go test ./...
+        run: go test ./...
 
   # ------------------------------------------------------------------
   # Linux engine matrix — the full verification platform.
@@ -60,6 +65,8 @@ jobs:
           - os: ubuntu-24.04-arm
             arch: arm64
     runs-on: ${{ matrix.os }}
+    env:
+      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -67,12 +74,12 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
       - name: Install libunicorn 2.x (runtime-loaded via purego, no cgo)
         run: sudo apt-get update && sudo apt-get install -y libunicorn-dev
-      - name: Engine build (CGO_ENABLED=0 — the whole point)
-        run: CGO_ENABLED=0 go build -tags unicorn ./...
+      - name: "Engine build (CGO_ENABLED=0 — the whole point)"
+        run: go build -tags unicorn ./...
       - name: Engine vet
-        run: CGO_ENABLED=0 go vet -tags unicorn ./...
+        run: go vet -tags unicorn ./...
       - name: Engine tests
-        run: CGO_ENABLED=0 go test -tags unicorn ./...
+        run: go test -tags unicorn ./...
       - name: Race detector (dvm + emulator, the concurrency-critical packages)
         run: go test -race ./dvm/ ./emulator/ ./internal/memory/
 
@@ -84,6 +91,8 @@ jobs:
   # ------------------------------------------------------------------
   e2e-linux:
     runs-on: ubuntu-24.04
+    env:
+      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -91,13 +100,13 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
       - name: Install libunicorn 2.x
         run: sudo apt-get update && sudo apt-get install -y libunicorn-dev
-      - name: CLI smoke — load native.so, call add(2,3) and fib(20) on the engine
+      - name: "CLI smoke — load native.so, call add(2,3) and fib(20) on the engine"
         run: |
-          CGO_ENABLED=0 go build -tags unicorn -o /tmp/golem-cli ./cmd/golem
+          go build -tags unicorn -o /tmp/golem-cli ./cmd/golem
           /tmp/golem-cli examples/native/native.so add 2 3
           /tmp/golem-cli examples/native/native.so fib 20
       - name: E2E — engine integration suite
-        run: CGO_ENABLED=0 go test -tags unicorn ./emulator/ -v
+        run: go test -tags unicorn ./emulator/ -v
 
   # ------------------------------------------------------------------
   # Compile matrix: prove the framework consumes cleanly as a library
@@ -122,7 +131,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-      - name: Cross-compile ${{ matrix.goos }}/${{ matrix.goarch }} (-tags unicorn)
+      - name: "Cross-compile ${{ matrix.goos }}/${{ matrix.goarch }} (-tags unicorn)"
         run: go build -tags unicorn ./...
         env:
           CGO_ENABLED: "0"
