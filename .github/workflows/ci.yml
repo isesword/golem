@@ -44,6 +44,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache: false # deps are tiny (purego + x/sys); cache-restore tar warnings outweigh the gain
       - name: Build
         run: go build ./...
       - name: Vet
@@ -72,6 +73,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache: false # deps are tiny (purego + x/sys); cache-restore tar warnings outweigh the gain
       - name: Install libunicorn 2.x (runtime-loaded via purego, no cgo)
         run: sudo apt-get update && sudo apt-get install -y libunicorn-dev
       - name: "Engine build (CGO_ENABLED=0 — the whole point)"
@@ -100,6 +102,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache: false # deps are tiny (purego + x/sys); cache-restore tar warnings outweigh the gain
       - name: Install libunicorn 2.x
         run: sudo apt-get update && sudo apt-get install -y libunicorn-dev
       - name: "CLI smoke — load native.so, call add(2,3) and fib(20) on the engine"
@@ -133,6 +136,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache: false # deps are tiny (purego + x/sys); cache-restore tar warnings outweigh the gain
       - name: "Cross-compile ${{ matrix.goos }}/${{ matrix.goarch }} (-tags unicorn)"
         run: go build -tags unicorn ./...
         env:
