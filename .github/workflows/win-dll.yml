@@ -47,7 +47,7 @@ jobs:
           git clone https://github.com/unicorn-engine/unicorn.git unicorn-src
           git -C unicorn-src checkout ${{ env.UNICORN_REF }}
 
-      - name: Apply WoA support patch (PR #2286) for ARM64
+      - name: Apply WoA support patch (PR #2286) + arch detection fix for ARM64
         if: matrix.arch == 'arm64'
         run: |
           # ARM64 Windows needs more than an asm swap: the CRT longjmp always
@@ -55,15 +55,21 @@ jobs:
           # runtime, invisible at compile time), so setjmp AND longjmp must
           # be replaced wholesale (musl aarch64 port). PR #2286 carries the
           # full support: armasm64 custom command (no CMake 3.26 dependency),
-          # musl setjmp/longjmp, MSVC aarch64 fixes. Upstream-reviewed, not
-          # yet merged (#2193 stays open until then).
+          # musl setjmp/longjmp, MSVC aarch64 fixes.
           cd unicorn-src
           # the .diff URL intermittently 503s (patch-diff CDN); the .patch
           # form (mbox) is served from github.com directly and git-am's it.
           curl -sfL --retry 3 https://github.com/unicorn-engine/unicorn/pull/2286.patch -o woarm64.patch
           git apply --check woarm64.patch || { echo "patch does not apply to ${{ env.UNICORN_REF }} — likely needs rebase"; exit 1; }
           git apply woarm64.patch
-          echo "PR #2286 applied"
+          # PR #2286's arch detection keys off CMAKE_SYSTEM_PROCESSOR, which
+          # under a VS cross build (-A ARM64 on an amd64 runner) reports the
+          # BUILD machine (AMD64) — unicorn then picks the x64 MASM path and
+          # dies in masm.targets. Force the target arch for cross builds.
+          (Get-Content CMakeLists.txt) |
+            ForEach-Object { $_ -replace 'if\(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64\|aarch64"\)', 'if(TRUE)' } |
+            Set-Content CMakeLists.txt
+          echo "PR #2286 applied + target arch forced to aarch64 for cross build"
 
       - name: Configure (VEH compiled out)
         run: |
