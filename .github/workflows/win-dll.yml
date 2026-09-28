@@ -1,14 +1,16 @@
 name: win-dll
 
 # Windows engine path end to end:
-#   1. build a version-locked unicorn.dll from the unicorn dev branch with
+#   1. build version-locked unicorn DLLs from the unicorn dev branch with
 #      -DWIN32_ENABLE_VEH=OFF (PR #2364: VEH compiled out, preallocation
-#      mandatory) and upload it as an artifact;
-#   2. THE REAL PRIZE — run golem's full engine test suite on a Windows
-#      runner against that DLL: uc_open → UC_CTL_UC_PREALLOC → map → hooks
-#      (incl. callbacks re-entering the backend) → emu_start, the whole
-#      fakebe-contract and engine integration surface. This is the final
-#      proof that the VEH/Go-runtime conflict is resolved (ARCHITECTURE.md).
+#      mandatory) for amd64 AND arm64;
+#   2. auto-commit them into assets/windows/<arch>/ so consumers clone and
+#      run (commit message carries [skip ci] to prevent a trigger loop);
+#   3. THE REAL PRIZE — run golem's full engine test suite on Windows
+#      runners against those DLLs: uc_open → UC_CTL_UC_PREALLOC → map →
+#      hooks (incl. callbacks re-entering the backend) → emu_start. This
+#      is the standing proof that the VEH/Go-runtime conflict is resolved
+#      (ARCHITECTURE.md).
 
 on:
   workflow_dispatch:
@@ -16,14 +18,22 @@ on:
     branches: [dev-win]
 
 env:
-  # Version lock: unicorn dev commit verified green (VEH-off DLL, golem suite
-  # passed on Windows). Bump deliberately, re-running the full suite.
+  # Version lock: unicorn dev commit verified green (VEH-off DLL, golem
+  # suite passed on Windows). Bump deliberately, re-running the full suite.
   UNICORN_REF: 938efd13aeab73155f31cf707a2094c6ccaa36dd
 
 jobs:
   build-unicorn-dll:
-    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-2022,      arch: amd64, cmake_arch: x64 }
+          - { os: windows-2022,      arch: arm64, cmake_arch: ARM64 }
+    runs-on: ${{ matrix.os }}
     steps:
+      - uses: actions/checkout@v4
+
       - name: Cache unicorn source
         id: cache
         uses: actions/cache@v4
@@ -37,39 +47,59 @@ jobs:
           git clone https://github.com/unicorn-engine/unicorn.git unicorn-src
           git -C unicorn-src checkout ${{ env.UNICORN_REF }}
 
+      - name: Apply WoA support patch (PR #2286) + arch detection fix for ARM64
+        if: matrix.arch == 'arm64'
+        run: |
+          # ARM64 Windows needs more than an asm swap: the CRT longjmp always
+          # takes RtlUnwind (JIT frames have no unwind metadata → crash at
+          # runtime, invisible at compile time), so setjmp AND longjmp must
+          # be replaced wholesale (musl aarch64 port). PR #2286 carries the
+          # full support: armasm64 custom command (no CMake 3.26 dependency),
+          # musl setjmp/longjmp, MSVC aarch64 fixes.
+          cd unicorn-src
+          # the .diff URL intermittently 503s (patch-diff CDN); the .patch
+          # form (mbox) is served from github.com directly and git-am's it.
+          curl -sfL --retry 3 https://github.com/unicorn-engine/unicorn/pull/2286.patch -o woarm64.patch
+          git apply --check woarm64.patch || { echo "patch does not apply to ${{ env.UNICORN_REF }} — likely needs rebase"; exit 1; }
+          git apply woarm64.patch
+          # PR #2286's arch detection keys off CMAKE_SYSTEM_PROCESSOR, which
+          # under a VS cross build (-A ARM64 on an amd64 runner) reports the
+          # BUILD machine (AMD64) — unicorn then picks the x64 MASM path and
+          # dies in masm.targets. Force the target arch for cross builds.
+          (Get-Content CMakeLists.txt) |
+            ForEach-Object { $_ -replace 'if\(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64\|aarch64"\)', 'if(TRUE)' } |
+            Set-Content CMakeLists.txt
+          echo "PR #2286 applied + target arch forced to aarch64 for cross build"
+
       - name: Configure (VEH compiled out)
         run: |
           cmake -S unicorn-src -B build `
-            -A x64 `
+            -A ${{ matrix.cmake_arch }} `
             -DWIN32_ENABLE_VEH=OFF `
             -DUNICORN_ARCH="arm64;aarch64" `
             -DCMAKE_BUILD_TYPE=Release
       - name: Build unicorn.dll
         run: cmake --build build --config Release --parallel
 
-      - name: Locate artifacts
-        id: locate
-        run: |
-          $dll = Get-ChildItem -Recurse -Filter unicorn.dll | Select-Object -First 1
-          echo "dll=$($dll.FullName)" >> $env:GITHUB_OUTPUT
       - name: Build provenance
         run: |
           $prov = @(
             "unicorn commit : ${{ env.UNICORN_REF }}",
-            "cmake          : -A x64 -DWIN32_ENABLE_VEH=OFF -DUNICORN_ARCH=arm64;aarch64 -DCMAKE_BUILD_TYPE=Release",
-            "built           : $(Get-Date -AsUTC -Format 'yyyy-MM-ddTHH:mm:ssZ')",
-            "golem suite     : see engine-windows job of the same run"
+            "target arch    : ${{ matrix.arch }}",
+            "cmake          : -A ${{ matrix.cmake_arch }} -DWIN32_ENABLE_VEH=OFF -DUNICORN_ARCH=arm64;aarch64 -DCMAKE_BUILD_TYPE=Release",
+            "built           : $(Get-Date -AsUTC -Format 'yyyy-MM-ddTHH:mm:ssZ')"
           )
-          $prov | Out-File -Encoding ascii PROVENANCE.txt
-          cat PROVENANCE.txt
-      - name: Upload unicorn.dll
-        uses: actions/upload-artifact@v4
-        with:
-          name: unicorn-dll-veh-off
-          path: |
-            ${{ steps.locate.outputs.dll }}
-            PROVENANCE.txt
-          if-no-files-found: error
+          $prov | Out-File -Encoding ascii PROVENANCE-${{ matrix.arch }}.txt
+          cat PROVENANCE-${{ matrix.arch }}.txt
+
+      - name: Locate + stage
+        id: locate
+        run: |
+          $dll = Get-ChildItem -Recurse -Filter unicorn.dll | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path "stage/${{ matrix.arch }}" | Out-Null
+          Copy-Item $dll.FullName "stage/${{ matrix.arch }}/unicorn.dll"
+          Copy-Item "PROVENANCE-${{ matrix.arch }}.txt" "stage/"
+          echo "dll=stage/${{ matrix.arch }}/unicorn.dll" >> $env:GITHUB_OUTPUT
 
       - name: Smoke — the DLL must export uc_open and uc_ctl
         run: |
@@ -83,7 +113,6 @@ jobs:
           if ($magic -eq 0x20B) { $dataDirOff = $optOff + 112 } else { $dataDirOff = $optOff + 96 }
           $expRva = [BitConverter]::ToUInt32($bytes, $dataDirOff)
           if ($expRva -eq 0) { throw "DLL has no export table" }
-          # RVA->file offset via the first section header
           $numSec = [BitConverter]::ToUInt16($bytes, $peOff + 6)
           $secOff = $optOff + [BitConverter]::ToUInt16($bytes, $peOff + 20)
           function RvaToOff($rva) {
@@ -104,24 +133,23 @@ jobs:
             $end = $p; while ($bytes[$end] -ne 0) { $end++ }
             $names += [Text.Encoding]::ASCII.GetString($bytes, $p, $end - $p)
           }
-          $need = @("uc_open", "uc_ctl")
-          foreach ($n in $need) {
+          foreach ($n in @("uc_open", "uc_ctl")) {
             if ($names -notcontains $n) { throw "export $n missing (have $($names -join ', '))" }
           }
-          echo "exports OK: $($names -join ', ')"
-          $names | Out-File -Encoding ascii export-list.txt
-      - name: Upload export list
+          echo "exports OK (${{ matrix.arch }}): $($names -join ', ')"
+
+      - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: export-list
-          path: export-list.txt
+          name: unicorn-dll-veh-off-${{ matrix.arch }}
+          path: |
+            ${{ steps.locate.outputs.dll }}
+            PROVENANCE-${{ matrix.arch }}.txt
+          if-no-files-found: error
 
   # ------------------------------------------------------------------
-  # engine-windows: run golem's engine suite for real on Windows against
-  # the VEH-off DLL. Each job runs on a FRESH runner — the DLL must be
-  # passed via artifacts, and tests locate it through GOLEM_UNICORN
-  # (absolute path; relative candidates would resolve against each test
-  # package's working directory).
+  # engine-windows (amd64 runner): run golem's engine suite for real
+  # against the freshly built VEH-off DLL.
   # ------------------------------------------------------------------
   engine-windows:
     needs: build-unicorn-dll
@@ -137,8 +165,8 @@ jobs:
       - name: Download the VEH-off unicorn.dll
         uses: actions/download-artifact@v4
         with:
-          name: unicorn-dll-veh-off
-          path: unicorn-dll # lands as unicorn-dll/unicorn.dll
+          name: unicorn-dll-veh-off-amd64
+          path: unicorn-dll # unicorn-dll/unicorn.dll + PROVENANCE
 
       - name: Expose the absolute DLL path to the tests
         run: |
@@ -152,5 +180,43 @@ jobs:
       - name: Engine smoke — CLI on a real .so
         run: |
           go build -tags unicorn -o golem-cli.exe ./cmd/golem
-          .\golem-cli.exe examples\native\native.so add 2 3
-          .\golem-cli.exe examples\native\native.so fib 20
+          .\\golem-cli.exe examples\\native\\native.so add 2 3
+          .\\golem-cli.exe examples\\native\\native.so fib 20
+
+  # ------------------------------------------------------------------
+  # auto-commit: drop both DLLs + provenance into assets/windows/<arch>/
+  # so consumers clone and run. [skip ci] prevents a trigger loop.
+  # ------------------------------------------------------------------
+  auto-commit:
+    needs: [build-unicorn-dll, engine-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }} # commit back to the triggering branch
+
+      - name: Download both DLLs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: unicorn-dll-veh-off-*
+          path: artifacts
+
+      - name: Stage into assets
+        run: |
+          mkdir -p assets/windows/amd64 assets/windows/arm64
+          find artifacts -name unicorn.dll -path "*amd64*" -exec cp {} assets/windows/amd64/unicorn.dll \;
+          find artifacts -name unicorn.dll -path "*arm64*" -exec cp {} assets/windows/arm64/unicorn.dll \;
+          find artifacts -name "PROVENANCE-*.txt" -exec cp {} assets/windows/ \;
+          ls -la assets/windows/amd64 assets/windows/arm64
+
+      - name: Commit if changed
+        run: |
+          git config user.name "golem-ci"
+          git config user.email "golem-ci@users.noreply.github.com"
+          git add assets/windows/
+          if git diff --cached --quiet; then
+            echo "DLLs unchanged — nothing to commit"
+            exit 0
+          fi
+          git commit -m "[skip ci] assets: refresh unicorn.dll (${{ env.UNICORN_REF }}, VEH off, amd64+arm64)"
+          git push
