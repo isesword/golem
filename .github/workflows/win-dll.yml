@@ -47,16 +47,20 @@ jobs:
           git clone https://github.com/unicorn-engine/unicorn.git unicorn-src
           git -C unicorn-src checkout ${{ env.UNICORN_REF }}
 
-      - name: Patch out x64-only setjmp asm for ARM64 (upstream #2193)
+      - name: Apply WoA support patch (PR #2286) for ARM64
         if: matrix.arch == 'arm64'
         run: |
-          # setjmp-wrapper-win32.asm is x64 MASM; MASM has no ARM64 backend
-          # (upstream issue #2193). ARM64 MSVC longjmp does not take the
-          # RtlUnwindEx path the wrapper exists to avoid, so dropping the
-          # file from the build is the documented workaround.
-          $cm = "unicorn-src/CMakeLists.txt"
-          (Get-Content $cm) | Where-Object { $_ -notmatch "setjmp-wrapper-win32" } | Set-Content $cm
-          echo "patched CMakeLists (removed setjmp-wrapper-win32.asm)"
+          # ARM64 Windows needs more than an asm swap: the CRT longjmp always
+          # takes RtlUnwind (JIT frames have no unwind metadata → crash at
+          # runtime, invisible at compile time), so setjmp AND longjmp must
+          # be replaced wholesale (musl aarch64 port). PR #2286 carries the
+          # full support: armasm64 custom command (no CMake 3.26 dependency),
+          # musl setjmp/longjmp, MSVC aarch64 fixes. Upstream-reviewed, not
+          # yet merged (#2193 stays open until then).
+          cd unicorn-src
+          curl -L https://github.com/unicorn-engine/unicorn/pull/2286.diff -o woarm64.patch
+          git apply woarm64.patch
+          echo "PR #2286 applied
 
       - name: Configure (VEH compiled out)
         run: |
