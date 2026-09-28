@@ -1,0 +1,63 @@
+name: win-dll
+
+# Builds a version-locked unicorn.dll from the unicorn dev branch with
+# -DWIN32_ENABLE_VEH=OFF (PR #2364: compiles out the VEH, preallocation
+# mandatory) and uploads it as an artifact for the Windows engine path.
+# See ARCHITECTURE.md "Windows 引擎级难题" for the rationale.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev-win]
+    paths:
+      - ".github/workflows/win-dll.yml"
+
+env:
+  UNICORN_REF: dev # version-locked by commit when we stabilize; ref for now
+
+jobs:
+  build-unicorn-dll:
+    runs-on: windows-2022
+    steps:
+      - name: Cache unicorn source
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: unicorn-src
+          key: unicorn-src-${{ env.UNICORN_REF }}
+
+      - name: Checkout unicorn dev
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch ${{ env.UNICORN_REF }} `
+            https://github.com/unicorn-engine/unicorn.git unicorn-src
+
+      - name: Configure (VEH compiled out)
+        run: |
+          cmake -S unicorn-src -B build `
+            -A x64 `
+            -DWIN32_ENABLE_VEH=OFF `
+            -DUNICORN_ARCH="arm64;aarch64" `
+            -DCMAKE_BUILD_TYPE=Release
+      - name: Build unicorn.dll
+        run: cmake --build build --config Release --parallel
+
+      - name: Locate artifacts
+        id: locate
+        run: |
+          $dll = Get-ChildItem -Recurse -Filter unicorn.dll | Select-Object -First 1
+          echo "dll=$($dll.FullName)" >> $env:GITHUB_OUTPUT
+      - name: Upload unicorn.dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: unicorn-dll-veh-off
+          path: ${{ steps.locate.outputs.dll }}
+          if-no-files-found: error
+
+      - name: Smoke — the DLL must export uc_open and uc_ctl
+        run: |
+          $dll = "${{ steps.locate.outputs.dll }}"
+          $exports = dumpbin -exports $dll 2>$null | Select-String "uc_open|uc_ctl"
+          if (-not $exports) { throw "uc_open/uc_ctl not exported" }
+          echo "exports OK:"
+          $exports
