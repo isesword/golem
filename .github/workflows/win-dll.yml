@@ -176,7 +176,12 @@ jobs:
 
       - name: Expose the absolute DLL path to the tests
         run: |
-          $dll = (Get-ChildItem -Recurse -Filter unicorn.dll | Select-Object -First 1).FullName
+          # Pin the exact artifact path — do NOT search recursively: the
+          # checkout already contains committed assets/windows/*/unicorn.dll
+          # and a recursive -First 1 pick grabbed the amd64 asset on the
+          # arm64 runner (LoadLibrary then fails with a misleading
+          # "module could not be found").
+          $dll = (Resolve-Path "unicorn-dll\unicorn.dll").Path
           echo "GOLEM_UNICORN=$dll" >> $env:GITHUB_ENV
           echo "DLL: $dll"
 
@@ -232,9 +237,17 @@ jobs:
 
       - name: Expose the absolute DLL path to the tests
         run: |
-          $dll = (Get-ChildItem -Recurse -Filter unicorn.dll | Select-Object -First 1).FullName
+          # Pin the exact artifact path — see the amd64 job for why a
+          # recursive search is wrong here (it picks up the committed
+          # assets/windows/*/unicorn.dll, possibly the wrong arch).
+          $dll = (Resolve-Path "unicorn-dll\unicorn.dll").Path
           echo "GOLEM_UNICORN=$dll" >> $env:GITHUB_ENV
           echo "DLL: $dll"
+          # Fail loudly on an arch mismatch instead of dying inside
+          # LoadLibrary: PE header machine field (0xAA64 = ARM64).
+          $bytes = [IO.File]::ReadAllBytes($dll)
+          $machine = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3C) + 4)
+          if ($machine -ne 0xAA64) { throw "unicorn.dll machine = 0x{0:X4}, expected 0xAA64 (ARM64)" -f $machine }
 
       - name: Engine tests on Windows ARM64 (fakebe contract + full suite)
         run: go test -tags unicorn ./... -v
