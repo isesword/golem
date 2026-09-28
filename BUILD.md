@@ -7,12 +7,15 @@ golem 的 CPU 引擎后端用 [purego](https://github.com/ebitengine/purego)
 
 | 引擎 | 构建标签 | 形态 | 平台 |
 |---|---|---|---|
-| **Unicorn2** | `-tags unicorn` | purego 运行时 `dlopen` libunicorn(解释执行,默认) | macOS / Linux |
+| **Unicorn2** | `-tags unicorn` | purego 运行时 `dlopen` libunicorn(解释执行,默认) | macOS / Linux / **Windows** |
 
-> 与 cgo 原版的差异:dynarmic JIT 引擎(cgo/C++ 静态链接)未随本变体提供;
-> Windows 暂不支持——unicorn 在 Windows 上靠 VEH 惰性提交 guest 内存页,
-> 与 Go 运行时的异常处理器冲突,需要 cgo 原版的"专属 C 线程命令泵"方案
-> 才能跑(见原 fork 的 `uc_shim.c`)。
+> **Windows 说明**:需使用 **VEH 关闭版 unicorn.dll**(unicorn dev 分支,
+> `-DWIN32_ENABLE_VEH=OFF`,PR #2364)——官方 release 的 VEH 惰性提交与
+> Go 运行时的进程级异常处理器冲突。golem 的 CI 自动构建该 DLL
+> (`win-dll` workflow,commit 级版本锁定,产物含 PROVENANCE.txt),
+> 放到 `assets/windows/amd64/unicorn.dll` 或任一 `GOLEM_UNICORN` 指向的
+> 路径即可。代码侧 `uc_open` 后自动设置 `UC_CTL_UC_PREALLOC=1` 双保险。
+> dynarmic JIT 引擎(cgo/C++)未随本变体提供。
 
 ## 1. 前置:装 libunicorn(只装库本体,无需头文件)
 
