@@ -14,7 +14,7 @@ defer e.Close()
 sum, _ := e.CallSymbol("add", 2, 3) // -> 5,作为真实 AArch64 代码执行
 ```
 
-> 当前状态:Unicorn(purego)后端完整跑通——加载并链接 bionic 和目标 `.so`、执行 `init_array` 与 `JNI_OnLoad`、调用导出函数、处理 syscall 与 JNI;引擎池支持多 goroutine 并发;常驻负载实测 10 万次签名 @ 100 QPS 延迟恒定、内存零增长。与 unidbg 的能力对照见 [与 unidbg 的关系](#与-unidbg-的关系)。
+> 当前状态:Unicorn(purego)后端完整跑通——加载并链接 bionic 和目标 `.so`、执行 `init_array` 与 `JNI_OnLoad`、调用导出函数、处理 syscall 与 JNI;引擎池支持多 goroutine 并发;常驻负载实测 10 万次签名 @ 100 QPS 延迟恒定、内存零增长。Linux / macOS / Windows(amd64 与 arm64)CI 实弹全绿——Windows 使用 CI 构建并经真机验证的 VEH-off unicorn.dll,随仓库分发。与 unidbg 的能力对照见 [与 unidbg 的关系](#与-unidbg-的关系)。
 
 ---
 
@@ -45,6 +45,7 @@ unidbg 是这个领域的事实标准,但它跑在 JVM 上,依赖偏重,且它�
 - 内存助手:分配、读写字节、C 字符串、小端整数。
 - 单指令 trace;以及完整指令流 trace(`TraceInsns`:每条指令的偏移 + 指令码 + 寄存器增量 + 调用/系统调用注解,Tenet 风格,可与真机 trace 对比;Unicorn)。
 - 引擎可选:`-tags unicorn` 编入 purego 后端,运行期用 `-engine` / `$GOLEM_ENGINE` 选择。
+- TCG 翻译缓存可调:`Config.TCGBufferMiB`(构造期生效;Windows 预提交模式下默认 16 MiB,由 `cmd/tcgsizing` 实测定值)。
 - **JNI 引用生命周期按规范实现**:local ref 住在池化的调用帧里(随调用消亡,宿主读返回值有一拍宽限)、global ref 显式且句柄值稳定、句柄单调永不复用(陈旧句柄解析为 nil,绝不静默别名)。稳态内存 O(单次调用的对象数),长跑不涨。
 - **引擎池(`emulator.Pool`)**:actor 模式——一个引擎同一时刻归一个 goroutine,并发靠堆引擎数而非锁;按 MaxUses 自动回收、panic 自动重建、池耗尽时 ctx deadline 生效。这是 golem 并发故事的核心:**guest 内部多线程**是引擎内的协作式调度,而 **N 个 goroutine 的并发请求**由 N 个引擎真并行承载(单核约 70 QPS,实测 12 核机 ~510 QPS)。
 - **编译/实例化分离**:每个 `.so` 只解析一次(`loader.CompileOnce`),只读段经 `uc_mem_map_ptr` 零拷贝共享——N 个引擎的只读页在物理内存里只有一份(10 引擎实测 maxRSS -20%);宿主打补丁前自动私有化,绝不污染其他引擎。
@@ -54,19 +55,20 @@ unidbg 是这个领域的事实标准,但它跑在 JVM 上,依赖偏重,且它�
 
 ### 前置条件
 
-- Go 1.25+
-- 一个 CPU 引擎:Unicorn(默认)。构建**无需任何 C 编译器**;运行期需要系统装有 libunicorn(`brew install unicorn` / `apt install libunicorn2`),或用 `$GOLEM_UNICORN` 指定其路径。详见 [BUILD.md](BUILD.md)。
+- Go 1.26+
+- 一个 CPU 引擎:Unicorn(默认)。构建**无需任何 C 编译器**;运行期需要 libunicorn——macOS/Linux 用系统安装(`brew install unicorn` / `apt install libunicorn2`)或 `$GOLEM_UNICORN` 指定路径;**Windows 无需安装**,CI 构建的 VEH-off `unicorn.dll` 随仓库在 `assets/windows/<arch>/` 下分发,开箱即用。详见 [BUILD.md](BUILD.md)。
 
 ### 构建并运行示例
 
 ```bash
-# 纯 Go 构建,无 cgo、无 zig(Linux / macOS)
+# 纯 Go 构建,无 cgo、无 zig(Linux / macOS / Windows)
 CGO_ENABLED=0 go build -tags unicorn -o bin/golem ./cmd/golem
 
 # 运行(系统装有 libunicorn 时无需任何环境变量;找不到再用 GOLEM_UNICORN 指路)
 ./bin/golem examples/native/native.so fib 20                  # fib([20]) = 6765
 # macOS 手动安装的 unicorn:GOLEM_UNICORN=$(brew --prefix unicorn)/lib/libunicorn.dylib
 # Linux: apt install libunicorn2 即在默认搜索路径上
+# Windows: 无需安装,自动使用 assets/windows/<arch>/unicorn.dll(VEH-off 构建)
 ```
 
 完整演示(加载内置 `native.so`,调用导出函数、一个被 import 的 `strlen`、一个写指针的函数,以及一个 Go `Replace` hook):
@@ -170,7 +172,8 @@ golem/
 │   ├── golem/  CLI:加载 .so 并调用某个符号
 │   ├── elfscan/  分析 .so(导入/导出/init)
 │   ├── loadplan/ 重定位直方图 / 链接复杂度
-│   └── bsmoke/   引擎自检
+│   ├── bsmoke/   引擎自检
+│   └── tcgsizing/ TCG 缓存尺寸实测曲线(吞吐/延迟/RSS)
 ├── examples/
 │   ├── native/   一个自建的小 AArch64 .so(源码 + 预编译),供示例 + 测试用
 │   └── douyin/   真实案例:在一个生产 .so 上复现签名(.so 需自备,不入库)

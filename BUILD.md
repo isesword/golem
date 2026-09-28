@@ -13,8 +13,9 @@ golem 的 CPU 引擎后端用 [purego](https://github.com/ebitengine/purego)
 > `-DWIN32_ENABLE_VEH=OFF`,PR #2364)——官方 release 的 VEH 惰性提交与
 > Go 运行时的进程级异常处理器冲突。golem 的 CI 自动构建该 DLL
 > (`win-dll` workflow,commit 级版本锁定,产物含 PROVENANCE.txt),
-> 放到 `assets/windows/amd64/unicorn.dll` 或任一 `GOLEM_UNICORN` 指向的
-> 路径即可。代码侧 `uc_open` 后自动设置 `UC_CTL_UC_PREALLOC=1` 双保险。
+> 已随仓库提交到 `assets/windows/<arch>/`(amd64 + arm64,后者经
+> windows-11-arm 真机验证),开箱即用;也可用 `GOLEM_UNICORN` 指向的
+> 任一路径覆盖。代码侧 `uc_open` 后自动设置 `UC_CTL_UC_PREALLOC=1` 双保险。
 > dynarmic JIT 引擎(cgo/C++)未随本变体提供。
 
 ## 1. 前置:装 libunicorn(只装库本体,无需头文件)
@@ -45,7 +46,7 @@ go run ./cmd/loadplan                    # 重定位直方图
 运行期定位 libunicorn 的顺序:
 
 1. `$GOLEM_UNICORN`(显式路径,最可靠);
-2. `libunicorn.2.dylib` / `libunicorn.dylib`(macOS)或 `libunicorn.so.2` / `libunicorn.so`(Linux),交由系统加载器搜索。
+2. Windows:`unicorn.dll`(加载器搜索路径)与 `assets/windows/<arch>/unicorn.dll`(随仓库分发的 VEH-off 构建);macOS:`libunicorn.2.dylib` / `libunicorn.dylib`;Linux:`libunicorn.so.2` / `libunicorn.so`——均交由系统加载器搜索。
 
 ```bash
 GOLEM_UNICORN=/opt/homebrew/opt/unicorn/lib/libunicorn.dylib ./bin/golem examples/native/native.so add 2 3

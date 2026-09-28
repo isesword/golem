@@ -14,7 +14,7 @@ defer e.Close()
 sum, _ := e.CallSymbol("add", 2, 3) // -> 5, executed as real AArch64 code
 ```
 
-> Current status: the Unicorn (purego) backend works end to end — loading and linking bionic and the target `.so`, running `init_array` and `JNI_OnLoad`, calling exports, handling syscalls and JNI — plus an engine pool for concurrent use. Under sustained load, 100k signs at 100 QPS held constant latency with zero memory growth. See [Relationship to unidbg](#relationship-to-unidbg).
+> Current status: the Unicorn (purego) backend works end to end — loading and linking bionic and the target `.so`, running `init_array` and `JNI_OnLoad`, calling exports, handling syscalls and JNI — plus an engine pool for concurrent use. Under sustained load, 100k signs at 100 QPS held constant latency with zero memory growth. CI-verified for real on Linux / macOS / Windows (amd64 and arm64) — on Windows the VEH-off unicorn.dll is built by CI, verified on real runners, and ships with the repo. See [Relationship to unidbg](#relationship-to-unidbg).
 
 ---
 
@@ -41,6 +41,7 @@ unidbg is the de-facto tool for emulating Android native libraries, but it runs 
 - Memory helpers: alloc, read/write bytes, C-strings, and LE integers.
 - Per-instruction trace, plus a full instruction-stream trace (`TraceInsns`: per-instruction offset + opcode + register deltas + call/syscall annotations, Tenet-style, diffable against a real-device trace; Unicorn).
 - Selectable engine: build with `-tags unicorn` to compile in the purego backend, choose at runtime with `-engine` / `$GOLEM_ENGINE`.
+- Tunable TCG translation buffer: `Config.TCGBufferMiB` (applied at construction; the 16 MiB default under Windows preallocation was set by measurement with `cmd/tcgsizing`).
 - **JNI reference lifecycle per spec**: local refs live in pooled call frames (die with the call; one-beat grace for return-value reads), global refs are explicit with stable handle values, handles are monotonic and never reused (stale handles resolve to nil, never alias). Steady-state memory is O(one call's objects) — flat under sustained load.
 - **Engine pool (`emulator.Pool`)**: the actor pattern — one engine belongs to one goroutine at a time; concurrency scales by engine count, not locks. Auto-recycling at MaxUses, transparent rebuild after worker panics, ctx deadlines when drained. This is the core of golem's concurrency story: **intra-guest threads** are the engine's cooperative scheduler, while **N concurrent goroutines** get N engines running truly in parallel (~70 QPS per core measured).
 - **Compile/instantiate split**: each `.so` is parsed once (`loader.CompileOnce`) and its read-only segments are shared zero-copy across engines via `uc_mem_map_ptr` — one physical copy no matter the pool size (measured -20% maxRSS at 10 engines). Host patches privatize pages first and never corrupt other engines.
@@ -50,16 +51,17 @@ unidbg is the de-facto tool for emulating Android native libraries, but it runs 
 
 ### Prerequisites
 
-- Go 1.25+
-- One CPU engine: Unicorn (the default). Building needs **no C compiler at all**; at runtime the system must have libunicorn installed (`brew install unicorn` / `apt install libunicorn2`), or point `$GOLEM_UNICORN` at it. See [BUILD.md](BUILD.md).
+- Go 1.26+
+- One CPU engine: Unicorn (the default). Building needs **no C compiler at all**; at runtime libunicorn must be findable — on macOS/Linux install it (`brew install unicorn` / `apt install libunicorn2`) or point `$GOLEM_UNICORN` at it; **on Windows nothing to install**: the CI-built VEH-off `unicorn.dll` ships under `assets/windows/<arch>/` and works out of the box. See [BUILD.md](BUILD.md).
 
 ### Build & run the example
 
 ```bash
-# Linux / macOS (pure-Go build: no cgo, no zig)
+# Linux / macOS / Windows (pure-Go build: no cgo, no zig)
 CGO_ENABLED=0 go build -tags unicorn -o bin/golem ./cmd/golem
 GOLEM_UNICORN=$(brew --prefix unicorn)/lib/libunicorn.dylib \
   ./bin/golem examples/native/native.so fib 20                # fib([20]) = 6765
+# Windows: no install needed — assets/windows/<arch>/unicorn.dll (VEH-off build) is used automatically
 ```
 
 Full demo (loads the bundled `native.so`, calls exports, an imported `strlen`, a pointer-out function, and a Go `Replace` hook):
@@ -77,7 +79,7 @@ CGO_ENABLED=0 go run -tags unicorn ./examples/run   # libunicorn must be findabl
 ## Library usage
 
 ```go
-import "golem/emulator"
+import "github.com/isesword/golem/emulator"
 
 e, err := emulator.New(emulator.Config{
     SOPath:    "libfoo.so",        // loaded + init_array + JNI_OnLoad at boot
@@ -147,7 +149,7 @@ Guest memory and registers are exchanged through the `Backend` interface, implem
 
 ```
 golem/
-├── emulator/     public API: New, LoadLibrary, CallSymbol/CallOffset, Replace, memory helpers
+├── emulator/     public API: New, LoadLibrary, CallSymbol/CallOffset, ReplaceE, memory helpers
 ├── dvm/          public: fake Dalvik VM — VM, Object, Class, Jni, AbstractJni, VaList
 ├── internal/
 │   ├── emu/      CPU backend interface + registry; unicorn backend (purego runtime-loaded libunicorn)
@@ -159,7 +161,8 @@ golem/
 │   ├── golem/  CLI: load a .so and call a symbol
 │   ├── elfscan/  analyze a .so (imports/exports/init)
 │   ├── loadplan/ relocation histogram / link complexity
-│   └── bsmoke/   engine self-test
+│   ├── bsmoke/   engine self-test
+│   └── tcgsizing/ TCG buffer sizing curves (throughput/latency/RSS)
 ├── examples/native/  a tiny AArch64 .so (source + prebuilt) used by the example + test
 └── assets/android/sdk23/  bundled AOSP bionic sysroot (see NOTICE)
 ```
