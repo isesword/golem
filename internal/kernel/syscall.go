@@ -303,7 +303,8 @@ var Names = map[uint64]string{
 	SYS_prlimit64: "prlimit64", SYS_getrandom: "getrandom", SYS_statx: "statx",
 	SYS_socket: "socket", SYS_connect: "connect", SYS_rt_sigaction: "rt_sigaction",
 	SYS_rt_sigprocmask: "rt_sigprocmask", SYS_sched_yield: "sched_yield",
-	SYS_sched_getaffinity: "sched_getaffinity",
+	SYS_sched_getaffinity: "sched_getaffinity", SYS_mkdirat: "mkdirat",
+	SYS_gettimeofday: "gettimeofday",
 }
 
 // Dispatch reads the syscall number + args from the backend, runs the handler,
