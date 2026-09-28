@@ -421,11 +421,11 @@ func (b *unicornBackend) applyWindowsDefaults() error {
 	}
 	// PREALLOC commits the whole TCG buffer upfront — the default 1 GiB
 	// per instance would bill 10 GiB for a 10-engine pool. Sizing curve
-	// (Windows, pool 10, ONE small-footprint workload — native add):
-	// 16 MiB reached 100% of peak throughput; 256 MiB+ degraded 30-40%.
+	// (Windows, pool 10, native add workload): 8 MiB already hits 100% of
+	// peak throughput (688K QPS top of the sweep); 256 MiB+ degraded 30-40%.
 	// Larger-footprint guests may need more — measure with cmd/tcgsizing;
 	// users override it via emulator.Config.TCGBufferMiB.
-	var tcgMiB uint32 = 16
+	var tcgMiB uint32 = 8
 	var tcgCtl uint32 = ucCtlTcgBufferSize | 1<<26 | 1<<30 // UC_CTL_WRITE(UC_CTL_TCG_BUFFER_SIZE, 1)
 	if e := pCtl(b.uc, tcgCtl, unsafe.Pointer(&tcgMiB)); e != ucOK {
 		return ucErr("uc_ctl tcg buffer size", e)
