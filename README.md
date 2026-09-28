@@ -35,7 +35,7 @@ unidbg 是这个领域的事实标准,但它跑在 JVM 上,依赖偏重,且它�
 - Linux/AArch64 系统调用子集(mmap/mprotect/openat/read/write/clock_gettime/getrandom/futex/…),配一套小型虚拟文件系统(`/system/lib64`、`/proc/self/*`、属性、tzdata)。
 - JNI/JavaVM:guest 的 `JNIEnv`/`JavaVM` 调用会陷回到你用 Go 实现的处理器(`FindClass`、`GetMethodID`、`Call*Method*`、`RegisterNatives`、字符串、字节数组等)。
 - 按符号名或按模块偏移调用 native 函数,最多 8 个整型参数,可读取返回值。
-- 用 Go 回调替换 native 函数(`Replace`,入口 hook),或**内联 hook**(`HookAddr`,逐指令,Unicorn)改寄存器 / 重定向 PC;均自动让代码缓存失效。
+- 用 Go 回调替换 native 函数(`ReplaceE` 事务化入口补丁,失败恢复原指令),或**内联 hook**(`HookAddr`,逐指令,Unicorn)改寄存器 / 重定向 PC;写内存的路径自动刷新代码缓存。
 - **控制台调试器**:断点 / 单步 / 寄存器 / 内存(Unicorn,I/O 可注入便于脚本化)。
 - 从 **classes.dex 加载真实类/方法/字段元数据**(`Config.DexPath` / `LoadDex`):FindClass/GetMethodID/GetFieldID 按真实签名、父类解析(仅元数据,不执行字节码)。
 - 内存助手:分配、读写字节、C 字符串、小端整数。
@@ -56,10 +56,13 @@ unidbg 是这个领域的事实标准,但它跑在 JVM 上,依赖偏重,且它�
 ### 构建并运行示例
 
 ```bash
-# Linux / macOS(纯 Go 构建,无 cgo、无 zig)
+# 纯 Go 构建,无 cgo、无 zig(Linux / macOS)
 CGO_ENABLED=0 go build -tags unicorn -o bin/golem ./cmd/golem
-GOLEM_UNICORN=$(brew --prefix unicorn)/lib/libunicorn.dylib \
-  ./bin/golem examples/native/native.so fib 20                # fib([20]) = 6765
+
+# 运行(系统装有 libunicorn 时无需任何环境变量;找不到再用 GOLEM_UNICORN 指路)
+./bin/golem examples/native/native.so fib 20                  # fib([20]) = 6765
+# macOS 手动安装的 unicorn:GOLEM_UNICORN=$(brew --prefix unicorn)/lib/libunicorn.dylib
+# Linux: apt install libunicorn2 即在默认搜索路径上
 ```
 
 完整演示(加载内置 `native.so`,调用导出函数、一个被 import 的 `strlen`、一个写指针的函数,以及一个 Go `Replace` hook):
@@ -81,7 +84,7 @@ import "github.com/isesword/golem/emulator"
 
 e, err := emulator.New(emulator.Config{
     SOPath:    "libfoo.so",        // 启动时加载并跑 init_array + JNI_OnLoad
-    AssetRoot: emulator.Locate("assets"),
+    AssetRoot: emulator.AssetsDir(), // 内置 bionic sysroot(按编译期路径自定位;可用 $GOLEM_ASSETS 覆盖)
     Engine:    "",                 // "unicorn" | "" = 自动
 })
 if err != nil { panic(err) }
@@ -96,11 +99,13 @@ r, _ = e.CallOffset(nil /*主模块*/, 0x1234, argPtr)
 // 交换内存。
 p := e.WriteCStringAlloc("hello")
 n, _ := e.CallSymbol("strlen_wrapper", p)
-out := e.Malloc(4); _, _ = e.CallSymbol("sum_into", out, 20, 22)
+out, err := e.Malloc(4)
+if err != nil { panic(err) }
+_, _ = e.CallSymbol("sum_into", out, 20, 22)
 v, _ := e.ReadU32(out)
 
-// 用 Go 替换一个 native 函数(hook)。
-e.ReplaceSymbol("add", func(h *emulator.Hook) uint64 { return h.Arg(0) + h.Arg(1) })
+// 用 Go 替换一个 native 函数(hook)。ReplaceE 返回 error; ReplaceSymbol 同。
+err = e.ReplaceSymbol("add", func(h *emulator.Hook) uint64 { return h.Arg(0) + h.Arg(1) })
 ```
 
 ### 给 Java 侧建模(JNI)
@@ -126,9 +131,9 @@ e, _ := emulator.New(emulator.Config{SOPath: "libfoo.so", JNI: MyJni{}})
 
 ## CPU 引擎
 
-| 引擎 | 构建标签 | 链接方式 | 速度(热路径) | 许可证 |
+| 引擎 | 构建标签 | 链接方式 | 速度(热路径,实测) | 许可证 |
 |---|---|---|---|---|
-| **Unicorn2** | `-tags unicorn` | purego 运行时 `dlopen` libunicorn | ~20 ms/次 | GPLv2 |
+| **Unicorn2** | `-tags unicorn` | purego 运行时 `dlopen` libunicorn | p50 ≈ 14–15 ms/次(10 万签 @100 QPS 实测) | GPLv2 |
 
 - 当前内置 Unicorn 后端;接口(`emu.Backend`)与注册表机制保留了多引擎扩展点(如 dynarmic JIT)。
 - 每个引擎首次调用要花几百毫秒(预热),之后复用同一引擎就很快;多引擎用 `emulator.Pool` 预热一组并发服务。
@@ -139,7 +144,7 @@ e, _ := emulator.New(emulator.Config{SOPath: "libfoo.so", JNI: MyJni{}})
 `emulator.New` 对照 unidbg `Emulator` 的启动流程:
 
 1. 地址空间:铺好 guest 栈、TLS(`TPIDR_EL0` 加一个 `pthread_internal_t`)和 SVC 跳板区,并选定 CPU 后端。
-2. 加载与链接:先处理真实 bionic 的 `libc/libm/libdl`,再处理你的 `.so`,也就是解析 ELF、映射段、处理重定位、跨模块解析符号;没解析到的 import 指向一个 `svc` 跳板,陷回 Go。
+2. 加载与链接:每个 `.so` 只解析一次并生成 Plan(`loader.CompileOnce`),各引擎按 Plan 实例化——只读段经 `uc_mem_map_ptr` 零拷贝共享,可写段匿名私有,重定位按引擎符号解析;未解析到的 import 指向 `svc` 跳板,陷回 Go。
 3. 初始化:跑 `DT_INIT` 和 `init_array`,如果导出了 `JNI_OnLoad` 也一并调用(传入合成的 `JavaVM`)。
 4. 调用:`CallSymbol`/`CallOffset` 把参数写进 `X0..X7`,把 `LR` 设成哨兵地址,然后一直跑到返回。SVC 陷入之后再分派给 syscall 层(`internal/kernel`)、JNI 层,或某个用 Go 实现的 libc 函数、被 Replace 的函数。
 
@@ -149,11 +154,11 @@ guest 的内存和寄存器通过 `Backend` 接口交换,Unicorn purego 后端�
 
 ```
 golem/
-├── emulator/     公开 API:New、LoadLibrary、CallSymbol/CallOffset、Replace、内存助手
-├── dvm/          公开:假 Dalvik VM —— VM、Object、Class、Jni、AbstractJni、VaList
+├── emulator/     公开 API:New、LoadLibrary、CallSymbol/CallOffset、ReplaceE、Pool、内存助手
+├── dvm/          公开:假 Dalvik VM —— VM(JNI 规范引用生命周期)、Object、Class、Jni、AbstractJni、VaList
 ├── internal/
 │   ├── emu/      CPU 后端接口 + 注册表;unicorn 后端(purego 运行时加载 libunicorn)
-│   ├── loader/   ELF 解析 + 动态链接器
+│   ├── loader/   ELF 解析 + 动态链接器 + Plan(编译/实例化分离、共享只读页)
 │   ├── kernel/   AArch64 Linux 系统调用子集
 │   ├── memory/   guest 地址空间分配器
 │   └── vfs/      guest 虚拟文件系统(/system/lib64、/proc/self、属性、tzdata)

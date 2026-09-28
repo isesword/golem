@@ -1,9 +1,9 @@
-# 构建说明(纯 Go 变体)
+# 构建说明
 
-本仓库是 golem 的**纯 Go 变体**:`-tags unicorn` 的 CPU 引擎后端改用
-[purego](https://github.com/ebitengine/purego) 在**运行时** `dlopen` 原版
-libunicorn——构建期零 cgo、零 C 编译器、零自编 shim 库,`CGO_ENABLED=0`
-即可构建整个模块。运行期唯一依赖是系统里装有 libunicorn 本体。
+golem 的 CPU 引擎后端用 [purego](https://github.com/ebitengine/purego)
+在**运行时** `dlopen` 原版 libunicorn——构建期零 cgo、零 C 编译器、
+零自编 shim 库,`CGO_ENABLED=0` 即可构建整个模块。运行期唯一依赖是
+系统里装有 libunicorn 本体。
 
 | 引擎 | 构建标签 | 形态 | 平台 |
 |---|---|---|---|

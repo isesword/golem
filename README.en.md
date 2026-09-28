@@ -35,7 +35,7 @@ unidbg is the de-facto tool for emulating Android native libraries, but it runs 
 - Linux/AArch64 syscall subset (mmap/mprotect/openat/read/write/clock_gettime/getrandom/futex/…), served against a small virtual filesystem (`/system/lib64`, `/proc/self/*`, properties, tzdata).
 - JNI/JavaVM: a guest `JNIEnv`/`JavaVM` whose calls trap back to a Go handler you implement (`FindClass`, `GetMethodID`, `Call*Method*`, `RegisterNatives`, strings, byte arrays, …).
 - Call native functions by symbol or by module offset, pass up to 8 integer args, and read the return value.
-- Replace a native function with a Go callback (`Replace`, entry hook), or **inline hook** (`HookAddr`, per-instruction, Unicorn) to rewrite registers / redirect PC; both invalidate the code cache automatically.
+- Replace a native function with a Go callback (`ReplaceE`, transactional entry patch that restores the original instructions on failure), or **inline hook** (`HookAddr`, per-instruction, Unicorn) to rewrite registers / redirect PC; memory-writing paths flush the code cache automatically.
 - **Console debugger**: breakpoints / single-step / registers / memory (Unicorn; I/O is injectable for scripting).
 - Load **real class/method/field metadata from a classes.dex** (`Config.DexPath` / `LoadDex`): FindClass/GetMethodID/GetFieldID resolve against true signatures and superclasses (metadata only, no bytecode).
 - Memory helpers: alloc, read/write bytes, C-strings, and LE integers.
@@ -126,7 +126,7 @@ This is how unidbg's `AbstractJni` works: the guest's `RegisterNatives`/`GetMeth
 
 | engine | build tag | linkage | speed (warm) | license |
 |---|---|---|---|---|
-| **Unicorn2** | `-tags unicorn` | runtime `dlopen` of libunicorn | ~20 ms/call | GPLv2 |
+| **Unicorn2** | `-tags unicorn` | purego runtime `dlopen` of libunicorn | p50 ≈ 14–15 ms/call (measured, 100k signs @100 QPS) | GPLv2 |
 
 - The Unicorn backend ships built-in; the interface (`emu.Backend`) and registry keep the extension point for other engines.
 - The first call on a fresh emulator takes a few hundred ms (warm-up); after that, reuse the emulator and the calls are fast.
@@ -137,7 +137,7 @@ This is how unidbg's `AbstractJni` works: the guest's `RegisterNatives`/`GetMeth
 `emulator.New` mirrors unidbg's `Emulator` setup:
 
 1. Address space: reserve the guest stack, TLS (`TPIDR_EL0` plus a `pthread_internal_t`), and an SVC-trampoline region, then pick the CPU backend.
-2. Load and link: first the real bionic `libc/libm/libdl`, then your `.so`, parsing the ELF, mapping segments, applying relocations, and resolving symbols across modules. Unresolved imports get an `svc` trampoline that traps to Go.
+2. Load and link: each `.so` is parsed once into a Plan (`loader.CompileOnce`) and instantiated per engine — read-only segments are shared zero-copy via `uc_mem_map_ptr`, writable segments stay private anonymous memory, relocations resolve per-engine symbols; unresolved imports point at `svc` trampolines that trap back into Go.
 3. Initialize: run `DT_INIT` and `init_array`, plus `JNI_OnLoad` (if the library exports it) with a synthesized `JavaVM`.
 4. Call: `CallSymbol`/`CallOffset` put the args in `X0..X7`, set `LR` to a sentinel, and run until return. An SVC trap is dispatched to the syscall layer (`internal/kernel`), the JNI layer, or a Go-implemented libc or replaced function.
 
