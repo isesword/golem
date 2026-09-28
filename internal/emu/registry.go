@@ -12,6 +12,10 @@ import (
 // its own build-tag-gated file and registers itself from an init():
 //
 //	unicorn_purego.go (//go:build unicorn && darwin||linux) -> Register("unicorn", ...)
+//	winengine/       (//go:build windows)    -> Register("unicorn", ...)	[planned:
+//	                                           CreateThread C engine service thread + command pump;
+//	                                           see ARCHITECTURE.md — Windows engine-level fixes are
+//	                                           contained HERE, upper layers never branch on GOOS]
 //
 // So which engines exist in a binary is decided at build time (`-tags`), and
 // which one is used is decided at run time (arg / $GOLEM_ENGINE / default).

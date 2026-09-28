@@ -18,6 +18,10 @@ sum, _ := e.CallSymbol("add", 2, 3) // -> 5,作为真实 AArch64 代码执行
 
 ---
 
+## 架构
+
+分层不变量、平台支持矩阵与改动判据见 [ARCHITECTURE.md](ARCHITECTURE.md)——上层（emulator/dvm/loader/kernel/vfs 及一切消费者）只依赖 `emu.Backend` 接口，平台与 CPU 引擎差异全部封死在 `internal/emu` 层。
+
 ## 为什么
 
 unidbg 是这个领域的事实标准,但它跑在 JVM 上,依赖偏重,且它的 JNI 引用表不回收(`DeleteLocalRef` 是空操作)、面向交互式分析而非常驻服务。golem 用 Go 重做了核心部分,并把**生产级长跑**作为一等公民:
