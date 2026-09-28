@@ -391,9 +391,10 @@ func newUnicornBackend() (Backend, error) {
 		}
 		// PREALLOC commits the whole TCG buffer upfront — the default 1 GiB
 		// per instance would bill 10 GiB for a 10-engine pool. Sizing curve
-		// (Windows, pool 10, native add workload): 16 MiB reaches 100% of
-		// peak throughput; 256 MiB+ degrades 30-40%. 16 MiB default, and
-		// unicorn rounds as it sees fit.
+		// (Windows, pool 10, ONE small-footprint workload — native add):
+		// 16 MiB reached 100% of peak throughput; 256 MiB+ degraded 30-40%.
+		// Larger-footprint guests may need more — measure with cmd/tcgsizing
+		// and raise via UC_CTL_TCG_BUFFER_SIZE if the workload demands it.
 		var tcgMiB uint32 = 16
 		var tcgCtl uint32 = ucCtlTcgBufferSize | 1<<26 | 1<<30 // UC_CTL_WRITE(UC_CTL_TCG_BUFFER_SIZE, 1)
 		if e := pCtl(uc, tcgCtl, unsafe.Pointer(&tcgMiB)); e != ucOK {
