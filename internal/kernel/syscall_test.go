@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/isesword/golem/internal/emu"
@@ -589,7 +590,7 @@ func TestEpochPinnedTime(t *testing.T) {
 	k := newKernelCtxt(t)
 	k.ctx.Epoch = 1234567890
 
-	if got := k.call(SYS_clock_gettime, 0, scratch); got != 0 {
+	if got := k.call(SYS_clock_gettime, clockRealtime, scratch); got != 0 {
 		t.Fatalf("clock_gettime = %d, want 0", got)
 	}
 	ts := k.memAt(scratch, 16)
@@ -598,6 +599,17 @@ func TestEpochPinnedTime(t *testing.T) {
 	}
 	if nsec := binary.LittleEndian.Uint64(ts[8:]); nsec != 0 {
 		t.Errorf("clock_gettime nsec = %d, want 0 (pinned)", nsec)
+	}
+
+	// Semantic fix: in Epoch mode the monotonic clocks are zero-based (boot
+	// time == epoch) instead of aliasing the wall clock — MONOTONIC measuring
+	// "seconds since 1970" was never right and made uptime checks inconsistent.
+	if got := k.call(SYS_clock_gettime, clockMonotonic, scratch); got != 0 {
+		t.Fatalf("clock_gettime(MONOTONIC) = %d, want 0", got)
+	}
+	ts = k.memAt(scratch, 16)
+	if sec := binary.LittleEndian.Uint64(ts[0:]); sec != 0 {
+		t.Errorf("MONOTONIC sec = %d, want 0 (pinned: boot == epoch)", sec)
 	}
 
 	if got := k.call(SYS_gettimeofday, scratch+0x100, 0); got != 0 {
@@ -609,6 +621,58 @@ func TestEpochPinnedTime(t *testing.T) {
 	}
 	if usec := binary.LittleEndian.Uint64(tv[8:]); usec != 0 {
 		t.Errorf("gettimeofday usec = %d, want 0 (pinned)", usec)
+	}
+}
+
+// testClock is a fixed Clock: wall clock 3h42m after boot.
+type testClock struct{}
+
+var testClockBoot = time.Unix(1700000000, 0)
+
+func (testClock) Now() time.Time      { return testClockBoot.Add(3*time.Hour + 42*time.Minute) }
+func (testClock) BootTime() time.Time { return testClockBoot }
+
+func TestClockIDDistribution(t *testing.T) {
+	k := newKernelCtxt(t)
+	k.ctx.Clock = testClock{}
+
+	readTS := func(addr uint64) (sec, nsec uint64) {
+		ts := k.memAt(addr, 16)
+		return binary.LittleEndian.Uint64(ts[0:]), binary.LittleEndian.Uint64(ts[8:])
+	}
+	wantUptime := uint64(3*3600 + 42*60)
+
+	// realtime family -> wall clock
+	for _, id := range []uint64{clockRealtime, clockRealtimeCoarse} {
+		if got := k.call(SYS_clock_gettime, id, scratch); got != 0 {
+			t.Fatalf("clock_gettime(%d) = %d, want 0", id, got)
+		}
+		if sec, _ := readTS(scratch); sec != uint64(testClock{}.Now().Unix()) {
+			t.Errorf("clockid %d sec = %d, want wall %d", id, sec, testClock{}.Now().Unix())
+		}
+	}
+	// monotonic family -> time since boot
+	for _, id := range []uint64{clockMonotonic, clockMonotonicRaw, clockMonotonicCoarse, clockBoottime} {
+		if got := k.call(SYS_clock_gettime, id, scratch); got != 0 {
+			t.Fatalf("clock_gettime(%d) = %d, want 0", id, got)
+		}
+		if sec, _ := readTS(scratch); sec != wantUptime {
+			t.Errorf("clockid %d sec = %d, want uptime %d", id, sec, wantUptime)
+		}
+	}
+	// sysinfo uptime agrees with CLOCK_BOOTTIME (cross-check consistency)
+	if got := k.call(SYS_sysinfo, scratch); got != 0 {
+		t.Fatalf("sysinfo = %d, want 0", got)
+	}
+	if up := binary.LittleEndian.Uint64(k.memAt(scratch, 8)); up != wantUptime {
+		t.Errorf("sysinfo uptime = %d, want %d", up, wantUptime)
+	}
+	// gettimeofday follows the wall clock
+	if got := k.call(SYS_gettimeofday, scratch, 0); got != 0 {
+		t.Fatalf("gettimeofday = %d, want 0", got)
+	}
+	if sec, usec := readTS(scratch); sec != uint64(testClock{}.Now().Unix()) || usec != 0 {
+		t.Errorf("gettimeofday = %d.%d, want wall clock", sec, usec)
 	}
 }
 

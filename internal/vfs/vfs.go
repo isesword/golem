@@ -126,3 +126,27 @@ func (v *VFS) registerSynthetic() {
 func (v *VFS) SetMaps(content string) {
 	v.synth["/proc/self/maps"] = func() ([]byte, error) { return []byte(content), nil }
 }
+
+// MountBattery installs /sys/class/power_supply/battery/* as synthetic files
+// generated on each read from state (level percent, charging). Risk SDKs read
+// these to spot emulators — "always 100%, never charging" is a classic tell —
+// so the emulator wires this to the device profile when one is configured.
+func (v *VFS) MountBattery(state func() (level int, charging bool)) {
+	base := "/sys/class/power_supply/battery/"
+	v.synth[base+"present"] = func() ([]byte, error) { return []byte("1\n"), nil }
+	v.synth[base+"capacity"] = func() ([]byte, error) {
+		lvl, _ := state()
+		return []byte(fmt.Sprintf("%d\n", lvl)), nil
+	}
+	v.synth[base+"status"] = func() ([]byte, error) {
+		lvl, chg := state()
+		s := "Discharging"
+		switch {
+		case chg:
+			s = "Charging"
+		case lvl >= 99:
+			s = "Full"
+		}
+		return []byte(s + "\n"), nil
+	}
+}

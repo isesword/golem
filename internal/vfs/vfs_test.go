@@ -263,6 +263,44 @@ func TestSetMaps(t *testing.T) {
 	}
 }
 
+// MountBattery installs the power_supply files only on demand; each read
+// re-invokes the state function so the reported level tracks time.
+func TestMountBattery(t *testing.T) {
+	v := New(t.TempDir(), 4321, "app")
+	base := "/sys/class/power_supply/battery/"
+
+	// not mounted by default (backward compatible: guest sees no battery)
+	if v.Exists(base + "capacity") {
+		t.Fatal("battery capacity exists before MountBattery")
+	}
+
+	lvl, chg := 57, false
+	v.MountBattery(func() (int, bool) { return lvl, chg })
+	for _, f := range []string{"capacity", "status", "present"} {
+		if !v.Exists(base + f) {
+			t.Errorf("Exists(%s%s) = false after MountBattery", base, f)
+		}
+	}
+	if got, _ := v.Read(base + "capacity"); string(got) != "57\n" {
+		t.Errorf("capacity = %q, want %q", got, "57\n")
+	}
+	if got, _ := v.Read(base + "status"); string(got) != "Discharging\n" {
+		t.Errorf("status = %q, want Discharging", got)
+	}
+	if got, _ := v.Read(base + "present"); string(got) != "1\n" {
+		t.Errorf("present = %q, want %q", got, "1\n")
+	}
+
+	chg = true // live state: charging flips the status on the next read
+	if got, _ := v.Read(base + "status"); string(got) != "Charging\n" {
+		t.Errorf("status while charging = %q, want Charging", got)
+	}
+	lvl, chg = 100, false // charged overnight, holding full
+	if got, _ := v.Read(base + "status"); string(got) != "Full\n" {
+		t.Errorf("status at 100%% = %q, want Full", got)
+	}
+}
+
 // Guest paths are path.Clean'd before lookup, so // and /./ and infix /../
 // all resolve to the canonical entry.
 func TestReadCleansGuestPath(t *testing.T) {

@@ -100,7 +100,14 @@ type Context struct {
 	// Epoch, if non-zero, pins gettimeofday/clock_gettime to this fixed Unix time
 	// (seconds) instead of the host clock — for deterministic, reproducible runs
 	// (reverse-engineering: the same inputs must yield the same signature).
+	// Epoch wins over Clock; in Epoch mode the monotonic clocks are zero-based
+	// (boot time == epoch), so uptime reads 0 rather than the wall time.
 	Epoch int64
+	// Clock, if non-nil, supplies the guest's wall clock and monotonic origin
+	// (boot time). nil = host clock with the monotonic origin at process start.
+	// The emulator installs a profile-backed clock here when a device liveness
+	// profile is configured, so syscall-time and JNI-time agree.
+	Clock Clock
 
 	brkCur   uint64 // current program break (0 = uninitialized)
 	Exited   bool   // guest called exit/exit_group
@@ -646,25 +653,84 @@ func sysBrk(c *Context, a [6]uint64) int64 {
 	return int64(want)
 }
 
-// nowTime returns the host clock, or the pinned Epoch if one was set.
-func (c *Context) nowTime() time.Time {
+// Clock is the guest's time source. All time-serving syscalls derive from one
+// Clock so the values cross-check (a risk-control probe comparing wall time,
+// monotonic time, and sysinfo uptime must find them consistent).
+type Clock interface {
+	Now() time.Time      // wall clock (CLOCK_REALTIME / gettimeofday)
+	BootTime() time.Time // origin of CLOCK_MONOTONIC / CLOCK_BOOTTIME / uptime
+}
+
+// clockid values (asm-generic / Linux).
+const (
+	clockRealtime        = 0
+	clockMonotonic       = 1
+	clockMonotonicRaw    = 4
+	clockRealtimeCoarse  = 5
+	clockMonotonicCoarse = 6
+	clockBoottime        = 7
+)
+
+// pinnedClock implements Clock for Epoch mode: the wall clock frozen at the
+// epoch, monotonic clocks zero-based (boot == epoch) so they stay frozen too.
+type pinnedClock int64
+
+func (p pinnedClock) Now() time.Time      { return time.Unix(int64(p), 0) }
+func (p pinnedClock) BootTime() time.Time { return p.Now() }
+
+// hostClock is the default: real wall time, booted when the process started.
+type hostClock struct{ started time.Time }
+
+func (h hostClock) Now() time.Time      { return time.Now() }
+func (h hostClock) BootTime() time.Time { return h.started }
+
+var processStart = time.Now()
+
+// clock resolves the effective time source: Epoch pins everything (signing
+// determinism beats realism), then an injected Clock, then the host clock.
+func (c *Context) clock() Clock {
 	if c.Epoch != 0 {
-		return time.Unix(c.Epoch, 0)
+		return pinnedClock(c.Epoch)
 	}
-	return time.Now()
+	if c.Clock != nil {
+		return c.Clock
+	}
+	return hostClock{processStart}
+}
+
+// Now returns the guest wall clock (CLOCK_REALTIME semantics).
+func (c *Context) Now() time.Time { return c.clock().Now() }
+
+// SinceBoot returns the guest monotonic clock (time since boot).
+func (c *Context) SinceBoot() time.Duration {
+	cl := c.clock()
+	if d := cl.Now().Sub(cl.BootTime()); d > 0 {
+		return d
+	}
+	return 0
 }
 
 func sysClockGettime(c *Context, a [6]uint64) int64 {
-	now := c.nowTime()
+	var sec, nsec int64
+	switch a[0] {
+	case clockMonotonic, clockMonotonicRaw, clockMonotonicCoarse, clockBoottime:
+		d := c.SinceBoot()
+		sec, nsec = int64(d/time.Second), int64(d%time.Second)
+	default:
+		// CLOCK_REALTIME (+COARSE) and any clockid we don't model: wall time,
+		// matching the pre-clockid behavior for the unhandled ids.
+		now := c.Now()
+		sec, nsec = now.Unix(), int64(now.Nanosecond())
+	}
 	var b [16]byte
-	binary.LittleEndian.PutUint64(b[0:], uint64(now.Unix()))
-	binary.LittleEndian.PutUint64(b[8:], uint64(now.Nanosecond()))
+	binary.LittleEndian.PutUint64(b[0:], uint64(sec))
+	binary.LittleEndian.PutUint64(b[8:], uint64(nsec))
 	c.B.MemWrite(a[1], b[:])
 	return 0
 }
 
 func sysGettimeofday(c *Context, a [6]uint64) int64 {
-	now := c.nowTime()
+	now := c.Now()
 	var b [16]byte
 	binary.LittleEndian.PutUint64(b[0:], uint64(now.Unix()))
 	binary.LittleEndian.PutUint64(b[8:], uint64(now.Nanosecond()/1000)) // usec
@@ -731,12 +797,13 @@ func sysUname(c *Context, a [6]uint64) int64 {
 	return 0
 }
 
-// sysSysinfo fills a plausible `struct sysinfo` (LP64 layout) — enough RAM/uptime
-// for libc heuristics; not real host stats.
+// sysSysinfo fills a plausible `struct sysinfo` (LP64 layout) — enough RAM for
+// libc heuristics; uptime comes from the guest clock so it agrees with
+// clock_gettime(CLOCK_BOOTTIME) (0 in pinned-Epoch mode).
 func sysSysinfo(c *Context, a [6]uint64) int64 {
 	var st [128]byte
 	put := func(off int, v uint64) { binary.LittleEndian.PutUint64(st[off:], v) }
-	put(0, 1000)                               // uptime (s)
+	put(0, uint64(c.SinceBoot()/time.Second))  // uptime (s)
 	put(32, 4*1024*1024*1024)                  // totalram
 	put(40, 2*1024*1024*1024)                  // freeram
 	binary.LittleEndian.PutUint16(st[80:], 64) // procs

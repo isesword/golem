@@ -17,12 +17,14 @@ import (
 	"encoding/binary"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/isesword/golem/dvm"
 	"github.com/isesword/golem/internal/emu"
 	"github.com/isesword/golem/internal/kernel"
 	"github.com/isesword/golem/internal/loader"
 	"github.com/isesword/golem/internal/memory"
+	"github.com/isesword/golem/internal/profile"
 	"github.com/isesword/golem/internal/vfs"
 )
 
@@ -100,6 +102,16 @@ type AndroidConfig struct {
 	// PropertyProvider, if set, answers the loaded .so's __system_property_get(key)
 	// calls: return (value, true) to supply a value, or ("", false) for "unset".
 	PropertyProvider func(key string) (string, bool)
+	// Profile, if non-nil, installs a deterministic device-liveness model:
+	// the kernel clock's monotonic origin becomes the persona's boot time (so
+	// uptime/elapsedRealtime report a device that has been up for days), the
+	// battery sysfs files follow a plausible charge/discharge rhythm, and the
+	// JNI time getters (System.currentTimeMillis/nanoTime,
+	// SystemClock.elapsedRealtime/uptimeMillis) derive uptime from the same
+	// virtual clock — the cross-check consistency risk-control probes look for.
+	// nil = previous behavior (host clock, no battery files). Config.Epoch still
+	// takes precedence when both are set (deterministic signing mode).
+	Profile *profile.Profile
 }
 
 const defaultPid = 28859
@@ -301,11 +313,14 @@ func New(cfg Config) (e *Emulator, err error) {
 		e.fs.SetFallback(cfg.FileResolver)
 	}
 	e.classMeta = e.vm.ResolveClass("java/lang/Class")
-	if cfg.Android.JNI != nil {
-		e.vm.SetJni(cfg.Android.JNI)
-	} else {
-		e.vm.SetJni(dvm.AbstractJni{})
+	jni := cfg.Android.JNI
+	if jni == nil {
+		jni = dvm.AbstractJni{}
 	}
+	// The four JNI time getters are always modeled from the kernel clock (see
+	// clockJni) — returning 0 for currentTimeMillis is a louder emulator tell
+	// than answering them, and Epoch mode keeps them deterministic.
+	e.vm.SetJni(&clockJni{Jni: jni, e: e, prof: cfg.Android.Profile})
 	if cfg.Android.DexPath != "" {
 		nc, derr := e.vm.LoadDexFile(cfg.Android.DexPath)
 		if derr != nil {
@@ -328,6 +343,14 @@ func New(cfg Config) (e *Emulator, err error) {
 		}
 	} // libc functions we implement in Go (need no libc init)
 	e.kctx = &kernel.Context{B: be, Mem: e.mem, VFS: e.fs, Pid: pid, Verbose: cfg.Verbose, Epoch: cfg.Epoch}
+	// A device profile anchors the monotonic clock at the persona's boot time
+	// and serves live battery sysfs. Epoch keeps winning (kernel.clock checks
+	// it first), so deterministic signing runs are unaffected.
+	if cfg.Android.Profile != nil {
+		e.kctx.Clock = profileClock{prof: cfg.Android.Profile}
+		prof := cfg.Android.Profile
+		e.fs.MountBattery(func() (int, bool) { return prof.Battery(time.Now()) })
+	}
 
 	// Reserve fixed regions.
 	if err := be.MemMap(stubBase, stubSize, emu.ProtAll); err != nil {
