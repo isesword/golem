@@ -21,22 +21,11 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/isesword/golem/emulator"
 	"github.com/isesword/golem/internal/emu"
 )
-
-func peakRSS() uint64 {
-	var ru syscall.Rusage
-	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &ru)
-	rss := uint64(ru.Maxrss)
-	if runtime.GOOS == "linux" {
-		rss *= 1024
-	}
-	return rss
-}
 
 func main() {
 	so := flag.String("so", "examples/native/native.so", "guest .so to load per engine")
