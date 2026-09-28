@@ -103,49 +103,34 @@ jobs:
           path: export-list.txt
 
   # ------------------------------------------------------------------
-  # The decisive job: golem's engine suite, running for real on Windows
-  # against the VEH-off unicorn.dll built in job 1 (same runner shape).
-  # CGO_ENABLED=0 + -tags unicorn + GOLEM_UNICORN pointing at the DLL.
+  # engine-windows: run golem's engine suite for real on Windows against
+  # the VEH-off DLL. Each job runs on a FRESH runner — the DLL must be
+  # passed via artifacts, and tests locate it through GOLEM_UNICORN
+  # (absolute path; relative candidates would resolve against each test
+  # package's working directory).
   # ------------------------------------------------------------------
   engine-windows:
+    needs: build-unicorn-dll
     runs-on: windows-2022
     env:
       CGO_ENABLED: "0"
-      UNICORN_REF: dev
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Cache unicorn source
-        id: cache
-        uses: actions/cache@v4
+      - name: Download the VEH-off unicorn.dll
+        uses: actions/download-artifact@v4
         with:
-          path: unicorn-src
-          key: unicorn-src-${{ env.UNICORN_REF }}
+          name: unicorn-dll-veh-off
+          path: unicorn-dll # lands as unicorn-dll/unicorn.dll
 
-      - name: Checkout unicorn dev
-        if: steps.cache.outputs.cache-hit != 'true'
+      - name: Expose the absolute DLL path to the tests
         run: |
-          git clone --depth 1 --branch ${{ env.UNICORN_REF }} `
-            https://github.com/unicorn-engine/unicorn.git unicorn-src
-
-      - name: Build unicorn.dll (VEH compiled out)
-        run: |
-          cmake -S unicorn-src -B build `
-            -A x64 `
-            -DWIN32_ENABLE_VEH=OFF `
-            -DUNICORN_ARCH="arm64;aarch64" `
-            -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --config Release --parallel
-
-      - name: Place the DLL where dlopenUnicorn looks (assets copy)
-        run: |
-          $dll = Get-ChildItem -Recurse -Filter unicorn.dll | Select-Object -First 1
-          New-Item -ItemType Directory -Force -Path "assets\windows\amd64" | Out-Null
-          Copy-Item $dll.FullName "assets\windows\amd64\unicorn.dll"
-          echo "placed: assets\windows\amd64\unicorn.dll"
+          $dll = (Get-ChildItem -Recurse -Filter unicorn.dll | Select-Object -First 1).FullName
+          echo "GOLEM_UNICORN=$dll" >> $env:GITHUB_ENV
+          echo "DLL: $dll"
 
       - name: Engine tests on Windows (fakebe contract + full suite)
         run: go test -tags unicorn ./... -v
