@@ -36,17 +36,28 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Resolve unicorn ref to commit SHA
+        id: ref
+        run: |
+          # Pin the cache key to the actual commit: caching under a mutable
+          # branch name kept serving a stale unicorn-src after the branch
+          # advanced (the exact bug that hid the arm64 fix for three runs).
+          $line = git ls-remote ${{ env.UNICORN_REPO }} ${{ env.UNICORN_REF }}
+          $sha = $line.Split("`t")[0]
+          echo "sha=$sha" >> $env:GITHUB_OUTPUT
+          echo "unicorn commit: $sha"
       - name: Cache unicorn source
         id: cache
         uses: actions/cache@v4
         with:
           path: unicorn-src
-          key: unicorn-src-${{ env.UNICORN_REF }}
+          key: unicorn-src-${{ steps.ref.outputs.sha }}
 
-      - name: Checkout golem/win-veh-off
+      - name: Checkout unicorn at resolved commit
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          git clone -b ${{ env.UNICORN_REF }} ${{ env.UNICORN_REPO }} unicorn-src
+          git clone ${{ env.UNICORN_REPO }} unicorn-src
+          git -C unicorn-src checkout ${{ steps.ref.outputs.sha }}
 
       - name: Configure (VEH compiled out)
         run: |
@@ -69,7 +80,7 @@ jobs:
       - name: Build provenance
         run: |
           $prov = @(
-            "unicorn commit : ${{ env.UNICORN_REF }}",
+            "unicorn commit : $(git -C unicorn-src rev-parse HEAD) [golem/win-veh-off]",
             "target arch    : ${{ matrix.arch }}",
             "cmake          : -A ${{ matrix.cmake_arch }} -DWIN32_ENABLE_VEH=OFF -DUNICORN_ARCH=arm64;aarch64 -DCMAKE_BUILD_TYPE=Release",
             "built           : $(Get-Date -AsUTC -Format 'yyyy-MM-ddTHH:mm:ssZ')"
