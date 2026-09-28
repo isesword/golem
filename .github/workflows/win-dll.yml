@@ -57,7 +57,44 @@ jobs:
       - name: Smoke — the DLL must export uc_open and uc_ctl
         run: |
           $dll = "${{ steps.locate.outputs.dll }}"
-          $exports = dumpbin -exports $dll 2>$null | Select-String "uc_open|uc_ctl"
-          if (-not $exports) { throw "uc_open/uc_ctl not exported" }
-          echo "exports OK:"
-          $exports
+          # Parse the PE export table with .NET — no dumpbin (MSVC optional
+          # component, not on the runner PATH) needed.
+          $bytes = [IO.File]::ReadAllBytes($dll)
+          $peOff = [BitConverter]::ToInt32($bytes, 0x3C)
+          $optOff = $peOff + 24
+          $magic = [BitConverter]::ToUInt16($bytes, $optOff)
+          if ($magic -eq 0x20B) { $dataDirOff = $optOff + 112 } else { $dataDirOff = $optOff + 96 }
+          $expRva = [BitConverter]::ToUInt32($bytes, $dataDirOff)
+          if ($expRva -eq 0) { throw "DLL has no export table" }
+          # RVA->file offset via the first section header
+          $numSec = [BitConverter]::ToUInt16($bytes, $peOff + 6)
+          $secOff = $optOff + [BitConverter]::ToUInt16($bytes, $peOff + 20)
+          function RvaToOff($rva) {
+            for ($i = 0; $i -lt $numSec; $i++) {
+              $s = $secOff + $i * 40
+              $va = [BitConverter]::ToUInt32($bytes, $s + 12)
+              $sz = [BitConverter]::ToUInt32($bytes, $s + 8)
+              $raw = [BitConverter]::ToUInt32($bytes, $s + 20)
+              if ($rva -ge $va -and $rva -lt $va + $sz) { return $raw + ($rva - $va) }
+            }
+            throw "RVA $rva not in any section"
+          }
+          $namesRva = [BitConverter]::ToUInt32($bytes, (RvaToOff $expRva) + 32)
+          $namesCnt = [BitConverter]::ToUInt32($bytes, (RvaToOff $expRva) + 24)
+          $names = @()
+          for ($i = 0; $i -lt $namesCnt; $i++) {
+            $p = RvaToOff ([BitConverter]::ToUInt32($bytes, (RvaToOff $namesRva) + $i * 4))
+            $end = $p; while ($bytes[$end] -ne 0) { $end++ }
+            $names += [Text.Encoding]::ASCII.GetString($bytes, $p, $end - $p)
+          }
+          $need = @("uc_open", "uc_ctl")
+          foreach ($n in $need) {
+            if ($names -notcontains $n) { throw "export $n missing (have $($names -join ', '))" }
+          }
+          echo "exports OK: $($names -join ', ')"
+          $names | Out-File -Encoding ascii export-list.txt
+      - name: Upload export list
+        uses: actions/upload-artifact@v4
+        with:
+          name: export-list
+          path: export-list.txt
