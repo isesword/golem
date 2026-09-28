@@ -60,7 +60,7 @@ jobs:
           cd unicorn-src
           curl -L https://github.com/unicorn-engine/unicorn/pull/2286.diff -o woarm64.patch
           git apply woarm64.patch
-          echo "PR #2286 applied
+          echo "PR #2286 applied"
 
       - name: Configure (VEH compiled out)
         run: |
