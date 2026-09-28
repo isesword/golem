@@ -16,5 +16,11 @@ func allocTestSharedBuffer(size int) ([]byte, error) {
 	if err != nil || p == 0 {
 		return nil, err
 	}
-	return unsafe.Slice((*byte)(unsafe.Pointer(p)), size), nil
+	return unsafe.Slice((*byte)(osTestPointer(p)), size), nil
 }
+
+// osTestPointer: see loader.alloc_windows.go osPointer — same OS-address
+// re-typing rationale, duplicated here because the packages are separate.
+//
+//go:noinline
+func osTestPointer(u uintptr) unsafe.Pointer { return *(*unsafe.Pointer)(unsafe.Pointer(&u)) }
