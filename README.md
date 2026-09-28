@@ -42,7 +42,7 @@ unidbg 是这个领域的事实标准,但它跑在 JVM 上,依赖偏重,且它�
 - 单指令 trace;以及完整指令流 trace(`TraceInsns`:每条指令的偏移 + 指令码 + 寄存器增量 + 调用/系统调用注解,Tenet 风格,可与真机 trace 对比;Unicorn)。
 - 引擎可选:`-tags unicorn` 编入 purego 后端,运行期用 `-engine` / `$GOLEM_ENGINE` 选择。
 - **JNI 引用生命周期按规范实现**:local ref 住在池化的调用帧里(随调用消亡,宿主读返回值有一拍宽限)、global ref 显式且句柄值稳定、句柄单调永不复用(陈旧句柄解析为 nil,绝不静默别名)。稳态内存 O(单次调用的对象数),长跑不涨。
-- **引擎池(`emulator.Pool`)**:actor 模式——一个引擎同一时刻归一个 goroutine,并发靠堆引擎数而非锁;按 MaxUses 自动回收、panic 自动重建、池耗尽时 ctx deadline 生效。
+- **引擎池(`emulator.Pool`)**:actor 模式——一个引擎同一时刻归一个 goroutine,并发靠堆引擎数而非锁;按 MaxUses 自动回收、panic 自动重建、池耗尽时 ctx deadline 生效。这是 golem 并发故事的核心:**guest 内部多线程**是引擎内的协作式调度,而 **N 个 goroutine 的并发请求**由 N 个引擎真并行承载(单核约 70 QPS,实测 12 核机 ~510 QPS)。
 - **编译/实例化分离**:每个 `.so` 只解析一次(`loader.CompileOnce`),只读段经 `uc_mem_map_ptr` 零拷贝共享——N 个引擎的只读页在物理内存里只有一份(10 引擎实测 maxRSS -20%);宿主打补丁前自动私有化,绝不污染其他引擎。
 - **错误语义**:分配返回 error(底层映射失败自动回滚地址空间簿记)、`ReplaceE` 五步事务(失败恢复原指令)、不可验证的状态迁移触发 poison 并拒绝后续调用。
 
@@ -184,7 +184,7 @@ golem 的精神前身是 [unidbg](https://github.com/zhkl0228/unidbg)——加�
 - ARM32 / x86(目前仅 AArch64);iOS / Mach-O 在路线图上。
 - 完整 syscall 表与全部 ~232 个 JNI 槽位(覆盖常见用法,未实现返回 ENOSYS)。
 - DEX 字节码执行(仅元数据级:类/方法/字段签名供解析;Java 行为用 `dvm.Jni` 建模)。
-- 真并发 guest 线程(现有协作式调度器:`pthread_create` 建 fiber、按时间片切换、futex/sleep 处保存恢复 CPU 上下文)。
+- guest 内部的**真并行**线程:guest 的 `pthread_create` 线程由协作式调度器承载(fiber + 独立栈,按系统调用数时间片轮转,futex/sleep 处保存恢复 CPU 上下文)——功能上与 unidbg 的线程调度同级;真正的多核并行未做(单一 CPU 后端天然串行)。**跨引擎的宿主级并发不受影响**:多 goroutine 经 `emulator.Pool` 各持独立引擎真并行,这是吞吐并发的正确姿势(见「引擎池」特性)。
 
 ## 从源码构建 / 引擎
 

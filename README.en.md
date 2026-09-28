@@ -42,7 +42,7 @@ unidbg is the de-facto tool for emulating Android native libraries, but it runs 
 - Per-instruction trace, plus a full instruction-stream trace (`TraceInsns`: per-instruction offset + opcode + register deltas + call/syscall annotations, Tenet-style, diffable against a real-device trace; Unicorn).
 - Selectable engine: build with `-tags unicorn` to compile in the purego backend, choose at runtime with `-engine` / `$GOLEM_ENGINE`.
 - **JNI reference lifecycle per spec**: local refs live in pooled call frames (die with the call; one-beat grace for return-value reads), global refs are explicit with stable handle values, handles are monotonic and never reused (stale handles resolve to nil, never alias). Steady-state memory is O(one call's objects) — flat under sustained load.
-- **Engine pool (`emulator.Pool`)**: the actor pattern — one engine belongs to one goroutine at a time; concurrency scales by engine count, not locks. Auto-recycling at MaxUses, transparent rebuild after worker panics, ctx deadlines when drained.
+- **Engine pool (`emulator.Pool`)**: the actor pattern — one engine belongs to one goroutine at a time; concurrency scales by engine count, not locks. Auto-recycling at MaxUses, transparent rebuild after worker panics, ctx deadlines when drained. This is the core of golem's concurrency story: **intra-guest threads** are the engine's cooperative scheduler, while **N concurrent goroutines** get N engines running truly in parallel (~70 QPS per core measured).
 - **Compile/instantiate split**: each `.so` is parsed once (`loader.CompileOnce`) and its read-only segments are shared zero-copy across engines via `uc_mem_map_ptr` — one physical copy no matter the pool size (measured -20% maxRSS at 10 engines). Host patches privatize pages first and never corrupt other engines.
 - **Honest failure semantics**: allocations return errors (failed backend maps roll back the address-space bookkeeping), `ReplaceE` is a five-step transaction (restores original instructions on failure), and unverifiable state transitions POISON the emulator — later calls are rejected instead of pretending to be healthy.
 
@@ -180,7 +180,7 @@ golem's spiritual predecessor is [unidbg](https://github.com/zhkl0228/unidbg) �
 - ARM32 / x86 (AArch64 only today); iOS / Mach-O is on the roadmap.
 - The full syscall table and all ~232 JNI slots (common usage is covered; unimplemented syscalls return ENOSYS).
 - DEX bytecode execution (metadata only: class/method/field signatures for resolution; model Java behavior with `dvm.Jni`).
-- Truly concurrent guest threads (there is a cooperative scheduler: `pthread_create` spawns fibers, time-sliced, CPU context saved/restored at futex/sleep).
+- True intra-guest parallelism: guest `pthread_create` threads run on a cooperative scheduler (fiber + private stack, time-sliced by syscall count, CPU context saved/restored at futex/sleep) — functionally on par with unidbg's thread dispatch; genuine multi-core parallelism inside one engine is not implemented (a single CPU backend is inherently serial). **Host-level concurrency is unaffected**: multiple goroutines each drive an independent engine through `emulator.Pool` and run truly in parallel — that is the intended concurrency story (about 70 QPS per core; measured ~510 QPS on a 12-core machine).
 
 ## Building from source / engines
 
