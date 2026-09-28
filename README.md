@@ -184,7 +184,11 @@ golem 的精神前身是 [unidbg](https://github.com/zhkl0228/unidbg)——加�
 - ARM32 / x86(目前仅 AArch64);iOS / Mach-O 在路线图上。
 - 完整 syscall 表与全部 ~232 个 JNI 槽位(覆盖常见用法,未实现返回 ENOSYS)。
 - DEX 字节码执行(仅元数据级:类/方法/字段签名供解析;Java 行为用 `dvm.Jni` 建模)。
-- guest 内部的**真并行**线程:guest 的 `pthread_create` 线程由协作式调度器承载(fiber + 独立栈,按系统调用数时间片轮转,futex/sleep 处保存恢复 CPU 上下文)——功能上与 unidbg 的线程调度同级;真正的多核并行未做(单一 CPU 后端天然串行)。**跨引擎的宿主级并发不受影响**:多 goroutine 经 `emulator.Pool` 各持独立引擎真并行,这是吞吐并发的正确姿势(见「引擎池」特性)。
+
+**并发模型(两边各说一句,免得误读):**
+
+- golem 与 unidbg 的 guest 线程都是**协作式调度**:`pthread_create` 的线程作为 fiber 承载(独立栈、按系统调用数时间片轮转、futex/sleep 处保存恢复 CPU 上下文)——功能同级,均非引擎内多核并行(单 CPU 后端天然串行)。
+- golem 的**吞吐并发**靠引擎层:`emulator.Pool` 让 N 个 goroutine 各持独立引擎真并行(~70 QPS/核,12 核实测 ~510 QPS)——这是并发请求的正确姿势,也是 golem 相对 unidbg 的结构性优势。
 
 ## 从源码构建 / 引擎
 

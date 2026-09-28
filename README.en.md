@@ -180,7 +180,11 @@ golem's spiritual predecessor is [unidbg](https://github.com/zhkl0228/unidbg) �
 - ARM32 / x86 (AArch64 only today); iOS / Mach-O is on the roadmap.
 - The full syscall table and all ~232 JNI slots (common usage is covered; unimplemented syscalls return ENOSYS).
 - DEX bytecode execution (metadata only: class/method/field signatures for resolution; model Java behavior with `dvm.Jni`).
-- True intra-guest parallelism: guest `pthread_create` threads run on a cooperative scheduler (fiber + private stack, time-sliced by syscall count, CPU context saved/restored at futex/sleep) — functionally on par with unidbg's thread dispatch; genuine multi-core parallelism inside one engine is not implemented (a single CPU backend is inherently serial). **Host-level concurrency is unaffected**: multiple goroutines each drive an independent engine through `emulator.Pool` and run truly in parallel — that is the intended concurrency story (about 70 QPS per core; measured ~510 QPS on a 12-core machine).
+
+**Concurrency model (stated for both, to avoid misreading):**
+
+- golem and unidbg both schedule guest threads **cooperatively**: `pthread_create` threads run as fibers (private stack, time-sliced by syscall count, CPU context saved/restored at futex/sleep) — functionally equivalent, and neither gives multi-core parallelism inside one engine (a single CPU backend is inherently serial).
+- golem's **throughput concurrency** lives at the engine level: `emulator.Pool` lets N goroutines drive N independent engines truly in parallel (~70 QPS per core; measured ~510 QPS on 12 cores) — the right shape for concurrent requests, and a structural advantage over unidbg.
 
 ## Building from source / engines
 
