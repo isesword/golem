@@ -18,6 +18,7 @@ on:
     branches: [dev-win]
 
 env:
+  GO_VERSION: "1.26"
   # Source = OUR fork's golem/win-veh-off branch: unicorn 938efd1 (dev) +
   # PR #2286 (Windows ARM64 support, musl setjmp/longjmp). The branch is
   # the version lock — bump it only by re-running the golem suite.
