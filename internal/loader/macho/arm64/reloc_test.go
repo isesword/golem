@@ -18,7 +18,7 @@ import (
 	_ "github.com/isesword/golem/internal/loader/macho/arm64" // the relocator under test
 )
 
-const fixture = "../../../examples/native/hello_darwin_arm64.dylib"
+const fixture = "../../../../examples/native/hello_darwin_arm64.dylib"
 const testBase = 0x40000000
 
 // memBE is an in-memory emu.Backend (sparse pages + MemMapPtr aliases) for

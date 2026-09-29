@@ -30,7 +30,13 @@ type Plan struct {
 	Relocs []RelocOp
 
 	img    *Image   // symbol table for per-engine resolution; keeps raw alive
-	shared [][]byte // backing buffers for shareable maps (keeps them alive)
+	shared [][]byte // backing buffers for shareable maps (keeps them alive) —
+	// PARALLEL to Maps (nil for non-shareable entries): apply/SharedBuffer
+	// index it by Maps index. It used to be compacted (shareable entries
+	// only), which panicked the moment a shareable map followed a
+	// non-shareable one — ELF images happened to order text before data, so
+	// the mis-indexing stayed latent until Mach-O's __LINKEDIT (read-only,
+	// shareable) followed __DATA (writable) in P5b.
 }
 
 // MapOp is one segment mapping.
@@ -184,9 +190,12 @@ func (img *Image) Plan() (*Plan, error) {
 			}
 			copy(buf, m.Content)
 			m.Content = buf
+			p.Maps = append(p.Maps, m)
 			p.shared = append(p.shared, buf)
+		} else {
+			p.Maps = append(p.Maps, m)
+			p.shared = append(p.shared, nil) // parallel to Maps (see Plan.shared)
 		}
-		p.Maps = append(p.Maps, m)
 	}
 	for _, r := range img.Relocs {
 		p.Relocs = append(p.Relocs, RelocOp{Target: r.Offset, Type: r.Type, SymIdx: r.Sym, Addend: r.Addend})
@@ -203,7 +212,7 @@ func (p *Plan) SharedBuffer(i int) (unsafe.Pointer, uint64, error) {
 	if i < 0 || i >= len(p.Maps) || !p.Maps[i].Shareable {
 		return nil, 0, fmt.Errorf("loader: map %d is not shareable", i)
 	}
-	if i < len(p.shared) {
+	if i < len(p.shared) && p.shared[i] != nil {
 		buf := p.shared[i]
 		return unsafe.Pointer(&buf[0]), uint64(len(buf)), nil
 	}
