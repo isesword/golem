@@ -17,6 +17,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/isesword/golem/dvm"
@@ -180,10 +181,18 @@ type Emulator struct {
 	spReg   emu.Reg    // arch.SP()
 
 	modules []*Module
-	main    *Module           // the Config.SOPath module, if any
-	syms    map[string]uint64 // global export table
-	aForm   bool              // 当前 JNI 调用为 Call*MethodA（jvalue 数组）形式
-	scCount int               // syscalls in current CallFunc (runaway guard)
+	main    *Module // the Config.SOPath module, if any
+	aForm   bool    // 当前 JNI 调用为 Call*MethodA（jvalue 数组）形式
+	scCount int     // syscalls in current CallFunc (runaway guard)
+
+	// P3.5 (DESIGN.md §3.3): symbol resolution is a first-class loader
+	// component. dl owns the module graph + global symbol scope; resolver is
+	// the boot chain — host replacement symbols (InterposeTable via
+	// interpose.HostResolver) → global guest exports (dl.GlobalResolver) →
+	// unresolved fallback stub (interpose.UnresolvedStubResolver) — the exact
+	// historical resolveSymbol order, expressed as a resolver chain.
+	dl       *loader.DynamicLinker
+	resolver loader.SymbolResolver
 
 	jniEnv       uint64         // guest JNIEnv* (points to a stub function table)
 	javaVM       uint64         // guest JavaVM*
@@ -202,9 +211,11 @@ type Emulator struct {
 	pinGen       uint64                 // bumped per host-initiated native call
 	pendingExc   bool                   // a pending JNI exception (Throw/ThrowNew)
 
-	hostByName map[string]hostFn // libc funcs we implement in Go (override bionic)
-	hostImpl   map[uint64]hostFn // svc addr -> host impl
-	atRandom   uint64            // guest ptr to 16 "random" bytes (AT_RANDOM)
+	// Host functions (Go libc implementations + ReplaceFns import overrides)
+	// are bound by NAME in the InterposeTable since P3.5 (itab.BindSymbol →
+	// HostResolver materializes their stubs at link time; the trap path
+	// re-discovers them via the stub descriptor name → LookupSymbol).
+	atRandom uint64 // guest ptr to 16 "random" bytes (AT_RANDOM)
 
 	// cooperative scheduler state (see scheduler.go)
 	fibers      []*fiber // pthread_create'd threads
@@ -311,12 +322,10 @@ func New(cfg Config) (e *Emulator, err error) {
 		callABI:     callABI,
 		layout:      legacyARM64Layout,
 		as:          memory.NewAddressSpace(legacyARM64Layout),
+		dl:          loader.NewDynamicLinker(),
 		mem:         memory.NewSpace(),
 		vm:          dvm.NewVM(),
 		fs:          vfs.New(cfg.AssetRoot, pid, cfg.ProcessName),
-		syms:        map[string]uint64{},
-		hostByName:  map[string]hostFn{},
-		hostImpl:    map[uint64]hostFn{},
 		jniDispatch: map[uint64]int{},
 		classRefs:   map[string]dvm.Ref{},
 		shared:      []sharedRange{},
@@ -330,6 +339,15 @@ func New(cfg Config) (e *Emulator, err error) {
 	// AddressSpace's stub region and encodes them with the StubEncoder.
 	e.stubMgr = interpose.NewStubManager(e.as, stubEnc, be)
 	e.itab = interpose.NewInterposeTable()
+	// P3.5: the boot symbol-resolution chain — host replacement symbols
+	// (InterposeTable via the HostResolver adapter) → global guest exports
+	// (DynamicLinker scope) → unresolved fallback stub. The historical
+	// resolveSymbol order, as composable loader.SymbolResolvers.
+	e.resolver = loader.ChainResolvers(
+		interpose.NewHostResolver(e.itab, e.stubMgr),
+		e.dl.GlobalResolver(),
+		interpose.NewUnresolvedStubResolver(e.stubMgr),
+	)
 	e.cacheRoleRegs()
 	// On any construction failure the half-booted engine must be torn down:
 	// it already holds unicorn mappings, and repeated failed New calls would
@@ -370,14 +388,16 @@ func New(cfg Config) (e *Emulator, err error) {
 	registerHostFns(e)
 	for name, fn := range cfg.Android.ReplaceFns {
 		f := fn
-		if addr, ok := e.syms[name]; ok {
-			e.Replace(addr, f)
-		} else {
-			e.hostByName[name] = e.guardHostFn(func(em *Emulator, b emu.Backend) {
-				ret := f(&Hook{em})
-				_ = b.RegWrite(em.retReg, ret)
-			})
-		}
+		// Import-override path (P3.5): bind by NAME in the InterposeTable —
+		// the HostResolver then binds every unresolved import of that name to
+		// a host stub at link time. (The pre-boot e.syms branch of the old
+		// first pass was dead: no module is loaded yet, so no export can
+		// exist. Exported-symbol replacement happens in the post-boot second
+		// pass below, via ReplaceE.)
+		e.bindHostFn(name, e.guardHostFn(func(em *Emulator, b emu.Backend) {
+			ret := f(&Hook{em})
+			_ = b.RegWrite(em.retReg, ret)
+		}))
 	} // libc functions we implement in Go (need no libc init)
 	e.kctx = &kernel.Context{
 		B: be, Mem: e.mem, VFS: e.fs, Pid: pid, Verbose: cfg.Verbose, Epoch: cfg.Epoch,
@@ -479,12 +499,13 @@ func New(cfg Config) (e *Emulator, err error) {
 		return nil, err // cleanup via the deferred Close above
 	}
 	// ReplaceFns second pass: exports of the freshly loaded modules are only
-	// in e.syms now. Names bound as import overrides during linking are not
-	// in e.syms (they resolved to stubs) and are naturally skipped; exported
-	// symbols get an interposition entry hook (P2.5d).
+	// in the DynamicLinker's global scope now. Names bound as import overrides
+	// during linking are not in the scope (they resolved to stubs) and are
+	// naturally skipped; exported symbols get an interposition entry hook
+	// (P2.5d).
 	for name, fn := range cfg.Android.ReplaceFns {
-		if addr, ok := e.syms[name]; ok {
-			if err := e.ReplaceE(addr, fn); err != nil {
+		if addr, ok := e.dl.LookupGlobal(name); ok {
+			if err := e.ReplaceE(uint64(addr), fn); err != nil {
 				return nil, fmt.Errorf("ReplaceFns %s: %w", name, err)
 			}
 		}
@@ -570,14 +591,12 @@ func (e *Emulator) LoadModule(path, name string) (*Module, error) {
 	if err != nil {
 		return nil, fmt.Errorf("plan %s: %w", name, err)
 	}
-	if err := e.applyPlan(plan, base, e.resolveSymbol); err != nil {
+	if err := e.applyPlan(plan, base, e.resolver); err != nil {
 		return nil, fmt.Errorf("link %s: %w", name, err)
 	}
-	for n, off := range img.Exports {
-		if _, exists := e.syms[n]; !exists {
-			e.syms[n] = base + off
-		}
-	}
+	// Record the module in the linker's module graph; its exports fold into
+	// the global scope first-wins (the historical e.syms semantics).
+	e.dl.AddModule(name, img, base)
 	m := &Module{Name: name, Base: base, Img: img}
 	e.modules = append(e.modules, m)
 	if e.cfg.Verbose {
@@ -586,17 +605,17 @@ func (e *Emulator) LoadModule(path, name string) (*Module, error) {
 	return m, nil
 }
 
-// resolveSymbol satisfies loader.Resolver: global export, else a svc stub.
-func (e *Emulator) resolveSymbol(name string) (uint64, bool) {
-	if fn, ok := e.hostByName[name]; ok { // Go override for libc funcs needing init
-		a := e.makeStub("host:"+name, arch.StubHostCall)
-		e.hostImpl[a] = fn
-		return a, true
-	}
-	if a, ok := e.syms[name]; ok {
-		return a, true
-	}
-	return e.makeStub(name, arch.StubUnresolved), true
+// bindHostFn binds a Go-implemented function (libc override or ReplaceFns
+// import override) by symbol name in the InterposeTable (P3.5): the
+// HostResolver materializes one guest stub per name at link time, and the
+// trap path dispatches back here via the stub descriptor. The hostFn keeps
+// its historical contract — it writes the result register itself; the
+// HostFunc return value is ignored on the trap path.
+func (e *Emulator) bindHostFn(name string, fn hostFn) {
+	e.itab.BindSymbol(name, interpose.HostFunc(func(ctx interpose.CallContext) uint64 {
+		fn(e, e.be)
+		return 0
+	}))
 }
 
 // makeStub emits a trampoline at a fresh stub address through the StubManager
@@ -664,7 +683,10 @@ func (e *Emulator) JNIEnv() uint64 {
 }
 
 // Sym returns a resolved global symbol address.
-func (e *Emulator) Sym(name string) (uint64, bool) { a, ok := e.syms[name]; return a, ok }
+func (e *Emulator) Sym(name string) (uint64, bool) {
+	a, ok := e.dl.LookupGlobal(name)
+	return uint64(a), ok
+}
 
 // onInterrupt handles SVC: a stub call (unresolved import) or a real syscall.
 func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
@@ -680,9 +702,18 @@ func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
 		e.handleJNI(idx, b)
 		return
 	}
-	if fn, ok := e.hostImpl[svc]; ok { // Go-implemented libc function
-		fn(e, b)
-		return
+	// Go-implemented libc function / ReplaceFns import override (P3.5): the
+	// stub was materialized by the HostResolver under the name
+	// "host:<symbol>"; recover the bound HostFunc from the InterposeTable.
+	// The hostFn contract is self-written result register, so the HostFunc's
+	// return value is intentionally ignored here.
+	if desc, ok := e.stubMgr.Lookup(emu.GuestAddr(svc)); ok && desc.Kind == arch.StubHostCall {
+		if name, cut := strings.CutPrefix(desc.Name, "host:"); cut {
+			if hf, ok := e.itab.LookupSymbol(name); ok {
+				hf(&Hook{e})
+				return
+			}
+		}
 	}
 	// Unresolved-import placeholder / unbound trampoline: count the hit by
 	// name (the pre-P2.5d stubHits semantics) and return an optimistic 0.

@@ -123,7 +123,10 @@ func TestLinkerAppliesRealSo(t *testing.T) {
 	be := newMemBE()
 	const base = uint64(0x12340000)
 	stub := uint64(0xee0000)
-	resolve := func(name string) (uint64, bool) { stub += 0x10; return stub, true }
+	resolve := loader.ResolverFunc(func(req loader.ResolveRequest) (loader.ResolvedSymbol, error) {
+		stub += 0x10
+		return loader.ResolvedSymbol{Addr: emu.GuestAddr(stub), Kind: loader.SymbolUnresolvedStub}, nil
+	})
 	if err := img.Apply(be, base, resolve); err != nil {
 		t.Fatal(err)
 	}

@@ -71,3 +71,14 @@ type ContextManager interface {
 type CacheInvalidator interface {
 	FlushCache() error
 }
+
+// CodeCacheController is the execution-hook companion contract (P3.5,
+// DESIGN.md §3.1): after installing a NEW execution hook over [start, end),
+// already-translated blocks may not contain the hook callout (unicorn
+// instruments hooks at TB translation time), so the interpose/stub layer
+// must invalidate the affected range through this capability instead of
+// knowing the concrete backend. Implementations without a ranged invalidate
+// may flush their whole cache internally (unicorn does — see its doc).
+type CodeCacheController interface {
+	FlushCodeCache(start, end GuestAddr) error
+}

@@ -103,6 +103,7 @@ func Parse(path string) (*loader.Image, error) {
 			img.Syms = append(img.Syms, loader.Sym{
 				Name: s.Name, Value: s.Value, Size: s.Size, Undef: undef,
 				Bind: debugelf.ST_BIND(s.Info), Type: debugelf.ST_TYPE(s.Info),
+				Visibility: loader.SymbolVisibility(s.Other & 0x3), // ST_VISIBILITY
 			})
 			if undef {
 				if s.Name != "" {

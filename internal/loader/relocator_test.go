@@ -9,7 +9,7 @@ import (
 
 type fakeRelocator struct{ calls int }
 
-func (f *fakeRelocator) Apply(emu.Backend, *Image, Reloc, uint64, Resolver) error {
+func (f *fakeRelocator) Apply(emu.Backend, *Image, Reloc, uint64, SymbolResolver) error {
 	f.calls++
 	return nil
 }

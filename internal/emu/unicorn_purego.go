@@ -375,14 +375,15 @@ func init() { Register("unicorn", newUnicornBackend) }
 // interface defined today (DESIGN.md invariant 14: facts, not promises — a
 // drift here fails the build).
 var (
-	_ Backend           = (*unicornBackend)(nil)
-	_ InstructionHooker = (*unicornBackend)(nil)
-	_ InterruptHooker   = (*unicornBackend)(nil)
-	_ InvalidMemHooker  = (*unicornBackend)(nil)
-	_ MemReadHooker     = (*unicornBackend)(nil)
-	_ MemWriteHooker    = (*unicornBackend)(nil)
-	_ ContextManager    = (*unicornBackend)(nil)
-	_ CacheInvalidator  = (*unicornBackend)(nil)
+	_ Backend             = (*unicornBackend)(nil)
+	_ InstructionHooker   = (*unicornBackend)(nil)
+	_ InterruptHooker     = (*unicornBackend)(nil)
+	_ InvalidMemHooker    = (*unicornBackend)(nil)
+	_ MemReadHooker       = (*unicornBackend)(nil)
+	_ MemWriteHooker      = (*unicornBackend)(nil)
+	_ ContextManager      = (*unicornBackend)(nil)
+	_ CacheInvalidator    = (*unicornBackend)(nil)
+	_ CodeCacheController = (*unicornBackend)(nil)
 )
 
 type unicornBackend struct {
@@ -758,6 +759,14 @@ func (b *unicornBackend) FlushCache() error {
 		return ucErr("flush_tb", e)
 	}
 	return nil
+}
+
+// FlushCodeCache implements CodeCacheController (P3.5). Unicorn exposes only
+// a WHOLE-cache TB flush (UC_CTL_TB_FLUSH has no ranged form), so the range
+// is accepted for the contract and the entire cache is invalidated — correct
+// (a superset of the affected range), just coarser than the caller's hint.
+func (b *unicornBackend) FlushCodeCache(start, end GuestAddr) error {
+	return b.FlushCache()
 }
 
 func (b *unicornBackend) Close() error {

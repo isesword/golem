@@ -5,9 +5,11 @@
 // symbols/entry addresses so a backend execution hook can intercept calls at
 // the entry point.
 //
-// Dependency rule: interpose → {emu, arch, memory}. It must never import the
-// emulator package; the emulator adapts its own callback context (Hook) to
-// the CallContext interface defined here.
+// Dependency rule: interpose → {emu, arch, memory, loader}. It must never
+// import the emulator package; the emulator adapts its own callback context
+// (Hook) to the CallContext interface defined here. The loader dependency is
+// one-directional: the HostResolver implements loader.SymbolResolver, and
+// loader never imports interpose (DESIGN.md §3.8).
 package interpose
 
 import (

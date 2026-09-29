@@ -12,11 +12,13 @@ import (
 // know nothing about object formats) and does NOT own memory layout (that
 // stays in Plan — segment mapping, shareability, protections).
 //
-// base is the per-engine load bias; resolve maps imported symbol names to
-// guest addresses. r.Offset is image-relative; the Relocator computes the
-// final guest address itself.
+// base is the per-engine load bias; res is the SymbolResolver (P3.5) every
+// imported symbol goes through — guest exports and host-interposed symbols
+// are the same shape to the Relocator (a guest address, never a host
+// callable). r.Offset is image-relative; the Relocator computes the final
+// guest address itself.
 type Relocator interface {
-	Apply(b emu.Backend, img *Image, r Reloc, base uint64, resolve Resolver) error
+	Apply(b emu.Backend, img *Image, r Reloc, base uint64, res SymbolResolver) error
 }
 
 // --- registry (same style as arch.Register / emu.Register) ---------------

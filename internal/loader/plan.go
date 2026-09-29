@@ -53,19 +53,22 @@ type RelocOp struct {
 
 // Apply executes the plan against a backend: maps segments (shareable ones
 // via MemMapPtr from the plan's shared host buffers), applies every
-// relocation with per-engine symbol resolution, and re-protects segments to
-// their final permissions.
-func (p *Plan) Apply(be emu.Backend, base uint64, resolve Resolver) error {
-	return p.apply(be, base, resolve, true)
+// relocation with per-engine symbol resolution through the SymbolResolver
+// (P3.5), and finalizes the image (re-protects segments to their declared
+// permissions). The full load lifecycle (DESIGN.md §3.9, invariant 11):
+//
+//	Map image → Relocate/bind → FinalizeImage (RW→RX) → runtime
+func (p *Plan) Apply(be emu.Backend, base uint64, res SymbolResolver) error {
+	return p.apply(be, base, res, true)
 }
 
 // ApplyPrivate is the opt-out path: everything anonymous, per-engine memory
 // exactly like pre-sharing semantics (Config.NoSharedModules).
-func (p *Plan) ApplyPrivate(be emu.Backend, base uint64, resolve Resolver) error {
-	return p.apply(be, base, resolve, false)
+func (p *Plan) ApplyPrivate(be emu.Backend, base uint64, res SymbolResolver) error {
+	return p.apply(be, base, res, false)
 }
 
-func (p *Plan) apply(be emu.Backend, base uint64, resolve Resolver, share bool) error {
+func (p *Plan) apply(be emu.Backend, base uint64, res SymbolResolver, share bool) error {
 	for i := range p.Maps {
 		m := &p.Maps[i]
 		if m.Shareable && share {
@@ -87,7 +90,9 @@ func (p *Plan) apply(be emu.Backend, base uint64, resolve Resolver, share bool) 
 	if len(p.Relocs) > 0 {
 		// Relocation SEMANTICS live in the (Format, Arch) Relocator
 		// (loader/elf/arm64, registered via init); the plan owns only the
-		// memory layout (maps, shareability, protections).
+		// memory layout (maps, shareability, protections). Symbol resolution
+		// goes through the SymbolResolver contract (P3.5) — the Relocator
+		// never sees anything but guest addresses.
 		rc, err := p.relocator()
 		if err != nil {
 			return err
@@ -95,13 +100,30 @@ func (p *Plan) apply(be emu.Backend, base uint64, resolve Resolver, share bool) 
 		for i := range p.Relocs {
 			r := &p.Relocs[i]
 			rel := Reloc{Offset: r.Target, Type: r.Type, Sym: r.SymIdx, Addend: r.Addend}
-			if err := rc.Apply(be, p.img, rel, base, resolve); err != nil {
+			if err := rc.Apply(be, p.img, rel, base, res); err != nil {
 				return err
 			}
 		}
 	}
-	// Re-protect to declared permissions. Shareable maps created via
-	// MemMapPtr were already at their final protection (nothing wrote them).
+	return p.finalizeImage(be, base, share)
+}
+
+// FinalizeImage is the explicit load-lifecycle boundary of DESIGN.md §3.9 /
+// invariant 11: after it, guest executable mappings are IMMUTABLE — no
+// emulator/interpose/runtime code may write them (host replacement happens
+// via link-time symbol binding, GOT/PLT redirection, or backend execution
+// hooks, never via code patching). Load-time writes (segment content,
+// relocations, rebasing, binding) are legal only BEFORE this point.
+//
+// The re-protection itself has always been the last step of plan application;
+// P3.5 names the boundary so it can be called — and tested — on its own.
+// Shareable maps created via MemMapPtr were already at their final protection
+// (nothing wrote them), so they are skipped.
+func (p *Plan) FinalizeImage(be emu.Backend, base uint64) error {
+	return p.finalizeImage(be, base, true)
+}
+
+func (p *Plan) finalizeImage(be emu.Backend, base uint64, share bool) error {
 	for i := range p.Maps {
 		m := &p.Maps[i]
 		if m.Shareable && share {

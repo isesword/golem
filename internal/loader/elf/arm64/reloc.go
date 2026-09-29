@@ -25,9 +25,10 @@ func init() { loader.RegisterRelocator(loader.FormatELF, emu.ArchARM64, relocato
 type relocator struct{}
 
 // Apply writes one relocation into guest memory. r.Offset is image-relative;
-// base is the per-engine load bias; resolve maps imported symbol names to
-// guest addresses.
-func (relocator) Apply(b emu.Backend, img *loader.Image, r loader.Reloc, base uint64, resolve loader.Resolver) error {
+// base is the per-engine load bias; res resolves imported symbols through the
+// P3.5 SymbolResolver contract — the result is always a guest address, so a
+// host-interposed symbol is indistinguishable from a guest one here.
+func (relocator) Apply(b emu.Backend, img *loader.Image, r loader.Reloc, base uint64, res loader.SymbolResolver) error {
 	target := base + r.Offset
 	switch debugelf.R_AARCH64(r.Type) {
 	case debugelf.R_AARCH64_RELATIVE:
@@ -35,7 +36,7 @@ func (relocator) Apply(b emu.Backend, img *loader.Image, r loader.Reloc, base ui
 			return err
 		}
 	case debugelf.R_AARCH64_GLOB_DAT, debugelf.R_AARCH64_JUMP_SLOT, debugelf.R_AARCH64_ABS64:
-		val, err := img.SymValue(r.Sym, base, resolve)
+		val, err := img.SymValue(r.Sym, base, res)
 		if err != nil {
 			return err
 		}

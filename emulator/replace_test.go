@@ -57,7 +57,10 @@ func TestHookBESatisfiesInstructionHooker(t *testing.T) {
 		t.Fatal("hookBE must satisfy emu.InstructionHooker")
 	}
 	if _, ok := be.(emu.CacheInvalidator); ok {
-		t.Fatal("hookBE must NOT satisfy emu.CacheInvalidator (interposition never flushes — no code is written)")
+		t.Fatal("hookBE must NOT satisfy emu.CacheInvalidator")
+	}
+	if _, ok := be.(emu.CodeCacheController); ok {
+		t.Fatal("hookBE must NOT satisfy emu.CodeCacheController (ReplaceE must tolerate its absence)")
 	}
 }
 

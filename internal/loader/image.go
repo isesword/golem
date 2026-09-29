@@ -42,13 +42,15 @@ type Reloc struct {
 
 // Sym is a dynamic symbol (imported when Undef, else exported). Bind/Type
 // keep the ELF vocabulary; other formats map onto the closest equivalent.
+// Visibility uses the format-agnostic SymbolVisibility (P3.5; ELF STV_*).
 type Sym struct {
-	Name  string
-	Value uint64
-	Size  uint64
-	Undef bool
-	Bind  elf.SymBind
-	Type  elf.SymType
+	Name       string
+	Value      uint64
+	Size       uint64
+	Undef      bool
+	Bind       elf.SymBind
+	Type       elf.SymType
+	Visibility SymbolVisibility
 }
 
 // Image is the parsed, ready-to-map representation of one module. It is

@@ -8,8 +8,10 @@ import (
 
 // registerHostFns registers libc functions we implement in Go because bionic's
 // versions need a fully bootstrapped libc (which we don't run). They override
-// the real bionic exports during symbol resolution. Add more here as the .so
-// exercises libc internals (e.g. __system_property_get, pthread_once, ...).
+// the real bionic exports during symbol resolution — since P3.5 by NAME, via
+// InterposeTable.BindSymbol + the HostResolver element of the boot resolver
+// chain. Add more here as the .so exercises libc internals (e.g.
+// __system_property_get, pthread_once, ...).
 func registerHostFns(e *Emulator) error {
 	// AT_RANDOM target: 16 bytes used by stack-guard / canary setup.
 	at, err := e.Alloc(16, emu.ProtRead|emu.ProtWrite)
@@ -21,19 +23,19 @@ func registerHostFns(e *Emulator) error {
 		return err
 	}
 
-	e.hostByName["getauxval"] = hostGetauxval
+	e.bindHostFn("getauxval", hostGetauxval)
 
 	// pthread_create can't run a real thread (we can't nest uc_emu_start), so we
 	// no-op it as success. Threads the .so spawns (watchdogs / bg init) are
 	// skipped; revisit if the call path needs a thread's output.
-	e.hostByName["pthread_create"] = hostPthreadCreate
-	e.hostByName["pthread_join"] = hostRet0
-	e.hostByName["pthread_detach"] = hostRet0
+	e.bindHostFn("pthread_create", hostPthreadCreate)
+	e.bindHostFn("pthread_join", hostRet0)
+	e.bindHostFn("pthread_detach", hostRet0)
 
 	// __system_property_get: only override (for the loaded .so) when the host app
 	// supplies a provider; otherwise leave it to the bundled /dev/__properties__.
 	if e.cfg.Android.PropertyProvider != nil {
-		e.hostByName["__system_property_get"] = hostSystemPropertyGet
+		e.bindHostFn("__system_property_get", hostSystemPropertyGet)
 	}
 	return nil
 }

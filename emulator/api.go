@@ -304,13 +304,15 @@ func (e *Emulator) ReplaceE(addr uint64, fn ReplaceFunc) error {
 	}
 	// Unicorn instruments hook callouts into translated blocks AT TRANSLATION
 	// TIME: a TB translated before this hook was added (the function already
-	// ran once) would never fire it, so the translation cache must be
-	// flushed after installing the hook. A failed flush leaves the hook
-	// installed-but-inert — remove it so a retry does not stack hooks.
-	// An engine with hooks but no CacheInvalidator capability presumably does
-	// not cache translations (nothing to invalidate), so absence is tolerated.
-	if ci, ok := e.be.(emu.CacheInvalidator); ok {
-		if err := ci.FlushCache(); err != nil {
+	// ran once) would never fire it, so the affected code-cache range must be
+	// flushed after installing the hook — through the CodeCacheController
+	// capability (P3.5), not a backend-specific call. A failed flush leaves
+	// the hook installed-but-inert — remove it so a retry does not stack
+	// hooks. An engine with hooks but no CodeCacheController capability
+	// presumably does not cache translations (nothing to invalidate), so
+	// absence is tolerated.
+	if cc, ok := e.be.(emu.CodeCacheController); ok {
+		if err := cc.FlushCodeCache(emu.GuestAddr(addr), emu.GuestAddr(addr)+1); err != nil {
 			_ = hook.Remove()
 			return e.capabilityErr("Replace", err)
 		}

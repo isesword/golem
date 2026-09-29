@@ -34,11 +34,11 @@ type sharedRange struct {
 }
 
 // applyPlan instantiates the plan in this engine, recording shared ranges.
-func (e *Emulator) applyPlan(plan *loader.Plan, base uint64, resolve loader.Resolver) error {
+func (e *Emulator) applyPlan(plan *loader.Plan, base uint64, res loader.SymbolResolver) error {
 	if e.cfg.NoSharedModules {
-		return plan.ApplyPrivate(e.be, base, resolve)
+		return plan.ApplyPrivate(e.be, base, res)
 	}
-	if err := plan.Apply(e.be, base, resolve); err != nil {
+	if err := plan.Apply(e.be, base, res); err != nil {
 		return err
 	}
 	for i := range plan.Maps {

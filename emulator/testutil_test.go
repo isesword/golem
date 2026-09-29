@@ -7,6 +7,7 @@ import (
 	"github.com/isesword/golem/internal/emu"
 	"github.com/isesword/golem/internal/interpose"
 	"github.com/isesword/golem/internal/kernel"
+	"github.com/isesword/golem/internal/loader"
 	"github.com/isesword/golem/internal/memory"
 	"github.com/isesword/golem/internal/platform/android"
 	"github.com/isesword/golem/internal/vfs"
@@ -35,8 +36,7 @@ func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 		fs:          fs,
 		layout:      legacyARM64Layout,
 		as:          memory.NewAddressSpace(legacyARM64Layout),
-		hostByName:  map[string]hostFn{},
-		hostImpl:    map[uint64]hostFn{},
+		dl:          loader.NewDynamicLinker(),
 		jniDispatch: map[uint64]int{},
 		kctx: &kernel.Context{
 			B: be, Mem: mem, VFS: fs, Pid: defaultPid,
@@ -49,6 +49,12 @@ func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 	// AddressSpace stub region; empty interposition table).
 	e.stubMgr = interpose.NewStubManager(e.as, stubEnc, be)
 	e.itab = interpose.NewInterposeTable()
+	// P3.5: the boot resolver chain exactly as New wires it.
+	e.resolver = loader.ChainResolvers(
+		interpose.NewHostResolver(e.itab, e.stubMgr),
+		e.dl.GlobalResolver(),
+		interpose.NewUnresolvedStubResolver(e.stubMgr),
+	)
 	e.cacheRoleRegs()
 	return e
 }
