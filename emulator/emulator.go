@@ -67,8 +67,9 @@ type Config struct {
 	// applied during construction — BEFORE boot runs any guest code, because
 	// unicorn's UC_CTL_TCG_BUFFER_SIZE only takes effect ahead of the first
 	// uc_emu_start. 0 = engine default: on Windows with PREALLOC the engine
-	// commits 16 MiB upfront (measured: full throughput at 16 MiB, regression
-	// at 256 MiB+); on POSIX the buffer is lazily committed and the engine
+	// commits 8 MiB upfront (measured with cmd/tcgsizing: full throughput at
+	// 8 MiB, regression only at 256 MiB+); on POSIX the buffer is lazily
+	// committed and the engine
 	// leaves the size alone. Unicorn-only — on any other engine (or a build
 	// without the unicorn tag) New returns an error rather than silently
 	// ignoring the value.

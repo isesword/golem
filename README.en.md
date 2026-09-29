@@ -2,6 +2,8 @@
 
 # golem
 
+[![Release](https://img.shields.io/github/v/release/isesword/golem)](https://github.com/isesword/golem/releases/latest)
+[![CI](https://github.com/isesword/golem/actions/workflows/ci.yml/badge.svg)](https://github.com/isesword/golem/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 golem is a multi-platform native-library emulation framework written in pure Go: it loads an Android AArch64 native library (`.so`) on your host machine and lets you call functions inside it without a JVM, a device, or Android. It builds a sufficient Android process environment around the `.so` — a dynamic linker, real bionic libc, a subset of Linux syscalls, and a JavaVM whose reference lifecycle follows the JNI specification — so you can call the library's exports, read and write its memory, and trace every instruction from Go.
@@ -14,9 +16,13 @@ defer e.Close()
 sum, _ := e.CallSymbol("add", 2, 3) // -> 5, executed as real AArch64 code
 ```
 
-> Current status: the Unicorn (purego) backend works end to end — loading and linking bionic and the target `.so`, running `init_array` and `JNI_OnLoad`, calling exports, handling syscalls and JNI — plus an engine pool for concurrent use. Under sustained load, 100k signs at 100 QPS held constant latency with zero memory growth. CI-verified for real on Linux / macOS / Windows (amd64 and arm64) — on Windows the VEH-off unicorn.dll is built by CI, verified on real runners, and ships with the repo. See [Relationship to unidbg](#relationship-to-unidbg).
+> Current status: the Unicorn (purego) backend works end to end — loading and linking bionic and the target `.so`, running `init_array` and `JNI_OnLoad`, calling exports, handling syscalls and JNI — plus an engine pool for concurrent use. Under sustained load (real request signing), 100k signs at 100 QPS held constant latency with zero memory growth. CI-verified for real on Linux / macOS / Windows (amd64 and arm64) — on Windows the VEH-off unicorn.dll is built by CI and verified on real runners: release builds ship from [Releases](https://github.com/isesword/golem/releases/latest), with an out-of-the-box copy kept under `assets/windows/<arch>/`. See [Relationship to unidbg](#relationship-to-unidbg).
 
 ---
+
+## Why the name
+
+In legend, a golem is a clay figure without life of its own — inscribed with a word, it stands up and works. Its life comes from being animated, not from birth. That is exactly what this framework does: a static `.so` has no life; golem breathes one into it — a dynamic linker, libc, syscalls, and JNI — so it runs on a machine with no device and no Android. The name is borrowed for that one idea: waking the creation.
 
 ## Why
 
@@ -41,7 +47,7 @@ unidbg is the de-facto tool for emulating Android native libraries, but it runs 
 - Memory helpers: alloc, read/write bytes, C-strings, and LE integers.
 - Per-instruction trace, plus a full instruction-stream trace (`TraceInsns`: per-instruction offset + opcode + register deltas + call/syscall annotations, Tenet-style, diffable against a real-device trace; Unicorn).
 - Selectable engine: build with `-tags unicorn` to compile in the purego backend, choose at runtime with `-engine` / `$GOLEM_ENGINE`.
-- Tunable TCG translation buffer: `Config.TCGBufferMiB` (applied at construction; the 16 MiB default under Windows preallocation was set by measurement with `cmd/tcgsizing`).
+- Tunable TCG translation buffer: `Config.TCGBufferMiB` (applied at construction; the 8 MiB default under Windows preallocation was set by measurement with `cmd/tcgsizing`).
 - **JNI reference lifecycle per spec**: local refs live in pooled call frames (die with the call; one-beat grace for return-value reads), global refs are explicit with stable handle values, handles are monotonic and never reused (stale handles resolve to nil, never alias). Steady-state memory is O(one call's objects) — flat under sustained load.
 - **Engine pool (`emulator.Pool`)**: the actor pattern — one engine belongs to one goroutine at a time; concurrency scales by engine count, not locks. Auto-recycling at MaxUses, transparent rebuild after worker panics, ctx deadlines when drained. This is the core of golem's concurrency story: **intra-guest threads** are the engine's cooperative scheduler, while **N concurrent goroutines** get N engines running truly in parallel (~70 QPS per core measured).
 - **Compile/instantiate split**: each `.so` is parsed once (`loader.CompileOnce`) and its read-only segments are shared zero-copy across engines via `uc_mem_map_ptr` — one physical copy no matter the pool size (measured -20% maxRSS at 10 engines). Host patches privatize pages first and never corrupt other engines.
@@ -52,7 +58,12 @@ unidbg is the de-facto tool for emulating Android native libraries, but it runs 
 ### Prerequisites
 
 - Go 1.26+
-- One CPU engine: Unicorn (the default). Building needs **no C compiler at all**; at runtime libunicorn must be findable — on macOS/Linux install it (`brew install unicorn` / `apt install libunicorn2`) or point `$GOLEM_UNICORN` at it; **on Windows nothing to install**: the CI-built VEH-off `unicorn.dll` ships under `assets/windows/<arch>/` and works out of the box. See [BUILD.md](BUILD.md).
+- One CPU engine: Unicorn (the default). Building needs **no C compiler at all**; at runtime libunicorn is looked up in this order:
+  1. `$GOLEM_UNICORN` — an explicit path, **highest priority on every platform**. To swap in your own engine build (e.g. a self-built VEH-off `unicorn.dll`), point it there — **no need to rebuild golem**;
+  2. the platform loader's search path — macOS/Linux system installs (`brew install unicorn` / `apt install libunicorn2`);
+  3. the bundled Windows copy — `assets/windows/<arch>/unicorn.dll` (CI-built VEH-off, works out of the box; release builds are also downloadable from [Releases](https://github.com/isesword/golem/releases/latest)).
+
+  See [BUILD.md](BUILD.md).
 
 ### Build & run the example
 
@@ -61,7 +72,8 @@ unidbg is the de-facto tool for emulating Android native libraries, but it runs 
 CGO_ENABLED=0 go build -tags unicorn -o bin/golem ./cmd/golem
 GOLEM_UNICORN=$(brew --prefix unicorn)/lib/libunicorn.dylib \
   ./bin/golem examples/native/native.so fib 20                # fib([20]) = 6765
-# Windows: no install needed — assets/windows/<arch>/unicorn.dll (VEH-off build) is used automatically
+# Windows: nothing to install — assets/windows/<arch>/unicorn.dll (VEH-off build) is used automatically;
+#          to use your own DLL (PowerShell): $env:GOLEM_UNICORN = "C:\path\to\unicorn.dll"
 ```
 
 Full demo (loads the bundled `native.so`, calls exports, an imported `strlen`, a pointer-out function, and a Go `Replace` hook):
