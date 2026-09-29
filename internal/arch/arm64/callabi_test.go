@@ -9,7 +9,7 @@ import (
 
 func resolveCallABI(t *testing.T) arch.CallABI {
 	t.Helper()
-	_, c, _ := resolveTriple(t)
+	_, c, _, _ := resolveQuad(t)
 	return c
 }
 

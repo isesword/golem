@@ -11,6 +11,7 @@ import (
 	"github.com/isesword/golem/internal/memory"
 	"github.com/isesword/golem/internal/platform"
 	"github.com/isesword/golem/internal/platform/android"
+	"github.com/isesword/golem/internal/target"
 	"github.com/isesword/golem/internal/vfs"
 )
 
@@ -23,7 +24,7 @@ import (
 // tests that never touch the backend (e.g. JNI clock tests).
 func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 	t.Helper()
-	cpuArch, callABI, stubEnc, err := arch.Resolve(arch.IDARM64, arch.VariantGeneric)
+	cpuArch, callABI, stubEnc, feats, err := arch.Resolve(arch.IDARM64, arch.VariantGeneric)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,6 +43,8 @@ func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 		be:          be,
 		arch:        cpuArch,
 		callABI:     callABI,
+		target:      &target.Target{Arch: cpuArch, CallABI: callABI, Stubs: stubEnc, Features: feats, Format: loader.FormatELF, Platform: platform.Android},
+		startup:     &android.StartupABI{},
 		mem:         mem,
 		fs:          fs,
 		layout:      layout,

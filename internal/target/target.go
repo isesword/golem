@@ -19,13 +19,14 @@ import (
 )
 
 // Target is the resolved, immutable description of what an Emulator runs.
-// Construct it once at boot and treat it as read-only afterwards; Features
-// (CPUFeatures / HWCAP source of truth) arrive in P4d and are deliberately
-// not pre-built here (YAGNI).
+// Construct it once at boot and treat it as read-only afterwards. Features —
+// the CPUFeatures / HWCAP single source of truth (P4d) — is resolved together
+// with the Arch/CallABI/StubEncoder quad and never re-derived downstream.
 type Target struct {
 	Arch     arch.Arch        // pure CPU properties (invariant 13)
 	CallABI  arch.CallABI     // function calling convention
 	Stubs    arch.StubEncoder // guest trampoline encoding
+	Features arch.CPUFeatures // CPU capability bits; sole HWCAP source (P4d)
 	Format   loader.Format    // object format of the main image
 	Platform platform.ID      // OS platform personality
 	Variant  arch.Variant     // ISA variant (e.g. ARM64E) within Arch

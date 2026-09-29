@@ -59,7 +59,7 @@ func readU64(t *testing.T, be *memBE, addr uint64) uint64 {
 
 func newStubStack(t *testing.T) (*memory.AddressSpace, interpose.StubManager) {
 	t.Helper()
-	_, _, stubEnc, err := arch.Resolve(arch.IDARM64, arch.VariantGeneric)
+	_, _, stubEnc, _, err := arch.Resolve(arch.IDARM64, arch.VariantGeneric)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,17 +12,7 @@ import (
 // InterposeTable.BindSymbol + the HostResolver element of the boot resolver
 // chain. Add more here as the .so exercises libc internals (e.g.
 // __system_property_get, pthread_once, ...).
-func registerHostFns(e *Emulator) error {
-	// AT_RANDOM target: 16 bytes used by stack-guard / canary setup.
-	at, err := e.Alloc(16, emu.ProtRead|emu.ProtWrite)
-	if err != nil {
-		return err
-	}
-	e.atRandom = at
-	if err := e.be.MemWrite(emu.GuestAddr(e.atRandom), []byte("golem-randseed")); err != nil {
-		return err
-	}
-
+func registerHostFns(e *Emulator) {
 	e.bindHostFn("getauxval", hostGetauxval)
 
 	// pthread_create can't run a real thread (we can't nest uc_emu_start), so we
@@ -39,7 +29,6 @@ func registerHostFns(e *Emulator) error {
 	if e.cfg.acfg != nil && e.cfg.acfg.PropertyProvider != nil {
 		e.bindHostFn("__system_property_get", hostSystemPropertyGet)
 	}
-	return nil
 }
 
 // hostSystemPropertyGet implements __system_property_get(name, value) via
@@ -88,22 +77,24 @@ func hostPthreadCreate(e *Emulator, b emu.Backend) {
 func hostRet0(e *Emulator, b emu.Backend) { _ = b.RegWrite(e.retReg, 0) }
 
 // hostGetauxval implements getauxval(type) without bionic's __libc_auxv.
+// Since P4d it has ZERO per-key knowledge: it serves the auxv vector the
+// platform StartupABI built (ensureStartup), whose HWCAP bits derive from the
+// Target's arch.CPUFeatures — auxv data block and CPU-feature query share one
+// source of truth. In a bionic-only boot the first getauxval may precede any
+// LoadLibrary; the vector is then built lazily without main-image metadata
+// (AT_PHDR/AT_PHNUM/AT_ENTRY read as 0, the historical default). Unknown keys
+// answer 0, as before.
 func hostGetauxval(e *Emulator, b emu.Backend) {
 	t, _ := b.RegRead(e.argRegs[0])
 	var v uint64
-	switch t {
-	case 6: // AT_PAGESZ
-		v = 0x1000
-	case 16: // AT_HWCAP  (0 = advertise no optional CPU features)
-		v = 0
-	case 26: // AT_HWCAP2
-		v = 0
-	case 23: // AT_SECURE
-		v = 0
-	case 25: // AT_RANDOM -> pointer to 16 random bytes
-		v = e.atRandom
-	default:
-		v = 0
+	if err := e.ensureStartup(nil, 0); err != nil {
+		// No error channel on the hostFn contract: log and answer 0 rather
+		// than panic across the backend trampoline.
+		if e.cfg.Verbose {
+			fmt.Printf("[getauxval] startup build failed: %v\n", err)
+		}
+	} else {
+		v = e.startup.Lookup(t)
 	}
 	_ = b.RegWrite(e.retReg, v)
 }

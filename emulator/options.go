@@ -126,16 +126,19 @@ func resolveTarget(cfg Config) (*target.Target, error) {
 	if id == 0 {
 		id = arch.IDARM64 // pre-P4 semantics: everything is ARM64
 	}
-	cpuArch, callABI, stubEnc, err := arch.Resolve(id, variant)
+	cpuArch, callABI, stubEnc, feats, err := arch.Resolve(id, variant)
 	if err != nil {
 		return nil, err
 	}
 	// Platform is hard-coded Android today (P5b adds Darwin); it is carried
-	// in the Target so no lower layer ever re-derives it.
+	// in the Target so no lower layer ever re-derives it. Features (P4d) is
+	// the quad's CPUFeatures — the single HWCAP source of truth the platform
+	// StartupABI and the interposed getauxval both derive from.
 	return &target.Target{
 		Arch:     cpuArch,
 		CallABI:  callABI,
 		Stubs:    stubEnc,
+		Features: feats,
 		Format:   format,
 		Platform: platform.Android,
 		Variant:  variant,

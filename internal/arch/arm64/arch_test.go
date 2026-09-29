@@ -27,29 +27,46 @@ func (r *regRec) RegWrite(reg emu.Reg, v uint64) error {
 	return nil
 }
 
-// resolveTriple resolves the registered (Arch, CallABI, StubEncoder) triple
-// for (IDARM64, VariantGeneric); this package's init must have registered it.
-func resolveTriple(t *testing.T) (arch.Arch, arch.CallABI, arch.StubEncoder) {
+// resolveQuad resolves the registered (Arch, CallABI, StubEncoder,
+// CPUFeatures) quad for (IDARM64, VariantGeneric); this package's init must
+// have registered it.
+func resolveQuad(t *testing.T) (arch.Arch, arch.CallABI, arch.StubEncoder, arch.CPUFeatures) {
 	t.Helper()
-	a, c, s, err := arch.Resolve(arch.IDARM64, arch.VariantGeneric)
+	a, c, s, f, err := arch.Resolve(arch.IDARM64, arch.VariantGeneric)
 	if err != nil {
-		t.Fatalf("arm64 target triple must be registered by this package's init: %v", err)
+		t.Fatalf("arm64 target quad must be registered by this package's init: %v", err)
 	}
-	return a, c, s
+	return a, c, s, f
 }
 
-func TestTripleRegistration(t *testing.T) {
-	a, c, s := resolveTriple(t)
-	if a == nil || c == nil || s == nil {
-		t.Fatal("Resolve must return a non-nil Arch, CallABI and StubEncoder")
+func TestQuadRegistration(t *testing.T) {
+	a, c, s, f := resolveQuad(t)
+	if a == nil || c == nil || s == nil || f == nil {
+		t.Fatal("Resolve must return a non-nil Arch, CallABI, StubEncoder and CPUFeatures")
 	}
 	if a.EngineArch() != emu.ArchARM64 {
 		t.Fatalf("EngineArch = %v, want ArchARM64", a.EngineArch())
 	}
 }
 
+// TestEmptyFeatures pins the P4d behavior-invariant red line: the arm64
+// CPUFeatures implementation is an EMPTY feature set, so the Linux auxv
+// bitmaps are exactly the pre-P4d hardcoded values AT_HWCAP=0 / AT_HWCAP2=0
+// (advertise no optional CPU features).
+func TestEmptyFeatures(t *testing.T) {
+	_, _, _, f := resolveQuad(t)
+	if hwcap, hwcap2 := f.HWCAP(); hwcap != 0 || hwcap2 != 0 {
+		t.Fatalf("HWCAP() = (%#x, %#x), want (0, 0) — behavior-invariant empty feature set", hwcap, hwcap2)
+	}
+	for _, feat := range []arch.Feature{0, 1, 31, 1 << 20} {
+		if f.Has(feat) {
+			t.Fatalf("Has(%#x) = true, want false for the empty feature set", uint32(feat))
+		}
+	}
+}
+
 func TestArchCPUProperties(t *testing.T) {
-	a, _, _ := resolveTriple(t)
+	a, _, _, _ := resolveQuad(t)
 	if a.PC() != PC || a.SP() != SP {
 		t.Fatalf("role regs: PC=%v SP=%v", a.PC(), a.SP())
 	}
@@ -62,7 +79,7 @@ func TestArchCPUProperties(t *testing.T) {
 }
 
 func TestSetTLSBase(t *testing.T) {
-	a, _, _ := resolveTriple(t)
+	a, _, _, _ := resolveQuad(t)
 	b := &regRec{}
 	if err := a.SetTLSBase(b, 0xD0000000); err != nil {
 		t.Fatal(err)
@@ -76,7 +93,7 @@ func TestSetTLSBase(t *testing.T) {
 }
 
 func TestNormalizeCodeAddrIdentity(t *testing.T) {
-	a, _, _ := resolveTriple(t)
+	a, _, _, _ := resolveQuad(t)
 	for _, addr := range []emu.GuestAddr{0, 0x1234, 0xffffff00, 0xff00000000001234} {
 		if got := a.NormalizeCodeAddr(addr); got != addr {
 			t.Fatalf("NormalizeCodeAddr(%#x) = %#x, want identity (TBI off)", addr, got)

@@ -225,11 +225,13 @@ type Emulator struct {
 	pinGen       uint64                 // bumped per host-initiated native call
 	pendingExc   bool                   // a pending JNI exception (Throw/ThrowNew)
 
-	// Host functions (Go libc implementations + ReplaceFns import overrides)
-	// are bound by NAME in the InterposeTable since P3.5 (itab.BindSymbol →
-	// HostResolver materializes their stubs at link time; the trap path
-	// re-discovers them via the stub descriptor name → LookupSymbol).
-	atRandom uint64 // guest ptr to 16 "random" bytes (AT_RANDOM)
+	// P4d (DESIGN.md §3.4, invariant 10): the process initial state — the
+	// auxv data block (HWCAP from target.Features, PHDR/ENTRY from the main
+	// image metadata, deterministic AT_RANDOM) — is built ONCE by the
+	// platform's StartupABI; the interposed getauxval serves from that same
+	// vector (no second, hardcoded auxv source).
+	startup      *android.StartupABI
+	startupBuilt bool
 
 	// cooperative scheduler state (see scheduler.go)
 	fibers      []*fiber // pthread_create'd threads
@@ -383,6 +385,10 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	// AddressSpace's stub region and encodes them with the StubEncoder.
 	e.stubMgr = interpose.NewStubManager(e.as, tgt.Stubs, be)
 	e.itab = interpose.NewInterposeTable()
+	// P4d: the platform's StartupABI builds the process initial state (auxv
+	// block) once the main image's metadata is complete (LoadLibrary) or,
+	// bionic-only, lazily at the first getauxval.
+	e.startup = &android.StartupABI{}
 	// P3.5: the boot symbol-resolution chain — host replacement symbols
 	// (InterposeTable via the HostResolver adapter) → global guest exports
 	// (DynamicLinker scope) → unresolved fallback stub. The historical
@@ -492,8 +498,10 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	if err := be.MemMap(emu.GuestAddr(l.TLSBase), l.TLSSize, emu.ProtRead|emu.ProtWrite); err != nil {
 		return nil, fmt.Errorf("map tls: %w", err)
 	}
-	// SP near top of stack (16-aligned).
-	_ = be.RegWrite(e.spReg, l.StackBase+l.StackSize-0x200)
+	// SP near top of stack (16-aligned); the headroom reserve is owned by the
+	// platform's StartupABI (P4d, invariant 10), which parks the auxv block
+	// just below it.
+	_ = be.RegWrite(e.spReg, l.StackBase+l.StackSize-android.StackTopReserve)
 
 	// bionic TLS: TPIDR_EL0 -> slot array; slot[TLS_SLOT_THREAD_ID] -> a mapped
 	// pthread_internal_t (zeroed). Without this, libc reads a NULL thread ptr
@@ -598,6 +606,14 @@ func (e *Emulator) LoadLibrary(path string) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
+	// P4d (DESIGN.md §4): build the process initial state — the auxv data
+	// block — once the first LoadLibrary'd image's metadata is complete, and
+	// BEFORE RunInit runs any of its guest code, so bionic's getauxval
+	// callers see the real vector from the start. Built once per emulator;
+	// later libraries keep the first-built vector.
+	if err := e.ensureStartup(m.Img, m.Base); err != nil {
+		return nil, fmt.Errorf("startup ABI: %w", err)
+	}
 	if err := e.RunInit(m); err != nil {
 		return nil, err
 	}
@@ -647,6 +663,44 @@ func (e *Emulator) LoadModule(path, name string) (*Module, error) {
 		fmt.Printf("[load] %-20s base=0x%x span=0x%x exports=%d\n", name, base, span, len(img.Exports))
 	}
 	return m, nil
+}
+
+// ensureStartup builds the process initial state — the auxv data block —
+// through the platform's StartupABI exactly once per emulator (P4d, DESIGN.md
+// §3.4 invariant 10). img/base carry the main image's startup metadata
+// (PHDR/ENTRY); a nil img (bionic-only boot, first getauxval before any
+// LoadLibrary) builds the vector without AT_PHDR/AT_PHNUM/AT_ENTRY, which
+// then read as 0 — the pre-P4d default for unknown keys.
+//
+// The returned InitialState's Entry/SP are informational this stage: entry
+// into guest code goes through CallFunc, and SP was already set at boot from
+// android.StackTopReserve. Applying Entry/SP as a real execution start is
+// the P4e boot-sequence consolidation's job.
+func (e *Emulator) ensureStartup(img *loader.Image, base uint64) error {
+	if e.startupBuilt {
+		return nil
+	}
+	if e.startup == nil {
+		e.startup = &android.StartupABI{}
+	}
+	if e.target == nil || e.target.Features == nil {
+		return fmt.Errorf("startup ABI: the Target carries no CPUFeatures")
+	}
+	if e.be == nil {
+		return fmt.Errorf("startup ABI: no backend to materialize the auxv block into")
+	}
+	if _, err := e.startup.BuildInitialState(&platform.StartupContext{
+		Image:    img,
+		Base:     emu.GuestAddr(base),
+		AS:       e.as,
+		Stack:    memory.Region{Addr: e.layout.StackBase, Size: e.layout.StackSize},
+		Mem:      e.be,
+		Features: e.target.Features,
+	}); err != nil {
+		return err
+	}
+	e.startupBuilt = true
+	return nil
 }
 
 // bindHostFn binds a Go-implemented function (libc override or ReplaceFns

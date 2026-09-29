@@ -831,14 +831,7 @@ func SysGetrandom(c *Context, f *SyscallFrame) Result {
 	}
 	seed := uint64(a[0]) ^ uint64(a[1])<<8 ^ uint64(a[2])<<16 ^ a[3]<<24 ^ a[4]<<32 ^ a[5]<<40 ^ c.getrandomCalls<<56
 	c.getrandomCalls++
-	x := seed
-	for i := range buf {
-		x += 0x9E3779B97F4A7C15
-		x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9
-		x = (x ^ (x >> 27)) * 0x94D049BB133111EB
-		x ^= x >> 31
-		buf[i] = byte(x >> 56)
-	}
+	DeterministicRandom(seed, buf)
 	c.B.MemWrite(emu.GuestAddr(a[0]), buf)
 	return Result{Value: n}
 }

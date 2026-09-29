@@ -167,6 +167,11 @@ type fakeStubEnc struct{}
 
 func (fakeStubEnc) EmitStub(arch.StubKind) ([]byte, error) { return nil, nil }
 
+type fakeFeatures struct{}
+
+func (fakeFeatures) Has(arch.Feature) bool   { return false }
+func (fakeFeatures) HWCAP() (uint64, uint64) { return 0, 0 }
+
 // writeARM64ELFHeader writes just enough of an ELF64 header for
 // loader.Sniff: magic, ELFDATA2LSB, e_machine=EM_AARCH64.
 func writeARM64ELFHeader(t *testing.T) string {
@@ -186,15 +191,15 @@ func TestResolveTargetDefaultARM64(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveTarget: %v", err)
 	}
-	real, _, _, err := arch.Resolve(arch.IDARM64, arch.VariantGeneric)
+	real, _, _, _, err := arch.Resolve(arch.IDARM64, arch.VariantGeneric)
 	if err != nil {
 		t.Fatalf("arch.Resolve arm64: %v", err)
 	}
 	if tgt.Arch != real {
 		t.Fatal("default target must be the registered arm64 Arch")
 	}
-	if tgt.CallABI == nil || tgt.Stubs == nil {
-		t.Fatal("target must carry the full triple")
+	if tgt.CallABI == nil || tgt.Stubs == nil || tgt.Features == nil {
+		t.Fatal("target must carry the full quad (CallABI, StubEncoder, CPUFeatures)")
 	}
 	if tgt.Format != loader.FormatELF || tgt.Platform != platform.Android || tgt.Variant != arch.VariantGeneric {
 		t.Fatalf("default target = (%v, %v, %v), want (elf, android, generic)",
@@ -208,7 +213,7 @@ func TestResolveTargetSniffProbe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveTarget: %v", err)
 	}
-	real, _, _, _ := arch.Resolve(arch.IDARM64, arch.VariantGeneric)
+	real, _, _, _, _ := arch.Resolve(arch.IDARM64, arch.VariantGeneric)
 	if tgt.Arch != real {
 		t.Fatal("probed arm64 header must resolve to the registered arm64 Arch")
 	}
@@ -219,7 +224,7 @@ func TestResolveTargetSniffProbe(t *testing.T) {
 
 func TestResolveTargetExplicitArchWins(t *testing.T) {
 	const fakeID = arch.ID(0xF0A4) // test-only, clear of EM_AARCH64 (183)
-	arch.Register(fakeID, arch.VariantGeneric, fakeArch{}, fakeCallABI{}, fakeStubEnc{})
+	arch.Register(fakeID, arch.VariantGeneric, fakeArch{}, fakeCallABI{}, fakeStubEnc{}, fakeFeatures{})
 
 	// The probe says arm64; the explicit Config.Arch must win anyway, while
 	// the probed format still lands in the Target.

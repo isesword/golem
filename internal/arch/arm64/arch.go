@@ -10,11 +10,12 @@ import (
 // cpuArch is the AArch64 CPU property set (arch.Arch). The zero value is
 // valid and stateless. It knows nothing about how functions are called —
 // that is aapcs64 (callabi.go); the trampoline encoding is stubEncoder
-// (stub.go). All three are registered together for (IDARM64, VariantGeneric).
+// (stub.go), and the CPU feature set is cpuFeatures (features.go). All four
+// are registered together for (IDARM64, VariantGeneric).
 type cpuArch struct{}
 
 func init() {
-	arch.Register(arch.IDARM64, arch.VariantGeneric, cpuArch{}, aapcs64{}, stubEncoder{})
+	arch.Register(arch.IDARM64, arch.VariantGeneric, cpuArch{}, aapcs64{}, stubEncoder{}, cpuFeatures{})
 }
 
 func (cpuArch) EngineArch() emu.Arch { return emu.ArchARM64 }
