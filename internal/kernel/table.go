@@ -3,16 +3,22 @@ package kernel
 // AArch64 syscall numbers (asm-generic unistd) and the Android/AArch64
 // dispatch table constructor.
 //
-// Why this lives in kernel rather than platform/android: kernel's INTERNAL
-// test suite dispatches real syscalls through the real table, and Go forbids
-// a package's internal test files from importing a package that imports it
-// (kernel_test → platform/android → kernel would be an import cycle).
-// Moving the constructor to platform/android would force the whole suite to
-// the external kernel_test package with test-only exports of Context
-// internals — far more churn for no design gain. platform/android re-exports
-// this constructor as android.NewSyscallTable, so the composition root still
-// sources every platform piece (transport, table, codecs) from the platform
-// package, and the dependency direction stays platform/android → kernel → emu.
+// TODO(P4): move the Android/ARM64 syscall-number binding to
+// platform/android once kernel exposes a semantic handler set.
+//
+// FREEZE-BLOCKER: kernel must not retain Platform/Arch-specific
+// syscall-number knowledge. Target end state (decided):
+//
+//	kernel:   semantic handlers only — DefaultHandlers() Handlers{Read, Write, ...},
+//	          no syscall numbers; internal tests dispatch through a SYNTHETIC table.
+//	android:  NewARM64Table(kernel.DefaultHandlers()) binds numbers → handlers.
+//
+// Interim justification for this location: kernel's internal test suite
+// (package kernel, accesses Context internals) dispatches through the real
+// table, and Go forbids kernel_test → platform/android → kernel cycles.
+// The P4 migration converts those tests to synthetic tables first, then
+// moves this file's binding to platform/android — test convenience must not
+// decide production layering.
 
 // Only the numbers golem's handler set implements / that bionic is likely to
 // invoke on the call path are listed.
