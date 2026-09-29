@@ -6,6 +6,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/isesword/golem/dvm"
+	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/emu"
 )
 
@@ -131,11 +132,14 @@ func jniLabel(idx int) string {
 	return fmt.Sprintf("JNIEnv[%d]", idx)
 }
 
-// arg reads JNIEnv-call argument n (n=1 is the first real arg; arg register 0
-// holds the JNIEnv* itself).
+// jarg reads JNIEnv-call argument n (n=1 is the first real arg; argument 0 is
+// the JNIEnv* itself) through the CallABI's ReadArgs.
 func (e *Emulator) jarg(b emu.Backend, n int) uint64 {
-	v, _ := b.RegRead(e.argRegs[n])
-	return v
+	args := e.hostArgs(b, n+1)
+	if args == nil {
+		return 0
+	}
+	return args[n]
 }
 
 // handleJNI dispatches a JNIEnv function call (by table index) to the dvm layer.
@@ -534,7 +538,7 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 			fmt.Printf("[JNI] %-24s -> 0x%x\n", jniLabel(idx), ret)
 		}
 	}
-	_ = b.RegWrite(e.retReg, ret)
+	_ = e.callABI.WriteResult(b, arch.CallResult{Value: ret})
 }
 
 // callStatic handles CallStaticObjectMethod[V] by dispatching to the Jni

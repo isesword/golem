@@ -3,6 +3,7 @@ package emulator
 import (
 	"fmt"
 
+	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/emu"
 	"github.com/isesword/golem/internal/kernel"
 	"github.com/isesword/golem/internal/platform/android"
@@ -175,13 +176,19 @@ func (e *Emulator) runFiberSlice(f *fiber) error {
 
 	startPC := f.routine
 	if !f.started {
-		// First slice: set up a plain function call (routine(arg)) per the
-		// CallABI — own stack, arg in register 0, LR = sentinel.
+		// First slice: set up a plain function call (routine(arg)) through the
+		// CallABI — PrepareCall builds the frame (arg registers, return
+		// address = sentinel) on the fiber's own stack.
 		if err := e.be.RegWrite(e.spReg, f.sp); err != nil {
 			return err
 		}
-		_ = e.be.RegWrite(e.argRegs[0], f.arg)
-		_ = e.be.RegWrite(e.lrReg, sentinel)
+		if err := e.callABI.PrepareCall(e.be, arch.CallRequest{
+			Entry:  emu.GuestAddr(f.routine),
+			Return: sentinel,
+			Args:   []uint64{f.arg},
+		}); err != nil {
+			return fmt.Errorf("fiber %d: PrepareCall: %w", f.id, err)
+		}
 		f.started = true
 	} else {
 		// Capability probe: an engine without ContextManager cannot resume —

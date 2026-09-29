@@ -125,7 +125,7 @@ func (d *Debugger) printRegs() {
 			fmt.Fprintln(d.Out)
 		}
 	}
-	fmt.Fprintf(d.Out, "\nSP =0x%016x  LR =0x%016x  PC =0x%016x\n", rd(d.e.spReg), rd(d.e.lrReg), rd(d.e.pcReg))
+	fmt.Fprintf(d.Out, "\nSP =0x%016x  LR =0x%016x  PC =0x%016x\n", rd(d.e.spReg), rd(arm64.LR), rd(d.e.pcReg))
 }
 
 func (d *Debugger) printMem(f []string) {

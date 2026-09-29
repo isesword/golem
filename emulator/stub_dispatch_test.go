@@ -75,7 +75,7 @@ func TestHostCallStubSkipsKernelDispatch(t *testing.T) {
 	if e.scCount != 0 {
 		t.Fatalf("syscall counter moved on a stub hit: %d", e.scCount)
 	}
-	if v, ok := be.writes[e.retReg]; !ok || v != 0 {
+	if v, ok := be.writes[arm64.X0]; !ok || v != 0 {
 		t.Fatalf("stub must write the optimistic 0 return, writes=%v", be.writes)
 	}
 }
@@ -97,7 +97,7 @@ func TestGuestSyscallNotClassifiedAsStub(t *testing.T) {
 		t.Fatalf("syscall counter must advance to 1, got %d", e.scCount)
 	}
 	var ret int64 = -38 // -kernel.ENOSYS, as the dispatcher encodes it
-	if got, want := be.writes[e.retReg], uint64(ret); got != want {
+	if got, want := be.writes[arm64.X0], uint64(ret); got != want {
 		t.Fatalf("syscall result = %#x, want %#x (-ENOSYS)", got, want)
 	}
 }

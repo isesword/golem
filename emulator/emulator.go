@@ -184,15 +184,14 @@ type Emulator struct {
 	itab    interpose.InterposeTable
 
 	// Boot-cached role registers (P1, DESIGN.md §8: no interface walks on hot
-	// paths). Ownership after the P2.5b split (invariant 13): argRegs/retReg/
-	// lrReg are the CallABI's role registers; pcReg/spReg are the Arch's.
-	// Callers that build an Emulator literal directly (tests) must call
-	// cacheRoleRegs after setting arch/callABI.
-	argRegs [8]emu.Reg // callABI.Arg(0..7)
-	retReg  emu.Reg    // callABI.Ret()
-	lrReg   emu.Reg    // callABI.LR()
-	pcReg   emu.Reg    // arch.PC()
-	spReg   emu.Reg    // arch.SP()
+	// paths). After the P5a.5 CallABI reshape only the Arch's own PC/SP remain
+	// cached: argument/result/return-address flow goes through the CallABI's
+	// whole-call operations (PrepareCall/ReadArgs/WriteResult/ReadResult), so
+	// no call-convention register identity is cached here anymore. Callers
+	// that build an Emulator literal directly (tests) must call cacheRoleRegs
+	// after setting arch.
+	pcReg emu.Reg // arch.PC()
+	spReg emu.Reg // arch.SP()
 
 	modules []*Module
 	main    *Module // the Config.SOPath module, if any
@@ -480,7 +479,7 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 		// pass below, via ReplaceE.)
 		e.bindHostFn(name, e.guardHostFn(func(em *Emulator, b emu.Backend) {
 			ret := hf(&Hook{em})
-			_ = b.RegWrite(em.retReg, ret)
+			_ = em.callABI.WriteResult(b, arch.CallResult{Value: ret})
 		}))
 	} // libc functions we implement in Go (need no libc init)
 	e.kctx = &kernel.Context{
@@ -612,16 +611,10 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	return e, nil
 }
 
-// cacheRoleRegs snapshots the Arch's and CallABI's role registers into plain
-// fields/slices at boot, so hot paths never walk the interface per call.
-// Callers that build an Emulator literal directly (tests) must call this
-// after setting arch/callABI.
+// cacheRoleRegs snapshots the Arch's role registers into plain fields at
+// boot, so hot paths never walk the interface per call. Callers that build an
+// Emulator literal directly (tests) must call this after setting arch.
 func (e *Emulator) cacheRoleRegs() {
-	for i := range e.argRegs {
-		e.argRegs[i] = e.callABI.Arg(i)
-	}
-	e.retReg = e.callABI.Ret()
-	e.lrReg = e.callABI.LR()
 	e.pcReg = e.arch.PC()
 	e.spReg = e.arch.SP()
 }
@@ -850,9 +843,15 @@ func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
 	pc, _ := b.RegRead(e.pcReg)
 	svc := pc - 4            // unicorn advances PC past the svc
 	if svc == e.getEnvStub { // JavaVM->GetEnv(vm, void** env, version)
-		envpp, _ := b.RegRead(e.argRegs[1])
-		_ = putU64(b, envpp, e.jniEnv)
-		_ = b.RegWrite(e.retReg, 0) // JNI_OK
+		args, err := e.callABI.ReadArgs(b, 2)
+		if err != nil {
+			if e.cfg.Verbose {
+				fmt.Printf("[GetEnv] ReadArgs: %v\n", err)
+			}
+			return
+		}
+		_ = putU64(b, args[1], e.jniEnv)
+		_ = e.callABI.WriteResult(b, arch.CallResult{Value: 0}) // JNI_OK
 		return
 	}
 	if idx, ok := e.jniDispatch[svc]; ok { // JNIEnv->function(...)
@@ -878,7 +877,7 @@ func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
 		if e.cfg.Verbose {
 			fmt.Printf("[stub] %s() -> 0\n", desc.Name)
 		}
-		_ = b.RegWrite(e.retReg, 0) // optimistic default
+		_ = e.callABI.WriteResult(b, arch.CallResult{Value: 0}) // optimistic default
 		return
 	}
 	// Real guest syscall: decode the frame ONCE via the injected platform
@@ -915,38 +914,48 @@ func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
 	}
 }
 
-// CallFunc invokes guest code at addr with up to 8 integer args (arg
-// registers 0..7 per the CallABI), returning the return register. LR is
-// set to a sentinel so emulation stops on return.
+// CallFunc invokes guest code at addr with any number of integer args,
+// returning the call's result. The CallABI establishes the frame
+// (PrepareCall: register args + stack spill + return address) with the
+// sentinel as the return address, so emulation stops when the callee returns.
 func (e *Emulator) CallFunc(addr uint64, args ...uint64) (uint64, error) {
 	if e.poisonErr != nil {
 		return 0, fmt.Errorf("emulator poisoned: %w", e.poisonErr)
 	}
-	regs := e.argRegs[:] // boot-cached callABI.Arg(0..7)
-	if len(args) > len(regs) {
-		return 0, fmt.Errorf("CallFunc: >8 args not supported")
-	}
-	for i, a := range args {
-		if err := e.be.RegWrite(regs[i], a); err != nil {
-			return 0, err
-		}
-	}
-	if err := e.be.RegWrite(e.lrReg, sentinel); err != nil {
+	// Snapshot SP so the call frame PrepareCall built (spill slots on ARM64,
+	// the pushed return address on AMD64) is unwound after the run — a
+	// well-formed callee returns with SP intact per the ABI, so any residual
+	// difference is our frame.
+	origSP, err := e.be.RegRead(e.spReg)
+	if err != nil {
 		return 0, err
 	}
+	if err := e.callABI.PrepareCall(e.be, arch.CallRequest{
+		Entry:  emu.GuestAddr(addr),
+		Return: sentinel,
+		Args:   args,
+	}); err != nil {
+		return 0, fmt.Errorf("CallFunc: %w", err)
+	}
 	e.scCount = 0
-	if err := e.be.Start(emu.GuestAddr(addr), emu.GuestAddr(sentinel)); err != nil {
-		return 0, fmt.Errorf("emu_start @0x%x: %w", addr, err)
+	runErr := e.be.Start(emu.GuestAddr(addr), emu.GuestAddr(sentinel))
+	_ = e.be.RegWrite(e.spReg, origSP) // unwind the call frame
+	if runErr != nil {
+		return 0, fmt.Errorf("emu_start @0x%x: %w", addr, runErr)
 	}
 	// A panic inside a guest up-call was recovered at the trampoline boundary
 	// (guard.go); surface it here — the run's caller — instead of across C.
 	if err := e.checkGuestPanic(); err != nil {
 		return 0, err
 	}
-	return e.be.RegRead(e.retReg)
+	res, err := e.callABI.ReadResult(e.be)
+	if err != nil {
+		return 0, fmt.Errorf("CallFunc: read result: %w", err)
+	}
+	return res.Value, nil
 }
 
-// CallSymbol calls an exported function by name with up to 8 integer args.
+// CallSymbol calls an exported function by name with integer args.
 func (e *Emulator) CallSymbol(name string, args ...uint64) (uint64, error) {
 	addr, ok := e.Sym(name)
 	if !ok {

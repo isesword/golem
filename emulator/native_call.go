@@ -13,9 +13,11 @@ import (
 //
 // A registered native is just a C function fn(JNIEnv* env, jclass/jobject self,
 // <args...>). We box the Java-typed args into guest handles/primitives, set up
-// the AAPCS64 call (env in X0, receiver in X1, args in X2.. then the stack),
-// run it, and hand back X0. While it runs, the .so makes the usual re-entrant
-// JNIEnv up-calls, which jni_dispatch.go routes to the dvm.Jni handler.
+// the call through the CallABI (env in arg 0, receiver in arg 1, args following
+// — register portion first, excess spilled to the stack by PrepareCall), run
+// it, and hand back the integer result. While it runs, the .so makes the usual
+// re-entrant JNIEnv up-calls, which jni_dispatch.go routes to the dvm.Jni
+// handler.
 
 // argKind tags a JavaArg's payload.
 type argKind int
@@ -107,8 +109,8 @@ func (e *Emulator) boxArg(a JavaArg) uint64 {
 }
 
 // CallNativeStatic invokes a RegisterNatives'd static native method
-// (className/name/sig) with Java-typed args, returning the raw X0 result (a
-// jobject handle for object returns, the value for primitive returns).
+// (className/name/sig) with Java-typed args, returning the raw integer result
+// (a jobject handle for object returns, the value for primitive returns).
 func (e *Emulator) CallNativeStatic(className, name, sig string, args ...JavaArg) (uint64, error) {
 	return e.callNative(className, name, sig, uint64(e.classRef(className)), args)
 }
@@ -156,7 +158,7 @@ func (e *Emulator) callNative(className, name, sig string, receiver uint64, args
 	if e.cfg.Verbose {
 		fmt.Printf("[call] %s (fn=0x%x, %d args)\n", key, fn, len(args))
 	}
-	ret, err := e.callFuncStack(fn, regs)
+	ret, err := e.CallFunc(fn, regs...)
 	// Go 调用方视角等价 Java catch：native Throw 的 pending 异常在此消费，
 	// 不残留到下一次调用（否则后续 ExceptionCheck 全真、连坐失败）。
 	e.pendingExc = false
@@ -167,30 +169,4 @@ func (e *Emulator) callNative(className, name, sig string, receiver uint64, args
 		return 0, fmt.Errorf("guest exit_group(%d) during %s", code, key)
 	}
 	return ret, nil
-}
-
-// callFuncStack is CallFunc with support for more than 8 integer args: the
-// first 8 go in X0..X7, the rest are spilled to the stack per AAPCS64.
-func (e *Emulator) callFuncStack(addr uint64, args []uint64) (uint64, error) {
-	if len(args) <= 8 {
-		return e.CallFunc(addr, args...)
-	}
-	spill := args[8:]
-	origSP, err := e.be.RegRead(e.spReg)
-	if err != nil {
-		return 0, err
-	}
-	space := (uint64(len(spill))*8 + 15) &^ 15 // 16-byte aligned
-	sp := origSP - space
-	for i, v := range spill {
-		if err := putU64(e.be, sp+uint64(i)*8, v); err != nil {
-			return 0, err
-		}
-	}
-	if err := e.be.RegWrite(e.spReg, sp); err != nil {
-		return 0, err
-	}
-	ret, callErr := e.CallFunc(addr, args[:8]...)
-	_ = e.be.RegWrite(e.spReg, origSP) // restore the caller's stack
-	return ret, callErr
 }

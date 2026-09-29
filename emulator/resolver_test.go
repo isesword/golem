@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/isesword/golem/internal/arch"
+	"github.com/isesword/golem/internal/arch/arm64"
 	"github.com/isesword/golem/internal/emu"
 	"github.com/isesword/golem/internal/loader"
 )
@@ -24,7 +25,7 @@ func TestBindSymbolConsumedByResolutionAndTrap(t *testing.T) {
 	ran := 0
 	e.bindHostFn("getauxval", func(em *Emulator, b emu.Backend) {
 		ran++
-		_ = b.RegWrite(em.retReg, 0x99)
+		_ = em.callABI.WriteResult(b, arch.CallResult{Value: 0x99})
 	})
 
 	rs, err := e.resolver.Resolve(loader.ResolveRequest{Name: "getauxval", Binding: loader.SymbolBindingGlobal})
@@ -49,8 +50,8 @@ func TestBindSymbolConsumedByResolutionAndTrap(t *testing.T) {
 	if ran != 1 {
 		t.Fatalf("host fn ran %d times, want 1", ran)
 	}
-	if v := be.writes[e.retReg]; v != 0x99 {
-		t.Fatalf("retReg = %#x, want 0x99 (host fn's own write)", v)
+	if v := be.writes[arm64.X0]; v != 0x99 {
+		t.Fatalf("result register (X0) = %#x, want 0x99 (host fn's own write)", v)
 	}
 	// The stub is NOT counted as an unresolved-stub hit (it dispatched).
 	if n := e.stubMgr.Hits("host:getauxval"); n != 0 {
@@ -110,7 +111,7 @@ func TestJavaVMStubStillFallsThrough(t *testing.T) {
 	if n := e.stubMgr.Hits("JavaVM[3]"); n != 1 {
 		t.Fatalf("JavaVM[3] hit count = %d, want 1 (optimistic-0 stub path)", n)
 	}
-	if v, ok := be.writes[e.retReg]; !ok || v != 0 {
+	if v, ok := be.writes[arm64.X0]; !ok || v != 0 {
 		t.Fatalf("stub must write optimistic 0, writes=%v", be.writes)
 	}
 }

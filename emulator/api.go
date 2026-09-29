@@ -207,13 +207,18 @@ type Hook struct{ e *Emulator }
 // Emu returns the emulator, for memory access inside a Replace callback.
 func (h *Hook) Emu() *Emulator { return h.e }
 
-// Arg returns integer argument i (0-based, CallABI arg registers 0..7).
+// Arg returns integer argument i (0-based) of the in-flight guest call, read
+// through the CallABI (register portion first, then the stack spill area —
+// valid at function entry, where interposition entry hooks fire).
 func (h *Hook) Arg(i int) uint64 {
-	if i < 0 || i > 7 {
+	if i < 0 {
 		return 0
 	}
-	v, _ := h.e.be.RegRead(h.e.argRegs[i])
-	return v
+	args, err := h.e.callABI.ReadArgs(h.e.be, i+1)
+	if err != nil || len(args) <= i {
+		return 0
+	}
+	return args[i]
 }
 
 // Reg returns register Xi for any i in 0..30 (also 31=SP, 32=PC, 33=NZCV) via the
@@ -229,18 +234,19 @@ func (h *Hook) Reg(i int) uint64 {
 	return regs[i]
 }
 
-// SetArg sets integer argument register i (0..7) — e.g. to rewrite an argument
-// from an inline hook.
+// SetArg sets integer argument register i — e.g. to rewrite an argument from
+// an inline hook. Register-shaped introspection only (CallABI.ArgReg): an
+// argument beyond the register portion lives on the stack and must be
+// rewritten in guest memory instead.
 func (h *Hook) SetArg(i int, v uint64) {
-	if i >= 0 && i <= 7 {
-		_ = h.e.be.RegWrite(h.e.argRegs[i], v)
+	if r, ok := h.e.callABI.ArgReg(i); ok {
+		_ = h.e.be.RegWrite(r, v)
 	}
 }
 
-// PC / SP / LR read those registers (handy inside an inline hook).
+// PC / SP read those registers (handy inside an inline hook).
 func (h *Hook) PC() uint64 { v, _ := h.e.be.RegRead(h.e.pcReg); return v }
 func (h *Hook) SP() uint64 { v, _ := h.e.be.RegRead(h.e.spReg); return v }
-func (h *Hook) LR() uint64 { v, _ := h.e.be.RegRead(h.e.lrReg); return v }
 
 // SetPC redirects execution (e.g. skip an instruction, jump elsewhere).
 func (h *Hook) SetPC(v uint64) { _ = h.e.be.RegWrite(h.e.pcReg, v) }

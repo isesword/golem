@@ -3,6 +3,7 @@ package emulator
 import (
 	"fmt"
 
+	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/emu"
 )
 
@@ -31,20 +32,43 @@ func registerHostFns(e *Emulator) {
 	}
 }
 
+// hostArgs reads the first n integer arguments of the in-flight guest call
+// through the CallABI (register portion + stack spill). A read failure has no
+// error channel on the hostFn contract — return nil and let the caller bail
+// with a zeroed result rather than panic across the backend trampoline.
+func (e *Emulator) hostArgs(b emu.Backend, n int) []uint64 {
+	args, err := e.callABI.ReadArgs(b, n)
+	if err != nil {
+		if e.cfg.Verbose {
+			fmt.Printf("[hostfn] ReadArgs(%d): %v\n", n, err)
+		}
+		return nil
+	}
+	return args
+}
+
+// hostResult writes the hostFn's result back per the CallABI.
+func (e *Emulator) hostResult(b emu.Backend, v uint64) {
+	_ = e.callABI.WriteResult(b, arch.CallResult{Value: v})
+}
+
 // hostSystemPropertyGet implements __system_property_get(name, value) via
 // the platform config's PropertyProvider: write the value (NUL-terminated,
 // PROP_VALUE_MAX-1) and return its length, or 0 when the provider doesn't
 // supply the key.
 func hostSystemPropertyGet(e *Emulator, b emu.Backend) {
-	namePtr, _ := b.RegRead(e.argRegs[0])
-	buf, _ := b.RegRead(e.argRegs[1])
+	args := e.hostArgs(b, 2)
+	if args == nil {
+		return
+	}
+	namePtr, buf := args[0], args[1]
 	name, _ := e.ReadCStr(namePtr)
 	v, ok := e.cfg.acfg.PropertyProvider(name)
 	if !ok {
 		if buf != 0 {
 			_ = e.be.MemWrite(emu.GuestAddr(buf), []byte{0})
 		}
-		_ = b.RegWrite(e.retReg, 0)
+		e.hostResult(b, 0)
 		return
 	}
 	if len(v) > 91 { // PROP_VALUE_MAX (92) minus the NUL
@@ -53,7 +77,7 @@ func hostSystemPropertyGet(e *Emulator, b emu.Backend) {
 	if buf != 0 {
 		_ = e.be.MemWrite(emu.GuestAddr(buf), append([]byte(v), 0))
 	}
-	_ = b.RegWrite(e.retReg, uint64(len(v)))
+	e.hostResult(b, uint64(len(v)))
 }
 
 // hostPthreadCreate(thread*, attr, start, arg) registers the start routine as a
@@ -61,9 +85,11 @@ func hostSystemPropertyGet(e *Emulator, b emu.Backend) {
 // tid. We can't run guest threads concurrently, so the fiber runs cooperatively
 // later, when RunThreads drives the scheduler (see scheduler.go).
 func hostPthreadCreate(e *Emulator, b emu.Backend) {
-	thr, _ := b.RegRead(e.argRegs[0])
-	routine, _ := b.RegRead(e.argRegs[2])
-	arg, _ := b.RegRead(e.argRegs[3])
+	args := e.hostArgs(b, 4)
+	if args == nil {
+		return
+	}
+	thr, routine, arg := args[0], args[2], args[3]
 	f := e.newFiber(routine, arg)
 	if e.cfg.Verbose {
 		fmt.Printf("[pthread_create] fiber %d routine=0x%x (%s) arg=0x%x\n", f.id, routine, e.NearestSym(routine), arg)
@@ -71,10 +97,10 @@ func hostPthreadCreate(e *Emulator, b emu.Backend) {
 	if thr != 0 {
 		_ = putU64(b, thr, uint64(0x7300|f.id)) // fake pthread_t (distinct per fiber)
 	}
-	_ = b.RegWrite(e.retReg, 0)
+	e.hostResult(b, 0)
 }
 
-func hostRet0(e *Emulator, b emu.Backend) { _ = b.RegWrite(e.retReg, 0) }
+func hostRet0(e *Emulator, b emu.Backend) { e.hostResult(b, 0) }
 
 // hostGetauxval implements getauxval(type) without bionic's __libc_auxv.
 // Since P4d it has ZERO per-key knowledge: it serves the auxv vector the
@@ -86,7 +112,11 @@ func hostRet0(e *Emulator, b emu.Backend) { _ = b.RegWrite(e.retReg, 0) }
 // build is the deliberate P4e rule — see ensureStartup for the pinned
 // ordering contract. Unknown keys answer 0, as before.
 func hostGetauxval(e *Emulator, b emu.Backend) {
-	t, _ := b.RegRead(e.argRegs[0])
+	args := e.hostArgs(b, 1)
+	if args == nil {
+		return
+	}
+	t := args[0]
 	var v uint64
 	if err := e.ensureStartup(nil, 0); err != nil {
 		// No error channel on the hostFn contract: log and answer 0 rather
@@ -97,5 +127,5 @@ func hostGetauxval(e *Emulator, b emu.Backend) {
 	} else {
 		v = e.startup.Lookup(t)
 	}
-	_ = b.RegWrite(e.retReg, v)
+	e.hostResult(b, v)
 }

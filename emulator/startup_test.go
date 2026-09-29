@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/isesword/golem/internal/arch"
+	"github.com/isesword/golem/internal/arch/arm64"
 	"github.com/isesword/golem/internal/emu"
 )
 
@@ -62,9 +63,9 @@ const (
 // getauxval drives the interposed host function for one query.
 func getauxval(t *testing.T, e *Emulator, be *auxvBE, typ uint64) uint64 {
 	t.Helper()
-	be.args = map[emu.Reg]uint64{e.argRegs[0]: typ}
+	be.args = map[emu.Reg]uint64{arm64.X0: typ}
 	hostGetauxval(e, be)
-	return be.writes[e.retReg]
+	return be.writes[arm64.X0]
 }
 
 // TestGetauxvalServesStartupABIVector pins the P4d single-source invariant at

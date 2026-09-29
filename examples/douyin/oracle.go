@@ -234,7 +234,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 			mencDumped = true
 		}
 		if bodyWrN <= 30 {
-			fmt.Printf("[BODYWR] pc=%#x lr=%#x addr=%#x sz=%d val=%#x\n", rel(h.PC()), rel(h.LR()), addr, size, uint64(value))
+			fmt.Printf("[BODYWR] pc=%#x lr=%#x addr=%#x sz=%d val=%#x\n", rel(h.PC()), rel(h.Reg(30)), addr, size, uint64(value))
 			bodyWrN++
 		}
 	})
@@ -253,7 +253,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 				continue
 			}
 			if idx := bytes.Index(win, pat); idx >= 0 {
-				fmt.Printf("[MEDFIND] %s @buf=%#x pc=%#x lr=%#x\n", tag, (addr&^63)+uint64(idx), rel(h.PC()), rel(h.LR()))
+				fmt.Printf("[MEDFIND] %s @buf=%#x pc=%#x lr=%#x\n", tag, (addr&^63)+uint64(idx), rel(h.PC()), rel(h.Reg(30)))
 				medFind[tag] = true
 			}
 		}
@@ -269,7 +269,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		pc := h.PC() - m.Base
 		if !medBodyPCs[pc] {
 			medBodyPCs[pc] = true
-			fmt.Printf("[MEDBODY] writer pc=%#x lr=%#x addr=%#x sz=%d\n", pc, rel(h.LR()), addr, size)
+			fmt.Printf("[MEDBODY] writer pc=%#x lr=%#x addr=%#x sz=%d\n", pc, rel(h.Reg(30)), addr, size)
 		}
 		// when the post-XOR head appears, dump the finalized 214-byte buffer (base64 input)
 		if !medBodyDumped {
@@ -303,7 +303,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 				pcv = int32(rd8le(pcb))
 			}
 			fmt.Printf("[BODY176] @buf=%#x writer-pc=%#x lr=%#x VM_ia=%#x VM_pc=%d x23=%#x\n",
-				(addr&^7)+uint64(i), rel(h.PC()), rel(h.LR()), rel(ia), pcv, h.Reg(23))
+				(addr&^7)+uint64(i), rel(h.PC()), rel(h.Reg(30)), rel(ia), pcv, h.Reg(23))
 		}
 	})
 	// [IVM]: the inner VM (0x2db000) main-encryption bytecode lives at ~0x475dxxxx (out of heap). The
@@ -363,7 +363,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 	heliosSeen := false
 	_, _ = e.HookAddr(m.Base+0x243ac0, func(h *emulator.Hook) {
 		blk, _ := h.Emu().ReadBytes(h.Arg(1), 32)
-		fmt.Printf("[md5blk] blk=%x lr=%#x\n", blk, rel(h.LR()))
+		fmt.Printf("[md5blk] blk=%x lr=%#x\n", blk, rel(h.Reg(30)))
 		if !heliosSeen && len(blk) >= 11 && string(blk[4:10]) == "482431" && blk[10] == 0x80 {
 			heliosSeen = true
 			fmt.Printf("[HELIOS] key block=%x rand4=%x\n", blk[:10], blk[:4])
@@ -414,7 +414,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 	// memcpy'd to 0x40154140 — hook both regions to capture the derivation at the source.
 	_, _ = e.HookMemWrite(0x40154130, 0x40154230, func(h *emulator.Hook, addr uint64, size int, value int64) {
 		fmt.Printf("[KEYWR] pc=%#x addr=%#x sz=%d val=%016x x0=%#x x1=%#x x2=%#x lr=%#x\n",
-			rel(h.PC()), addr, size, uint64(value), h.Reg(0), h.Reg(1), h.Reg(2), rel(h.LR()))
+			rel(h.PC()), addr, size, uint64(value), h.Reg(0), h.Reg(1), h.Reg(2), rel(h.Reg(30)))
 		// Capture the RIGHT key-build VM: when an in-.so handler (SB) writes the key bytes, dump its
 		// regfile (x23) + memory + log instrArr context (x0/pcval), and gate the trace for the lift.
 		if !keyTraced && addr >= 0x40154218 && addr <= 0x4015421f && h.Reg(0) >= 0x40a80000 && h.Reg(0) < 0x40a90000 {
