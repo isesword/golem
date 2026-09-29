@@ -309,6 +309,16 @@ jobs:
             echo "version=v0.1.0-dev.$(date -u +%Y%m%d.%H%M)" >> $GITHUB_OUTPUT
             echo "prerelease=true" >> $GITHUB_OUTPUT
           fi
+      - name: Stage per-arch asset names
+        run: |
+          # action-gh-release names release assets by basename: both artifact
+          # dirs hold unicorn.dll, so uploading them directly collapses to one
+          # asset (last arch wins). Copy to rel/unicorn-<arch>.dll first.
+          mkdir -p rel
+          cp artifacts/unicorn-dll-veh-off-amd64/unicorn.dll rel/unicorn-amd64.dll
+          cp artifacts/unicorn-dll-veh-off-arm64/unicorn.dll rel/unicorn-arm64.dll
+          cp artifacts/*/PROVENANCE-*.txt rel/
+          ls -la rel/
       - name: Publish golem release with DLLs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -318,13 +328,8 @@ jobs:
           name: golem ${{ steps.ver.outputs.version }}
           prerelease: ${{ steps.ver.outputs.prerelease }}
           generate_release_notes: true
-          # Per-arch names: both files are named unicorn.dll in their own
-          # artifact dirs, so a bare glob would copy one over the other.
           fail_on_unmatched_files: true
-          files: |
-            artifacts/unicorn-dll-veh-off-amd64/unicorn.dll
-            artifacts/unicorn-dll-veh-off-arm64/unicorn.dll
-            artifacts/**/PROVENANCE-*.txt
+          files: rel/*
       - name: Upload TCG sizing report
         uses: actions/upload-artifact@v4
         with:
