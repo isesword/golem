@@ -21,12 +21,13 @@ import (
 
 func init() { loader.RegisterParser(loader.FormatELF, Parse) }
 
-// machineArch maps ELF e_machine to the engine architecture. Only AArch64 is
-// supported today; an unmapped machine leaves Image.Arch zero, and the load
-// fails at relocator resolution with an explicit "no relocator registered"
-// error (pre-P3 behavior also failed unsupported machines, at apply time).
+// machineArch maps ELF e_machine to the engine architecture. An unmapped
+// machine leaves Image.Arch zero, and the load fails at relocator resolution
+// with an explicit "no relocator registered" error (pre-P3 behavior also
+// failed unsupported machines, at apply time).
 var machineArch = map[debugelf.Machine]emu.Arch{
 	debugelf.EM_AARCH64: emu.ArchARM64,
+	debugelf.EM_X86_64:  emu.ArchAMD64, // P5a
 }
 
 // Parse reads the ELF at path and builds the loader.Image. base is not
