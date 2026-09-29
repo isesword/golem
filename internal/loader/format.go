@@ -39,14 +39,36 @@ func (f Format) String() string {
 // or run constructors. An io.ReaderAt (e.g. *os.File or bytes.Reader)
 // suffices.
 func Sniff(r io.ReaderAt) (Format, arch.ID, arch.Variant, error) {
+	// magic[4] + cputype[4] + cpusubtype[4]: 12 bytes cover everything a
+	// Mach-O 64-bit probe needs; ELF reads further below.
+	var hdr [12]byte
+	if _, err := r.ReadAt(hdr[:], 0); err != nil {
+		return 0, 0, 0, fmt.Errorf("loader: sniff: cannot read header (truncated?): %w", err)
+	}
+	switch magic := binary.LittleEndian.Uint32(hdr[:]); magic {
+	case 0x464c457f: // "\x7fELF"
+		return sniffELF(r)
+	case 0xfeedfacf: // MH_MAGIC_64, little-endian on disk (CF FA ED FE)
+		return sniffMachO64(hdr[:])
+	case 0xfeedface, // MH_MAGIC (32-bit)
+		0xcefaedfe, 0xcffaedfe: // MH_CIGAM / MH_CIGAM_64 (big-endian on disk)
+		return 0, 0, 0, fmt.Errorf("loader: sniff: unsupported Mach-O variant (magic %#x: only 64-bit little-endian is supported)", magic)
+	case 0xcafebabe, 0xbebafeca, // FAT_MAGIC / FAT_CIGAM
+		0xcafebabf, 0xbfbafeca: // FAT_MAGIC_64 / FAT_CIGAM_64
+		return 0, 0, 0, fmt.Errorf("loader: sniff: unsupported object format (fat/universal Mach-O: magic %#x)", magic)
+	default:
+		return 0, 0, 0, fmt.Errorf("loader: sniff: unsupported object format (magic %#x)", magic)
+	}
+}
+
+// sniffELF is the ELF branch of Sniff: e_machine at offset 18, endianness per
+// EI_DATA.
+func sniffELF(r io.ReaderAt) (Format, arch.ID, arch.Variant, error) {
 	// e_ident[16] + e_type[2] + e_machine[2]: 20 bytes cover everything an
 	// ELF probe needs (e_machine sits at the same offset in ELF32/ELF64).
 	var hdr [20]byte
 	if _, err := r.ReadAt(hdr[:], 0); err != nil {
 		return 0, 0, 0, fmt.Errorf("loader: sniff: cannot read header (truncated?): %w", err)
-	}
-	if hdr[0] != 0x7f || hdr[1] != 'E' || hdr[2] != 'L' || hdr[3] != 'F' {
-		return 0, 0, 0, fmt.Errorf("loader: sniff: unsupported object format (not ELF: magic %#x)", [4]byte{hdr[0], hdr[1], hdr[2], hdr[3]})
 	}
 	// e_machine, endianness per EI_DATA.
 	var machine uint16
@@ -58,9 +80,48 @@ func Sniff(r io.ReaderAt) (Format, arch.ID, arch.Variant, error) {
 	default:
 		return 0, 0, 0, fmt.Errorf("loader: sniff: unknown ELF data encoding %d", hdr[5])
 	}
-	// ELF/AArch64 has no variant-encoding e_flags in use; Generic. (Mach-O
-	// will derive Variant from cpusubtype — P5b.)
+	// ELF/AArch64 has no variant-encoding e_flags in use; Generic.
 	return FormatELF, arch.ID(machine), arch.VariantGeneric, nil
+}
+
+// Mach-O CPU identities the probe recognizes (mach/machine.h). arch.ID values
+// follow ELF numbering where one exists (arch.ID doc), so the Mach-O cputype
+// maps onto the SAME ids the ELF probe reports — one arch identity regardless
+// of container format.
+const (
+	machoCPUArm64  = 0x0100000c // CPU_TYPE_ARM64 (CPU_ARCH_ABI64 | 12)
+	machoCPUX86_64 = 0x01000007 // CPU_TYPE_X86_64 (CPU_ARCH_ABI64 | 7)
+
+	machoSubtypeMask   = 0xff000000 // CPU_SUBTYPE_MASK: capability bits (incl. CPU_SUBTYPE_LIB64)
+	machoSubtypeARM64  = 0          // CPU_SUBTYPE_ARM64_ALL
+	machoSubtypeARM64E = 2          // CPU_SUBTYPE_ARM64E
+	machoSubtypeX86_64 = 3          // CPU_SUBTYPE_X86_64_ALL
+)
+
+// sniffMachO64 is the 64-bit little-endian Mach-O branch of Sniff: cputype /
+// cpusubtype -> arch.ID + arch.Variant. ARM64E maps to VariantARM64E; nothing
+// registers that variant yet, so the probe survives but arch.Resolve fails
+// loudly at target resolution — the deliberate "unsupported variant" surface
+// for P5c's PAC/chained-fixups world.
+func sniffMachO64(hdr []byte) (Format, arch.ID, arch.Variant, error) {
+	cputype := binary.LittleEndian.Uint32(hdr[4:])
+	subtype := binary.LittleEndian.Uint32(hdr[8:]) &^ machoSubtypeMask
+	switch cputype {
+	case machoCPUArm64:
+		switch subtype {
+		case machoSubtypeARM64:
+			return FormatMachO, arch.IDARM64, arch.VariantGeneric, nil
+		case machoSubtypeARM64E:
+			return FormatMachO, arch.IDARM64, arch.VariantARM64E, nil
+		}
+		return 0, 0, 0, fmt.Errorf("loader: sniff: unsupported Mach-O arm64 cpusubtype %d", subtype)
+	case machoCPUX86_64:
+		if subtype != machoSubtypeX86_64 {
+			return 0, 0, 0, fmt.Errorf("loader: sniff: unsupported Mach-O x86_64 cpusubtype %d", subtype)
+		}
+		return FormatMachO, arch.IDAMD64, arch.VariantGeneric, nil
+	}
+	return 0, 0, 0, fmt.Errorf("loader: sniff: unsupported Mach-O cputype %#x", cputype)
 }
 
 // Parser parses one object file of a registered Format into an Image.

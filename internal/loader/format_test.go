@@ -14,12 +14,12 @@ import (
 func elf64Header(machine uint16) []byte {
 	h := make([]byte, 64)
 	h[0], h[1], h[2], h[3] = 0x7f, 'E', 'L', 'F'
-	h[4] = 2 // ELFCLASS64
-	h[5] = 1 // ELFDATA2LSB
-	h[6] = 1 // EV_CURRENT
-	binary.LittleEndian.PutUint16(h[16:], 3)        // ET_DYN
-	binary.LittleEndian.PutUint16(h[18:], machine)  // e_machine
-	binary.LittleEndian.PutUint32(h[20:], 1)        // e_version
+	h[4] = 2                                       // ELFCLASS64
+	h[5] = 1                                       // ELFDATA2LSB
+	h[6] = 1                                       // EV_CURRENT
+	binary.LittleEndian.PutUint16(h[16:], 3)       // ET_DYN
+	binary.LittleEndian.PutUint16(h[18:], machine) // e_machine
+	binary.LittleEndian.PutUint32(h[20:], 1)       // e_version
 	return h
 }
 
@@ -51,10 +51,75 @@ func TestSniffRejectsNonELF(t *testing.T) {
 	if _, _, _, err := Sniff(bytes.NewReader(blob)); err == nil {
 		t.Fatal("expected error for non-ELF magic")
 	}
-	macho64 := []byte{0xcf, 0xfa, 0xed, 0xfe, 0x0c, 0x00, 0x00, 0x01,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} // MH_MAGIC_64 + arm64 cputype
-	if _, _, _, err := Sniff(bytes.NewReader(macho64)); err == nil {
-		t.Fatal("expected error for Mach-O (probe lands with loader/macho, P5b)")
+}
+
+// macho64Header builds a minimal 32-byte 64-bit little-endian Mach-O header
+// with the given cputype/cpusubtype. Enough for Sniff — no load commands.
+func macho64Header(cputype, subtype uint32) []byte {
+	h := make([]byte, 32)
+	binary.LittleEndian.PutUint32(h[0:], 0xfeedfacf) // MH_MAGIC_64 (LE on disk)
+	binary.LittleEndian.PutUint32(h[4:], cputype)
+	binary.LittleEndian.PutUint32(h[8:], subtype)
+	binary.LittleEndian.PutUint32(h[12:], 6) // MH_DYLIB
+	return h
+}
+
+// TestSniffMachOARM64: a Mach-O arm64 dylib header sniffs to
+// (FormatMachO, arch.IDARM64, VariantGeneric) — the same arch identity the
+// ELF probe reports for AArch64, from a different container format (P5b).
+func TestSniffMachOARM64(t *testing.T) {
+	f, id, v, err := Sniff(bytes.NewReader(macho64Header(0x0100000c, 0))) // CPU_TYPE_ARM64 / ALL
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f != FormatMachO || id != arch.IDARM64 || v != arch.VariantGeneric {
+		t.Fatalf("sniff = (%v, %d, %d), want (macho, IDARM64, Generic)", f, id, v)
+	}
+}
+
+// TestSniffMachOARM64E: CPU_SUBTYPE_ARM64E (=2, here with the
+// CPU_SUBTYPE_LIB64 capability bit set, as real toolchains emit) maps to
+// VariantARM64E. Nothing registers that variant yet — the probe survives and
+// arch.Resolve fails loudly downstream (the deliberate unsupported-variant
+// surface until P5c's PAC/chained fixups).
+func TestSniffMachOARM64E(t *testing.T) {
+	f, id, v, err := Sniff(bytes.NewReader(macho64Header(0x0100000c, 0x80000002)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f != FormatMachO || id != arch.IDARM64 || v != arch.VariantARM64E {
+		t.Fatalf("sniff = (%v, %d, %d), want (macho, IDARM64, ARM64E)", f, id, v)
+	}
+}
+
+// TestSniffMachOX86_64: Mach-O x86_64 maps onto the same IDAMD64 the ELF
+// probe reports.
+func TestSniffMachOX86_64(t *testing.T) {
+	f, id, v, err := Sniff(bytes.NewReader(macho64Header(0x01000007, 3))) // CPU_TYPE_X86_64 / ALL
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f != FormatMachO || id != arch.IDAMD64 || v != arch.VariantGeneric {
+		t.Fatalf("sniff = (%v, %d, %d), want (macho, IDAMD64, Generic)", f, id, v)
+	}
+}
+
+// TestSniffMachORejects: unknown cputype, unknown subtype, fat/universal and
+// 32-bit/big-endian Mach-O variants all fail loudly — never a best-effort
+// guess.
+func TestSniffMachORejects(t *testing.T) {
+	cases := map[string][]byte{
+		"unknown cputype":   macho64Header(0xdead, 0),
+		"unknown subtype":   macho64Header(0x0100000c, 9),
+		"fat":               {0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 0, 0, 0, 0, 0},
+		"fat64":             {0xca, 0xfe, 0xba, 0xbf, 0, 0, 0, 0, 0, 0, 0, 0},
+		"macho32":           {0xce, 0xfa, 0xed, 0xfe, 0x0c, 0, 0, 0, 0, 0, 0, 0},
+		"macho64 bigendian": {0xfe, 0xed, 0xfa, 0xcf, 0x01, 0, 0, 0x0c, 0, 0, 0, 0},
+	}
+	for name, hdr := range cases {
+		if _, _, _, err := Sniff(bytes.NewReader(hdr)); err == nil {
+			t.Fatalf("%s: expected error", name)
+		}
 	}
 }
 
