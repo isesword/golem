@@ -5,8 +5,8 @@ name: win-dll
 #      golem/win-veh-off (= unicorn dev 938efd1 + PR #2286 Windows ARM64
 #      support) — with -DWIN32_ENABLE_VEH=OFF (PR #2364: VEH compiled out,
 #      preallocation mandatory) for amd64 AND arm64;
-#   2. auto-commit them into assets/windows/<arch>/ so consumers clone and
-#      run (commit message carries [skip ci] to prevent a trigger loop);
+#   2. publish them to GitHub Releases: dev-win pushes produce prereleases
+#      (experimental endpoint), tags on main produce full releases;
 #   3. THE REAL PRIZE — run golem's full engine test suite on Windows
 #      runners against those DLLs: uc_open → UC_CTL_UC_PREALLOC → map →
 #      hooks (incl. callbacks re-entering the backend) → emu_start. This
@@ -16,7 +16,12 @@ name: win-dll
 on:
   workflow_dispatch:
   push:
-    branches: [dev-win]
+    branches: [dev, main, dev-win]
+    paths:
+      - ".github/workflows/win-dll.yml"
+      - "internal/emu/**"
+      - "emulator/**"
+      - "assets/windows/**"
 
 env:
   GO_VERSION: "1.26"
@@ -229,7 +234,7 @@ jobs:
   # cross-COMPILED on amd64 — its whole point is PR #2286's runtime
   # correctness (musl setjmp/longjmp instead of the CRT's always-unwind
   # longjmp), which a compile check cannot prove. Run the engine suite +
-  # CLI smoke natively on WoA. This gates auto-commit: an arm64 DLL that
+  # CLI smoke natively on WoA. This gates the release publish: an arm64 DLL that
   # never ran is not worth committing.
   # ------------------------------------------------------------------
   engine-windows-arm64:
@@ -273,39 +278,43 @@ jobs:
           .\golem-cli.exe examples\native\native.so fib 20
 
   # ------------------------------------------------------------------
-  # auto-commit: drop both DLLs + provenance into assets/windows/<arch>/
-  # so consumers clone and run. [skip ci] prevents a trigger loop.
+  # release: publish both DLLs + provenance to a GitHub Release.
+  #   dev-win push  -> prerelease, tag v<version>-dev.<run_number>
+  #   main tag push -> full release (latest)
+  # Notes are auto-generated from merged PR titles (squash-merge policy).
   # ------------------------------------------------------------------
-  auto-commit:
-    needs: [build-unicorn-dll, engine-windows, engine-windows-arm64]
+  release:
+    needs: [build-unicorn-dll, engine-windows]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.ref_name }} # commit back to the triggering branch
 
-      - name: Download both DLLs
+      - name: Download all DLL artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: unicorn-dll-veh-off-*
           path: artifacts
 
-      - name: Stage into assets
+      - name: Determine release version and flags
+        id: ver
         run: |
-          mkdir -p assets/windows/amd64 assets/windows/arm64
-          find artifacts -name unicorn.dll -path "*amd64*" -exec cp {} assets/windows/amd64/unicorn.dll \;
-          find artifacts -name unicorn.dll -path "*arm64*" -exec cp {} assets/windows/arm64/unicorn.dll \;
-          find artifacts -name "PROVENANCE-*.txt" -exec cp {} assets/windows/ \;
-          ls -la assets/windows/amd64 assets/windows/arm64
-
-      - name: Commit if changed
-        run: |
-          git config user.name "golem-ci"
-          git config user.email "golem-ci@users.noreply.github.com"
-          git add assets/windows/
-          if git diff --cached --quiet; then
-            echo "DLLs unchanged — nothing to commit"
-            exit 0
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          else
+            echo "version=v0.1.0-dev.$(date -u +%Y%m%d)-${{ github.run_number }}" >> $GITHUB_OUTPUT
+            echo "prerelease=true" >> $GITHUB_OUTPUT
           fi
-          git commit -m "[skip ci] assets: refresh unicorn.dll (${{ needs.build-unicorn-dll.outputs.sha }}, VEH off, amd64+arm64)"
-          git push
+
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.ver.outputs.version }}
+          name: golem ${{ steps.ver.outputs.version }}
+          prerelease: ${{ steps.ver.outputs.prerelease }}
+          generate_release_notes: true
+          files: |
+            artifacts/**/unicorn.dll
+            artifacts/**/PROVENANCE-*.txt

@@ -1,0 +1,191 @@
+name: release
+
+# DLL release pipeline — the ONLY place releases are published.
+#
+#   dev branch (manual dispatch) → build + test → PRERELEASE
+#     "this snapshot is good enough for others to try"
+#   main tag push (v*) → build + test → FULL RELEASE (latest)
+#     "this is a golem release"
+#
+# Notes are auto-generated from merged PR titles (squash-merge policy),
+# so keep PR titles clean — they become the release changelog entries.
+# DLL source: isesword/unicorn @ golem/win-veh-off (see win-dll.yml).
+
+on:
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: "Mark as pre-release (dev line)"
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: "1.26"
+  UNICORN_REPO: https://github.com/isesword/unicorn.git
+  UNICORN_REF: golem/win-veh-off
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-2022, arch: amd64, cmake_arch: x64 }
+          - { os: windows-2022, arch: arm64, cmake_arch: ARM64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Resolve unicorn ref to commit SHA
+        id: ref
+        run: |
+          $line = git ls-remote ${{ env.UNICORN_REPO }} ${{ env.UNICORN_REF }}
+          $sha = $line.Split("`t")[0]
+          echo "sha=$sha" >> $env:GITHUB_OUTPUT
+          echo "unicorn commit: $sha"
+
+      - name: Cache unicorn source
+        uses: actions/cache@v4
+        with:
+          path: unicorn-src
+          key: unicorn-src-${{ steps.ref.outputs.sha }}
+
+      - name: Checkout unicorn at resolved commit
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          git clone ${{ env.UNICORN_REPO }} unicorn-src
+          git -C unicorn-src checkout ${{ steps.ref.outputs.sha }}
+
+      - name: Configure (VEH compiled out)
+        run: |
+          cmake -S unicorn-src -B build `
+            -A ${{ matrix.cmake_arch }} `
+            -DWIN32_ENABLE_VEH=OFF `
+            -DUNICORN_ARCH="arm64;aarch64" `
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build unicorn.dll
+        run: cmake --build build --config Release --parallel
+
+      - name: Smoke — the DLL must export uc_open and uc_ctl
+        run: |
+          $dll = Get-ChildItem -Recurse -Filter unicorn.dll | Select-Object -First 1
+          # Parse the PE export table with .NET — no dumpbin needed.
+          $bytes = [IO.File]::ReadAllBytes($dll)
+          $peOff = [BitConverter]::ToInt32($bytes, 0x3C)
+          $optOff = $peOff + 24
+          $magic = [BitConverter]::ToUInt16($bytes, $optOff)
+          if ($magic -eq 0x20B) { $dataDirOff = $optOff + 112 } else { $dataDirOff = $optOff + 96 }
+          $expRva = [BitConverter]::ToUInt32($bytes, $dataDirOff)
+          if ($expRva -eq 0) { throw "DLL has no export table" }
+          $numSec = [BitConverter]::ToUInt16($bytes, $peOff + 6)
+          $secOff = $optOff + [BitConverter]::ToUInt16($bytes, $peOff + 20)
+          function RvaToOff($rva) {
+            for ($i = 0; $i -lt $numSec; $i++) {
+              $s = $secOff + $i * 40
+              $va = [BitConverter]::ToUInt32($bytes, $s + 12)
+              $sz = [BitConverter]::ToUInt32($bytes, $s + 8)
+              $raw = [BitConverter]::ToUInt32($bytes, $s + 20)
+              if ($rva -ge $va -and $rva -lt $va + $sz) { return $raw + ($rva - $va) }
+            }
+            throw "RVA $rva not in any section"
+          }
+          $namesRva = [BitConverter]::ToUInt32($bytes, (RvaToOff $expRva) + 32)
+          $namesCnt = [BitConverter]::ToUInt32($bytes, (RvaToOff $expRva) + 24)
+          $names = @()
+          for ($i = 0; $i -lt $namesCnt; $i++) {
+            $p = RvaToOff ([BitConverter]::ToUInt32($bytes, (RvaToOff $namesRva) + $i * 4))
+            $end = $p; while ($bytes[$end] -ne 0) { $end++ }
+            $names += [Text.Encoding]::ASCII.GetString($bytes, $p, $end - $p)
+          }
+          foreach ($n in @("uc_open", "uc_ctl")) {
+            if ($names -notcontains $n) { throw "export $n missing (have $($names -join ', '))" }
+          }
+          echo "exports OK (${{ matrix.arch }}): $($names -join ', ')"
+
+      - name: Upload DLL artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unicorn-dll-${{ matrix.arch }}
+          path: |
+            $dll
+            PROVENANCE-${{ matrix.arch }}.txt
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------
+  # engine-windows (amd64): run golem's full engine suite against the
+  # freshly built DLL BEFORE the release is published.
+  # ------------------------------------------------------------------
+  engine-windows:
+    needs: build
+    runs-on: windows-2022
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download the VEH-off unicorn.dll
+        uses: actions/download-artifact@v4
+        with:
+          name: unicorn-dll-amd64
+          path: unicorn-dll
+
+      - name: Expose the absolute DLL path to the tests
+        run: |
+          $dll = (Get-ChildItem -Recurse -Filter unicorn.dll | Select-Object -First 1).FullName
+          echo "GOLEM_UNICORN=$dll" >> $env:GITHUB_ENV
+          echo "DLL: $dll"
+
+      - name: Engine tests on Windows (fakebe contract + full suite)
+        run: go test -tags unicorn ./... -v
+
+      - name: Engine smoke — CLI on a real .so
+        run: |
+          go build -tags unicorn -o golem-cli.exe ./cmd/golem
+          .\\golem-cli.exe examples\\native\\native.so add 2 3
+          .\\golem-cli.exe examples\\native\\native.so fib 20
+
+  # ------------------------------------------------------------------
+  # release: publish DLLs + provenance to a GitHub Release. Runs only
+  # after build AND engine tests pass.
+  # ------------------------------------------------------------------
+  publish:
+    needs: [build, engine-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all DLL artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: unicorn-dll-*
+          path: artifacts
+      - name: Stage release files
+        run: |
+          mkdir -p release
+          find artifacts -name "unicorn.dll" | while read f; do
+            dir=$(basename $(dirname $(dirname $f)))
+            cp "$f" "release/unicorn-$dir.dll"
+          done
+          find artifacts -name "PROVENANCE-*" -exec cp {} release/ \\;
+          ls -la release/
+      - name: Create release with auto-generated notes
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v0.1.0-dev.{0}', github.run_number) }}
+          name: ${{ github.ref_type == 'tag' && github.ref_name || format('dev snapshot {0}', github.run_number) }}
+          prerelease: ${{ github.ref_type != 'tag' }}
+          generate_release_notes: true
+          files: release/*
