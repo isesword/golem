@@ -298,15 +298,40 @@ func (e *Emulator) MemStats() (regions int, mmapTop uint64) {
 // New boots an emulator: prepares the address space, maps bionic, and (if
 // Config.SOPath is set) loads + initializes the main library.
 //
-// Boot follows the DESIGN.md §4 sequence: options (incl. the legacy shim for
-// Config.Android) are normalized first, then the main SO's header is probed
-// (loader.Sniff — lightweight, header only) and the immutable Target is
-// resolved; only then is the CPU backend created, so the engine never
-// outlives an arch/platform re-guess. opts are P4a functional options
-// (WithPlatformConfig, ...); existing callers passing just a Config are
-// unaffected.
+// Boot follows the DESIGN.md §4 sequence, as explicitly staged below (P4e
+// boot-sequence consolidation — the stages are ordered statements in this
+// function, locked by the invariant tests in boot_order_test.go):
+//
+//	stage 1  normalize options (incl. the Config.Android legacy shim)
+//	stage 2  lightweight probe (loader.Sniff: SO header only — no mapping,
+//	         no relocation, no backend)
+//	stage 3  resolve Arch + CallABI + StubEncoder + Features + Format +
+//	         Platform and build the immutable Target — after this point no
+//	         lower layer may re-guess arch/platform from header or config
+//	stage 4  LayoutPolicy → memory.Layout (pure geometry)
+//	stage 5  emu.NewNamed: create the CPU backend
+//	stage 6  pre-run backend settings (TCG buffer — must land before the
+//	         first guest execution; fails fast before any mapping)
+//	stage 7  Emulator skeleton: AddressSpace (the single VA allocation
+//	         entry), StubManager/InterposeTable, resolver chain
+//	stage 8  platform runtime components (syscall transport/table/codecs,
+//	         StartupABI, host functions, JNI handler)
+//	stage 9  materialize the layout: reserve + map stack/TLS/stub regions,
+//	         set SP, set TLS base
+//	stage 10 install runtime hooks/traps (SVC routing, invalid-mem
+//	         diagnostics) — inert until execution, but they must be live
+//	         before stage 11 because LoadLibrary couples loading with init
+//	         execution
+//	stage 11 boot(): Load images → Relocate/bind (SymbolResolver) →
+//	         FinalizeImage (RW→RX) → StartupABI.BuildInitialState (main
+//	         image only, after FinalizeImage, before init) → run init
+//	stage 12 post-boot: interpose exported ReplaceFns symbols; New returns
+//	         with guest execution now allowed
+//
+// opts are P4a functional options (WithPlatformConfig, ...); existing callers
+// passing just a Config are unaffected.
 func New(cfg Config, opts ...Option) (e *Emulator, err error) {
-	// §4 step 1: normalize options. The legacy shim inside reads
+	// §4 stage 1: normalize options. The legacy shim inside reads
 	// Config.Android — its ONLY read site in the package.
 	for _, opt := range opts {
 		if opt == nil {
@@ -320,18 +345,20 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	if err != nil {
 		return nil, err
 	}
-	// §4 steps 2–4: probe → resolve arch triple → immutable Target.
+	// §4 stages 2–3: probe → resolve arch triple → immutable Target.
 	tgt, err := resolveTarget(cfg)
 	if err != nil {
 		return nil, err
 	}
-	// §4 step 5: the platform's LayoutPolicy plans the initial guest address
+	// §4 stage 4: the platform's LayoutPolicy plans the initial guest address
 	// space (pure geometry — no Map/Alloc/Reserve here, P4c). This precedes
 	// backend creation so a layout failure never leaves an engine behind.
 	layout, err := resolveLayout(tgt, cfg.LayoutOverrides)
 	if err != nil {
 		return nil, err
 	}
+	// §4 stage 5: create the CPU backend — never before the Target exists
+	// (boot_order_test.go locks probe/target → backend ordering).
 	engine, err := emu.Resolve(cfg.Engine)
 	if err != nil {
 		return nil, fmt.Errorf("backend: %w", err)
@@ -340,11 +367,12 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("backend(%s): %w", engine, err)
 	}
-	// TCG buffer sizing must land before the first uc_emu_start (boot runs
-	// guest code), and this point precedes the half-booted cleanup defer below
-	// (it only fires once e is assigned) — so failures here close the fresh
-	// backend by hand. A non-unicorn engine reports the setting as an error
-	// via SetTCGBufferSize rather than silently ignoring it.
+	// §4 stage 6: pre-run backend settings. TCG buffer sizing must land
+	// before the first uc_emu_start (boot runs guest code), and this point
+	// precedes the half-booted cleanup defer below (it only fires once e is
+	// assigned) — so failures here close the fresh backend by hand. A
+	// non-unicorn engine reports the setting as an error via
+	// SetTCGBufferSize rather than silently ignoring it.
 	if cfg.TCGBufferMiB != 0 {
 		if cfg.TCGBufferMiB < 0 {
 			be.Close()
@@ -359,6 +387,9 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	if pid == 0 {
 		pid = defaultPid
 	}
+	// §4 stage 7: the Emulator skeleton — including the AddressSpace, the
+	// single guest VA allocation entry (P2.5c, invariant 12) planned by the
+	// stage-4 LayoutPolicy.
 	e = &Emulator{
 		cfg:         cfg,
 		engine:      engine,
@@ -387,7 +418,8 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	e.itab = interpose.NewInterposeTable()
 	// P4d: the platform's StartupABI builds the process initial state (auxv
 	// block) once the main image's metadata is complete (LoadLibrary) or,
-	// bionic-only, lazily at the first getauxval.
+	// bionic-only, lazily at the first getauxval — a deliberate P4e rule, see
+	// ensureStartup.
 	e.startup = &android.StartupABI{}
 	// P3.5: the boot symbol-resolution chain — host replacement symbols
 	// (InterposeTable via the HostResolver adapter) → global guest exports
@@ -414,6 +446,8 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 			e.be.Close()
 		}
 	}()
+	// §4 stage 8: platform runtime components — host functions, the JNI
+	// handler, and the injected syscall personality.
 	if cfg.FileResolver != nil {
 		e.fs.SetFallback(cfg.FileResolver)
 	}
@@ -451,10 +485,13 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	} // libc functions we implement in Go (need no libc init)
 	e.kctx = &kernel.Context{
 		B: be, Mem: e.mem, VFS: e.fs, Pid: pid, Verbose: cfg.Verbose, Epoch: cfg.Epoch,
-		// P2: the syscall transport ABI, dispatch table and guest struct
+		// P2/P4b: the syscall transport ABI, dispatch table and guest struct
 		// codecs are injected platform personality (Android / AArch64 Linux
-		// today), not hardcoded in the kernel. TODO(P4): resolve from
-		// Config.Platform once functional options land.
+		// today), not hardcoded in the kernel — the kernel holds no syscall
+		// numbers. The binding is assembled by hand here at the composition
+		// root; a platform.Factory.Bind taking only a minimal BindContext
+		// (TargetInfo/Layout/Features) is the P5 wiring point (DESIGN.md §4),
+		// deliberately not pre-built in P4.
 		Transport: android.LinuxARM64Transport{},
 		Table:     android.NewARM64SyscallTable(kernel.DefaultHandlers()),
 		Codecs:    android.AsmGenericLP64Codecs{},
@@ -468,9 +505,10 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 		e.fs.MountBattery(func() (int, bool) { return prof.Battery(time.Now()) })
 	}
 
-	// Reserve fixed regions. Every guest VA range is registered with the
-	// AddressSpace first (P2.5c, invariant 12: the single VA allocation entry);
-	// the backend MemMap calls below only back ranges the AddressSpace owns.
+	// §4 stage 9: materialize the layout — reserve fixed regions, then map
+	// them. Every guest VA range is registered with the AddressSpace first
+	// (P2.5c, invariant 12: the single VA allocation entry); the backend
+	// MemMap calls below only back ranges the AddressSpace owns.
 	l := e.layout
 	if err := e.as.Reserve(emu.GuestAddr(l.StackBase), l.StackSize, memory.PurposeStack); err != nil {
 		return nil, fmt.Errorf("reserve stack: %w", err)
@@ -518,12 +556,19 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	_ = putU64(be, l.TLSBase+tlsSlotSelf*8, l.TLSBase)
 	_ = putU64(be, l.TLSBase+tlsSlotThreadID*8, pthreadStruct)
 
-	// Route SVC: distinguish import-stub calls (by PC) from real syscalls.
-	// Every Go callback handed to the backend goes through the panic guard
-	// (guard.go): a panic must never escape across the purego trampoline.
+	// §4 stage 10: install runtime hooks/traps. Route SVC: distinguish
+	// import-stub calls (by PC) from real syscalls. Every Go callback handed
+	// to the backend goes through the panic guard (guard.go): a panic must
+	// never escape across the purego trampoline.
 	// InterruptHooker/InvalidMemHooker are capability probes (P2.5a): an
 	// engine without them fails New with ErrUnsupported, matching the old
 	// unconditional-method error path.
+	//
+	// §4 lists hook installation after StartupABI; here it deliberately sits
+	// BEFORE stage 11's load: golem's LoadLibrary couples loading with init
+	// execution (RunInit runs guest code that can trap), so the trap path
+	// must be live before the first image executes. The hooks are inert
+	// until guest code runs, so the placement changes no behavior.
 	intr, ok := be.(emu.InterruptHooker)
 	if !ok {
 		return nil, fmt.Errorf("hook interrupt: %w (engine %q)", emu.ErrUnsupported, e.engine)
@@ -547,14 +592,16 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 		return nil, err
 	}
 
+	// §4 stage 11: load + link + finalize + startup + init (see boot,
+	// LoadModule, LoadLibrary).
 	if err := e.boot(); err != nil {
 		return nil, err // cleanup via the deferred Close above
 	}
-	// ReplaceFns second pass: exports of the freshly loaded modules are only
-	// in the DynamicLinker's global scope now. Names bound as import overrides
-	// during linking are not in the scope (they resolved to stubs) and are
-	// naturally skipped; exported symbols get an interposition entry hook
-	// (P2.5d).
+	// §4 stage 12 — ReplaceFns second pass: exports of the freshly loaded
+	// modules are only in the DynamicLinker's global scope now. Names bound
+	// as import overrides during linking are not in the scope (they resolved
+	// to stubs) and are naturally skipped; exported symbols get an
+	// interposition entry hook (P2.5d).
 	for name, hf := range acfg.ReplaceFns {
 		if addr, ok := e.dl.LookupGlobal(name); ok {
 			if err := e.interposeE(uint64(addr), hf); err != nil {
@@ -579,7 +626,9 @@ func (e *Emulator) cacheRoleRegs() {
 	e.spReg = e.arch.SP()
 }
 
-// boot maps bionic, then (if configured) loads + initializes the main library.
+// boot is §4 stage 11: map + link bionic (LoadModule: Load → Relocate/bind →
+// FinalizeImage per image, no init run), then (if configured) load +
+// initialize the main library (LoadLibrary adds StartupABI + init execution).
 func (e *Emulator) boot() error {
 	lib := e.cfg.AssetRoot + "/android/sdk23/lib64/"
 	for _, l := range []string{"libc.so", "libm.so", "libdl.so"} {
@@ -606,11 +655,13 @@ func (e *Emulator) LoadLibrary(path string) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	// P4d (DESIGN.md §4): build the process initial state — the auxv data
-	// block — once the first LoadLibrary'd image's metadata is complete, and
-	// BEFORE RunInit runs any of its guest code, so bionic's getauxval
-	// callers see the real vector from the start. Built once per emulator;
-	// later libraries keep the first-built vector.
+	// P4d/P4e (DESIGN.md §4, locked by boot_order_test.go): build the process
+	// initial state — the auxv data block — once the first LoadLibrary'd
+	// image's metadata is complete. Ordering: this runs AFTER the image's
+	// FinalizeImage (inside LoadModule above) and BEFORE RunInit executes any
+	// guest code, so bionic's getauxval callers see the real vector from the
+	// first guest instruction. Built once per emulator; later libraries keep
+	// the first-built vector.
 	if err := e.ensureStartup(m.Img, m.Base); err != nil {
 		return nil, fmt.Errorf("startup ABI: %w", err)
 	}
@@ -672,10 +723,18 @@ func (e *Emulator) LoadModule(path, name string) (*Module, error) {
 // LoadLibrary) builds the vector without AT_PHDR/AT_PHNUM/AT_ENTRY, which
 // then read as 0 — the pre-P4d default for unknown keys.
 //
-// The returned InitialState's Entry/SP are informational this stage: entry
-// into guest code goes through CallFunc, and SP was already set at boot from
-// android.StackTopReserve. Applying Entry/SP as a real execution start is
-// the P4e boot-sequence consolidation's job.
+// Build-time ordering rule (P4e, pinned and locked by boot_order_test.go):
+//   - WITH a main image: the build runs inside LoadLibrary, after the
+//     image's FinalizeImage (LoadModule → plan.Apply) and BEFORE RunInit
+//     executes any guest init code — the auxv is complete from the first
+//     guest instruction.
+//   - WITHOUT a main image (bionic-only boot): the build is deliberately
+//     deferred to the first interposed getauxval (hostGetauxval). This is
+//     the chosen semantics, not a gap: there is no main-image metadata to
+//     consume yet, and bionic's pre-init getauxval callers must still get
+//     answers. A later LoadLibrary does NOT rebuild (auxv is built once);
+//     the main image's PHDR/ENTRY simply never enter the vector — the
+//     historical bionic-only behavior.
 func (e *Emulator) ensureStartup(img *loader.Image, base uint64) error {
 	if e.startupBuilt {
 		return nil
@@ -689,7 +748,7 @@ func (e *Emulator) ensureStartup(img *loader.Image, base uint64) error {
 	if e.be == nil {
 		return fmt.Errorf("startup ABI: no backend to materialize the auxv block into")
 	}
-	if _, err := e.startup.BuildInitialState(&platform.StartupContext{
+	if err := e.startup.BuildInitialState(&platform.StartupContext{
 		Image:    img,
 		Base:     emu.GuestAddr(base),
 		AS:       e.as,

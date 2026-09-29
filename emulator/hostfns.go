@@ -82,8 +82,9 @@ func hostRet0(e *Emulator, b emu.Backend) { _ = b.RegWrite(e.retReg, 0) }
 // Target's arch.CPUFeatures — auxv data block and CPU-feature query share one
 // source of truth. In a bionic-only boot the first getauxval may precede any
 // LoadLibrary; the vector is then built lazily without main-image metadata
-// (AT_PHDR/AT_PHNUM/AT_ENTRY read as 0, the historical default). Unknown keys
-// answer 0, as before.
+// (AT_PHDR/AT_PHNUM/AT_ENTRY read as 0, the historical default). That lazy
+// build is the deliberate P4e rule — see ensureStartup for the pinned
+// ordering contract. Unknown keys answer 0, as before.
 func hostGetauxval(e *Emulator, b emu.Backend) {
 	t, _ := b.RegRead(e.argRegs[0])
 	var v uint64

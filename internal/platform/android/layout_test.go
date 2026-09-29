@@ -19,7 +19,7 @@ var arm64Caps = arch.AddressSpaceCaps{
 // TestLayoutPolicyPinsLegacyNumbers is the behavior-invariant red line of
 // P4c: the Android LayoutPolicy must reproduce, field by field, the exact
 // guest address geometry the emulator booted with before P4c (the retired
-// legacyARM64Layout plus the heap/mmap boundaries New used to splice by
+// pre-P4c layout helper plus the heap/mmap boundaries New used to splice by
 // hand from kernel.BrkBase / memory.MmapBase).
 func TestLayoutPolicyPinsLegacyNumbers(t *testing.T) {
 	l, err := LayoutPolicy{}.Resolve(

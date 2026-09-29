@@ -66,29 +66,31 @@ type StartupABI struct {
 var _ platform.StartupABI = (*StartupABI)(nil)
 
 // BuildInitialState builds the auxv vector from the loader's image metadata
-// (PHDR/ENTRY) and the arch feature set (HWCAP), writes it plus the
-// AT_RANDOM bytes into the top of the stack region, and returns the process
-// entry/SP. It must be called at most once per StartupABI — the vector it
-// builds is THE auxv for the emulator's lifetime.
+// (PHDR/ENTRY) and the arch feature set (HWCAP) and writes it plus the
+// AT_RANDOM bytes into the top of the stack region. It must be called at
+// most once per StartupABI — the vector it builds is THE auxv for the
+// emulator's lifetime.
 //
 // ctx.Image may be nil (bionic-only boot, no main module yet): AT_PHDR /
 // AT_PHNUM / AT_ENTRY are then omitted and getauxval answers 0 for them, the
-// pre-P4d behavior for unknown keys.
-func (s *StartupABI) BuildInitialState(ctx *platform.StartupContext) (*platform.InitialState, error) {
+// pre-P4d behavior for unknown keys. This lazy, metadata-less build is a
+// deliberate P4e decision, not an accident — see platform.StartupABI for the
+// ordering rule.
+func (s *StartupABI) BuildInitialState(ctx *platform.StartupContext) error {
 	if s.built {
-		return nil, errors.New("android startup: BuildInitialState called twice (auxv is built once per emulator)")
+		return errors.New("android startup: BuildInitialState called twice (auxv is built once per emulator)")
 	}
 	if ctx == nil {
-		return nil, errors.New("android startup: nil StartupContext")
+		return errors.New("android startup: nil StartupContext")
 	}
 	if ctx.Features == nil {
-		return nil, errors.New("android startup: nil Features (arch.CPUFeatures is the only HWCAP source)")
+		return errors.New("android startup: nil Features (arch.CPUFeatures is the only HWCAP source)")
 	}
 	if ctx.Mem == nil {
-		return nil, errors.New("android startup: nil Mem writer")
+		return errors.New("android startup: nil Mem writer")
 	}
 	if ctx.Stack.Size < StackTopReserve+0x100 {
-		return nil, fmt.Errorf("android startup: stack region %#x+%#x too small for the auxv block", ctx.Stack.Addr, ctx.Stack.Size)
+		return fmt.Errorf("android startup: stack region %#x+%#x too small for the auxv block", ctx.Stack.Addr, ctx.Stack.Size)
 	}
 
 	hwcap, hwcap2 := ctx.Features.HWCAP()
@@ -124,7 +126,7 @@ func (s *StartupABI) BuildInitialState(ctx *platform.StartupContext) (*platform.
 	blockSize := vecBytes + 16
 	blockAddr := top - StackTopReserve - blockSize
 	if blockAddr < ctx.Stack.Addr {
-		return nil, fmt.Errorf("android startup: auxv block (%#x bytes) does not fit below the SP reserve in stack %#x+%#x",
+		return fmt.Errorf("android startup: auxv block (%#x bytes) does not fit below the SP reserve in stack %#x+%#x",
 			blockSize, ctx.Stack.Addr, ctx.Stack.Size)
 	}
 	randomAddr := blockAddr + vecBytes
@@ -137,19 +139,14 @@ func (s *StartupABI) BuildInitialState(ctx *platform.StartupContext) (*platform.
 	}
 	kernel.DeterministicRandom(auxvRandomSeed, block[vecBytes:])
 	if err := ctx.Mem.MemWrite(emu.GuestAddr(blockAddr), block); err != nil {
-		return nil, fmt.Errorf("android startup: write auxv block at %#x: %w", blockAddr, err)
+		return fmt.Errorf("android startup: write auxv block at %#x: %w", blockAddr, err)
 	}
 
 	s.auxv = append(entries, platform.AuxvEntry{Type: atNull, Val: 0})
 	s.randomAddr = emu.GuestAddr(randomAddr)
 	s.blockAddr = emu.GuestAddr(blockAddr)
 	s.built = true
-
-	st := &platform.InitialState{SP: emu.GuestAddr(top - StackTopReserve)}
-	if ctx.Image != nil {
-		st.Entry = emu.GuestAddr(base + ctx.Image.Entry)
-	}
-	return st, nil
+	return nil
 }
 
 // Auxv returns the built auxv vector (AT_NULL-terminated), nil before

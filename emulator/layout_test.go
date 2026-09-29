@@ -12,8 +12,8 @@ import (
 
 // TestResolveLayoutMatchesAndroidPolicy pins the P4c composition-root wiring:
 // the layout New boots with must be exactly what the platform's LayoutPolicy
-// resolves for the Target — the retired legacyARM64Layout's numbers carried
-// by the policy, with zero user overrides.
+// resolves for the Target — the numbers of the retired pre-P4c layout helper,
+// carried by the policy, with zero user overrides.
 func TestResolveLayoutMatchesAndroidPolicy(t *testing.T) {
 	tgt, err := resolveTarget(Config{})
 	if err != nil {

@@ -1,3 +1,17 @@
+// Package android is the Android OS-platform personality (DESIGN.md §3.4):
+// the syscall transport + number table + struct codecs, the guest
+// address-space LayoutPolicy, the StartupABI (auxv initial state), and the
+// typed boot Config.
+//
+// Assembly status (P4e): there is deliberately NO platform.Factory /
+// Factory.Bind here yet. The composition root (emulator.New) wires each
+// component by hand — LayoutPolicy via resolveLayout, Transport/Table/Codecs
+// injected into kernel.Context, StartupABI driven via ensureStartup — and no
+// component receives more context than the minimal BindContext shape DESIGN
+// §4 allows (TargetInfo / Layout / Features; Backend and AddressSpace are
+// injected explicitly by the composition root at the call site, never as a
+// half-initialized Emulator). Factory.Bind is the P5 wiring point; nothing
+// in P4 pre-builds it.
 package android
 
 import (

@@ -44,7 +44,7 @@ type MemWriter interface {
 //   - Args/Env: the process argument/environment vectors. golem runs in
 //     load-.so-and-call mode (no exec), so the current Android landing form
 //     builds the auxv data block only and does not yet lay out
-//     argc/argv/envp; the fields exist so the exec-style form (P4e/P5) can
+//     argc/argv/envp; the fields exist so an exec-style form (P5+) can
 //     consume them without a contract change.
 type StartupContext struct {
 	Image    *loader.Image
@@ -57,16 +57,6 @@ type StartupContext struct {
 	Features arch.CPUFeatures
 }
 
-// InitialState is the process initial CPU state: where execution would
-// start and where the stack pointer points. In golem's load-.so-and-call
-// mode these are informational (entry into guest code happens via
-// CallFunc/CallSymbol, not by jumping to Entry); the P4e boot-sequence
-// consolidation owns applying them.
-type InitialState struct {
-	Entry emu.GuestAddr
-	SP    emu.GuestAddr
-}
-
 // StartupABI builds the guest process initial state (P4d, DESIGN.md §3.4 /
 // §6): the auxv vector — whose HWCAP bitmap comes exclusively from
 // StartupContext.Features — plus the deterministic AT_RANDOM bytes, built
@@ -76,6 +66,16 @@ type InitialState struct {
 // the top of the stack region and serves the interposed getauxval from that
 // same vector (see platform/android/startup.go for why this is a data block
 // and not an exec-style initial stack frame).
+//
+// Build-time ordering rule (P4e, locked by emulator's boot-order tests):
+// with a main image the build MUST run after that image's FinalizeImage and
+// before any of its init code executes; without a main image (bionic-only
+// boot) the build is deliberately deferred to the first getauxval.
+//
+// P4e note: the entry/SP pair this contract used to return was removed —
+// golem enters guest code through CallFunc/CallSymbol, never by jumping to
+// an exec-style entry, and SP is set from the platform's StackTopReserve at
+// boot, so nothing consumed the values (no speculative state kept).
 type StartupABI interface {
-	BuildInitialState(ctx *StartupContext) (*InitialState, error)
+	BuildInitialState(ctx *StartupContext) error
 }

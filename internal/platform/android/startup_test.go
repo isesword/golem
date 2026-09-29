@@ -103,18 +103,8 @@ func TestStartupABIBuildsAuxvBlock(t *testing.T) {
 	img := &loader.Image{Entry: 0x500, PhdrAddr: 0x40, PhdrNum: 9}
 
 	s := &StartupABI{}
-	st, err := s.BuildInitialState(startupCtx(mem, feats, img))
-	if err != nil {
+	if err := s.BuildInitialState(startupCtx(mem, feats, img)); err != nil {
 		t.Fatalf("BuildInitialState: %v", err)
-	}
-
-	// InitialState: entry is the main image's relocated e_entry; SP keeps the
-	// pre-P4d geometry (stack top minus the platform-owned reserve).
-	if want := emu.GuestAddr(0x12000000 + 0x500); st.Entry != want {
-		t.Fatalf("InitialState.Entry = %#x, want %#x", st.Entry, want)
-	}
-	if want := emu.GuestAddr(0xC0000000 + 0x80000 - StackTopReserve); st.SP != want {
-		t.Fatalf("InitialState.SP = %#x, want %#x", st.SP, want)
 	}
 
 	av := auxvMap(t, s)
@@ -179,7 +169,7 @@ func TestStartupABIBuildsAuxvBlock(t *testing.T) {
 func TestStartupABIEmptyFeaturesPreservesBehavior(t *testing.T) {
 	mem := &fakeGuestMem{}
 	s := &StartupABI{}
-	if _, err := s.BuildInitialState(startupCtx(mem, fakeFeatures{}, nil)); err != nil {
+	if err := s.BuildInitialState(startupCtx(mem, fakeFeatures{}, nil)); err != nil {
 		t.Fatalf("BuildInitialState: %v", err)
 	}
 	av := auxvMap(t, s)
@@ -210,29 +200,29 @@ func TestStartupABIRejects(t *testing.T) {
 	mem := &fakeGuestMem{}
 	feats := fakeFeatures{}
 
-	if _, err := (&StartupABI{}).BuildInitialState(nil); err == nil {
+	if err := (&StartupABI{}).BuildInitialState(nil); err == nil {
 		t.Fatal("nil context must error")
 	}
 	ctx := startupCtx(mem, nil, nil)
-	if _, err := (&StartupABI{}).BuildInitialState(ctx); err == nil {
+	if err := (&StartupABI{}).BuildInitialState(ctx); err == nil {
 		t.Fatal("nil Features must error (CPUFeatures is the only HWCAP source)")
 	}
 	ctx = startupCtx(mem, feats, nil)
 	ctx.Mem = nil
-	if _, err := (&StartupABI{}).BuildInitialState(ctx); err == nil {
+	if err := (&StartupABI{}).BuildInitialState(ctx); err == nil {
 		t.Fatal("nil Mem must error")
 	}
 	ctx = startupCtx(mem, feats, nil)
 	ctx.Stack = memory.Region{Addr: 0x1000, Size: 0x100} // smaller than the reserve + block
-	if _, err := (&StartupABI{}).BuildInitialState(ctx); err == nil {
+	if err := (&StartupABI{}).BuildInitialState(ctx); err == nil {
 		t.Fatal("tiny stack region must error")
 	}
 
 	s := &StartupABI{}
-	if _, err := s.BuildInitialState(startupCtx(mem, feats, nil)); err != nil {
+	if err := s.BuildInitialState(startupCtx(mem, feats, nil)); err != nil {
 		t.Fatalf("first build: %v", err)
 	}
-	if _, err := s.BuildInitialState(startupCtx(mem, feats, nil)); err == nil {
+	if err := s.BuildInitialState(startupCtx(mem, feats, nil)); err == nil {
 		t.Fatal("second BuildInitialState must error (auxv is built once)")
 	}
 }
