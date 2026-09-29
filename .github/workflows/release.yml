@@ -212,4 +212,5 @@ jobs:
           name: golem ${{ steps.ver.outputs.version }}
           prerelease: ${{ github.ref_type != 'tag' }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: release/*

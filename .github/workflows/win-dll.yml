@@ -320,9 +320,10 @@ jobs:
           generate_release_notes: true
           # Per-arch names: both files are named unicorn.dll in their own
           # artifact dirs, so a bare glob would copy one over the other.
+          fail_on_unmatched_files: true
           files: |
-            artifacts/unicorn-dll-amd64/unicorn.dll
-            artifacts/unicorn-dll-arm64/unicorn.dll
+            artifacts/unicorn-dll-veh-off-amd64/unicorn.dll
+            artifacts/unicorn-dll-veh-off-arm64/unicorn.dll
             artifacts/**/PROVENANCE-*.txt
       - name: Upload TCG sizing report
         uses: actions/upload-artifact@v4
