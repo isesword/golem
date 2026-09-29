@@ -114,12 +114,25 @@ jobs:
           }
           echo "exports OK (${{ matrix.arch }}): $($names -join ', ')"
 
+      - name: Locate + stage the DLL
+        id: locate
+        run: |
+          # Locate in the BUILD TREE only (the checkout contains committed
+          # assets/windows/*/unicorn.dll copies — a repo-wide search could
+          # pick a stale one).
+          $dll = Get-ChildItem -Recurse -Filter unicorn.dll -Path build |
+                 Select-Object -First 1
+          if (-not $dll) { throw "no unicorn.dll found under build/" }
+          New-Item -ItemType Directory -Force -Path "stage" | Out-Null
+          Copy-Item $dll.FullName "stage/unicorn.dll"
+          echo "dll=stage/unicorn.dll" >> $env:GITHUB_OUTPUT
+
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
           name: unicorn-dll-${{ matrix.arch }}
           path: |
-            $dll
+            stage/unicorn.dll
             PROVENANCE-${{ matrix.arch }}.txt
           if-no-files-found: error
 
