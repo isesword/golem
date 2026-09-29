@@ -16,7 +16,7 @@ name: win-dll
 on:
   workflow_dispatch:
   push:
-    branches: [dev, main, dev-win]
+    branches: [dev-win]
     paths:
       - ".github/workflows/win-dll.yml"
       - "internal/emu/**"
