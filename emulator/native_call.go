@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/isesword/golem/dvm"
-	"github.com/isesword/golem/internal/arch/arm64"
 )
 
 // This file is golem's reverse JNI bridge: invoking a native method that the
@@ -177,7 +176,7 @@ func (e *Emulator) callFuncStack(addr uint64, args []uint64) (uint64, error) {
 		return e.CallFunc(addr, args...)
 	}
 	spill := args[8:]
-	origSP, err := e.be.RegRead(arm64.SP)
+	origSP, err := e.be.RegRead(e.spReg)
 	if err != nil {
 		return 0, err
 	}
@@ -188,10 +187,10 @@ func (e *Emulator) callFuncStack(addr uint64, args []uint64) (uint64, error) {
 			return 0, err
 		}
 	}
-	if err := e.be.RegWrite(arm64.SP, sp); err != nil {
+	if err := e.be.RegWrite(e.spReg, sp); err != nil {
 		return 0, err
 	}
 	ret, callErr := e.CallFunc(addr, args[:8]...)
-	_ = e.be.RegWrite(arm64.SP, origSP) // restore the caller's stack
+	_ = e.be.RegWrite(e.spReg, origSP) // restore the caller's stack
 	return ret, callErr
 }

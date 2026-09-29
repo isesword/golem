@@ -59,10 +59,11 @@ func pageUp(x uint64) uint64   { return (x + 0xfff) &^ 0xfff }
 //   - the brk heap [BrkBase, BrkTop),
 //   - the mmap arena (host scratch + guest mmap, the only Space-tracked set).
 func (e *Emulator) writableGuestRanges() []memRange {
+	l := e.layout
 	rs := []memRange{
-		{stackBase, stackSize, emu.ProtRead | emu.ProtWrite},
-		{tlsBase, tlsSize, emu.ProtRead | emu.ProtWrite},
-		{stubBase, stubSize, emu.ProtAll},
+		{l.StackBase, l.StackSize, emu.ProtRead | emu.ProtWrite},
+		{l.TLSBase, l.TLSSize, emu.ProtRead | emu.ProtWrite},
+		{l.StubBase, l.StubSize, emu.ProtAll},
 	}
 	for _, m := range e.modules {
 		for _, s := range m.Img.Segments {

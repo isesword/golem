@@ -170,11 +170,13 @@ func (e *Emulator) runFiberSlice(f *fiber) error {
 
 	startPC := f.routine
 	if !f.started {
-		if err := e.be.RegWrite(arm64.SP, f.sp); err != nil {
+		// First slice: set up a plain function call (routine(arg)) per the
+		// calling ABI — own stack, arg in register 0, LR = sentinel.
+		if err := e.be.RegWrite(e.spReg, f.sp); err != nil {
 			return err
 		}
-		_ = e.be.RegWrite(arm64.X0, f.arg)
-		_ = e.be.RegWrite(arm64.LR, sentinel)
+		_ = e.be.RegWrite(e.argRegs[0], f.arg)
+		_ = e.be.RegWrite(e.lrReg, sentinel)
 		f.started = true
 	} else {
 		if err := e.be.RestoreContext(f.ctx); err != nil { // can't resume -> drop it
@@ -185,7 +187,7 @@ func (e *Emulator) runFiberSlice(f *fiber) error {
 		}
 		_ = f.ctx.Free()
 		f.ctx = nil
-		startPC, _ = e.be.RegRead(arm64.PC)
+		startPC, _ = e.be.RegRead(e.pcReg)
 	}
 
 	if err := e.be.Start(startPC, sentinel); err != nil {
@@ -205,7 +207,7 @@ func (e *Emulator) runFiberSlice(f *fiber) error {
 		return fmt.Errorf("guest exit_group(%d) in fiber %d", code, f.id)
 	}
 
-	if pc, _ := e.be.RegRead(arm64.PC); pc == sentinel {
+	if pc, _ := e.be.RegRead(e.pcReg); pc == sentinel {
 		f.state = fsDone
 		return nil
 	}
@@ -241,6 +243,11 @@ func (e *Emulator) wakeFutex(uaddr uint64) int {
 // (wake fibers / park the caller) and nanosleep (yield). Returns true if it
 // handled the syscall (so the kernel layer is skipped). futex WAKE is honored on
 // any thread; WAIT/sleep only suspend a fiber (the main thread never blocks).
+//
+// NOTE: the X0/X1 reads and X0 writes below are SYSCALL-TRANSPORT register
+// access (number in X8, args in X0.., result to X0), not the plain calling
+// convention — they stay hardcoded until P2 moves them into
+// platform.SyscallABI.
 func (e *Emulator) handleSchedSyscall(b emu.Backend, num uint64) bool {
 	switch num {
 	case sysNRfutex:

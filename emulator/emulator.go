@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/isesword/golem/dvm"
+	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/arch/arm64"
 	"github.com/isesword/golem/internal/emu"
 	"github.com/isesword/golem/internal/kernel"
@@ -117,17 +118,23 @@ type AndroidConfig struct {
 
 const defaultPid = 28859
 
-// Memory layout (guest), kept clear of each other and of the mmap arena.
-const (
-	moduleBase = 0x12000000 // modules loaded from here, upward
-	stubBase   = 0x60000000 // svc trampolines for unresolved imports
-	stubSize   = 0x00100000
-	stackBase  = 0xC0000000 // 8 MiB stack
-	stackSize  = 0x00800000
-	tlsBase    = 0xD0000000 // thread-local storage block
-	tlsSize    = 0x00010000
-	sentinel   = 0xFFFFFF00 // LR for top-level calls; emu stops when PC hits it
-)
+// legacyARM64Layout is the guest memory layout, made explicit as data in P1
+// (memory.Layout). The numbers are exactly the pre-P1 package constants, kept
+// clear of each other and of the mmap arena. Layout POLICY (who picks these
+// numbers — platform.LayoutPolicy over arch caps + user overrides) arrives in
+// P4/P5; this is the Android/ARM64 legacy default until then.
+var legacyARM64Layout = memory.Layout{
+	ModuleBase: 0x12000000, // modules loaded from here, upward
+	ModuleSize: 0x4E000000, // arena up to the stub region
+	StubBase:   0x60000000, // svc trampolines for unresolved imports
+	StubSize:   0x00100000,
+	StackBase:  0xC0000000, // 8 MiB stack
+	StackSize:  0x00800000,
+	TLSBase:    0xD0000000, // thread-local storage block
+	TLSSize:    0x00010000,
+}
+
+const sentinel = 0xFFFFFF00 // LR for top-level calls; emu stops when PC hits it
 
 // Module is one loaded shared object.
 type Module struct {
@@ -146,6 +153,20 @@ type Emulator struct {
 	vm     *dvm.VM
 	fs     *vfs.VFS
 	kctx   *kernel.Context
+
+	abi     arch.ABI         // resolved once in New (P1: always ARM64)
+	stubEnc arch.StubEncoder // trampoline encoder; the ABI instance implements it
+	layout  memory.Layout    // guest address-space layout in use
+
+	// Boot-cached calling-convention role registers (from abi): hot paths
+	// (scheduler, JNI dispatch, host fns, debugger) use these instead of
+	// walking the interface per call (DESIGN.md §8: no interface chains on
+	// per-instruction paths).
+	argRegs [8]emu.Reg // abi.Arg(0..7)
+	retReg  emu.Reg    // abi.Ret()
+	pcReg   emu.Reg    // abi.PC()
+	spReg   emu.Reg    // abi.SP()
+	lrReg   emu.Reg    // abi.LR()
 
 	modules  []*Module
 	main     *Module           // the Config.SOPath module, if any
@@ -248,8 +269,16 @@ func New(cfg Config) (e *Emulator, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("backend: %w", err)
 	}
-	// TODO(P4): arch 由 Config.Arch/Sniff 决定 — until then everything is ARM64.
-	be, err := emu.NewNamed(engine, emu.ArchARM64)
+	// TODO(P4): 由 Config.Arch/Sniff 决定 — until then everything is ARM64.
+	abi, err := arch.Resolve(arch.IDARM64, arch.VariantGeneric)
+	if err != nil {
+		return nil, err
+	}
+	stubEnc, ok := abi.(arch.StubEncoder)
+	if !ok {
+		return nil, fmt.Errorf("arch: %T does not implement StubEncoder", abi)
+	}
+	be, err := emu.NewNamed(engine, abi.EngineArch())
 	if err != nil {
 		return nil, fmt.Errorf("backend(%s): %w", engine, err)
 	}
@@ -276,12 +305,15 @@ func New(cfg Config) (e *Emulator, err error) {
 		cfg:         cfg,
 		engine:      engine,
 		be:          be,
+		abi:         abi,
+		stubEnc:     stubEnc,
+		layout:      legacyARM64Layout,
 		mem:         memory.NewSpace(),
 		vm:          dvm.NewVM(),
 		fs:          vfs.New(cfg.AssetRoot, pid, cfg.ProcessName),
 		syms:        map[string]uint64{},
-		nextBase:    moduleBase,
-		nextStub:    stubBase,
+		nextBase:    legacyARM64Layout.ModuleBase,
+		nextStub:    legacyARM64Layout.StubBase,
 		stubs:       map[uint64]string{},
 		stubHits:    map[string]int{},
 		hostByName:  map[string]hostFn{},
@@ -295,6 +327,7 @@ func New(cfg Config) (e *Emulator, err error) {
 		fields:      map[dvm.Ref]*fieldRef{},
 		arrayPins:   map[uint64]pinEntry{},
 	}
+	e.cacheRoleRegs()
 	// On any construction failure the half-booted engine must be torn down:
 	// it already holds unicorn mappings, and repeated failed New calls would
 	// otherwise leak engines. The post-boot ReplaceFns pass may PANIC (a
@@ -340,7 +373,7 @@ func New(cfg Config) (e *Emulator, err error) {
 		} else {
 			e.hostByName[name] = e.guardHostFn(func(em *Emulator, b emu.Backend) {
 				ret := f(&Hook{em})
-				_ = b.RegWrite(arm64.X0, ret)
+				_ = b.RegWrite(em.retReg, ret)
 			})
 		}
 	} // libc functions we implement in Go (need no libc init)
@@ -355,17 +388,18 @@ func New(cfg Config) (e *Emulator, err error) {
 	}
 
 	// Reserve fixed regions.
-	if err := be.MemMap(stubBase, stubSize, emu.ProtAll); err != nil {
+	l := e.layout
+	if err := be.MemMap(l.StubBase, l.StubSize, emu.ProtAll); err != nil {
 		return nil, fmt.Errorf("map stubs: %w", err)
 	}
-	if err := be.MemMap(stackBase, stackSize, emu.ProtRead|emu.ProtWrite); err != nil {
+	if err := be.MemMap(l.StackBase, l.StackSize, emu.ProtRead|emu.ProtWrite); err != nil {
 		return nil, fmt.Errorf("map stack: %w", err)
 	}
-	if err := be.MemMap(tlsBase, tlsSize, emu.ProtRead|emu.ProtWrite); err != nil {
+	if err := be.MemMap(l.TLSBase, l.TLSSize, emu.ProtRead|emu.ProtWrite); err != nil {
 		return nil, fmt.Errorf("map tls: %w", err)
 	}
 	// SP near top of stack (16-aligned).
-	_ = be.RegWrite(arm64.SP, stackBase+stackSize-0x200)
+	_ = be.RegWrite(e.spReg, l.StackBase+l.StackSize-0x200)
 
 	// bionic TLS: TPIDR_EL0 -> slot array; slot[TLS_SLOT_THREAD_ID] -> a mapped
 	// pthread_internal_t (zeroed). Without this, libc reads a NULL thread ptr
@@ -374,11 +408,13 @@ func New(cfg Config) (e *Emulator, err error) {
 	const (
 		tlsSlotSelf     = 0 // __get_tls()[0] = tls base
 		tlsSlotThreadID = 1 // -> pthread_internal_t*
-		pthreadStruct   = tlsBase + 0x1000
 	)
-	_ = be.RegWrite(arm64.TPIDR_EL0, tlsBase)
-	_ = putU64(be, tlsBase+tlsSlotSelf*8, tlsBase)
-	_ = putU64(be, tlsBase+tlsSlotThreadID*8, pthreadStruct)
+	pthreadStruct := l.TLSBase + 0x1000
+	if err := abi.SetTLSBase(be, l.TLSBase); err != nil {
+		return nil, fmt.Errorf("set TLS base: %w", err)
+	}
+	_ = putU64(be, l.TLSBase+tlsSlotSelf*8, l.TLSBase)
+	_ = putU64(be, l.TLSBase+tlsSlotThreadID*8, pthreadStruct)
 
 	// Route SVC: distinguish import-stub calls (by PC) from real syscalls.
 	// Every Go callback handed to the backend goes through the panic guard
@@ -388,7 +424,7 @@ func New(cfg Config) (e *Emulator, err error) {
 	}
 	// Diagnose unmapped/protected accesses during bring-up.
 	if _, err := be.HookMemInvalid(e.guardMemInvalid(func(b emu.Backend, typ int, addr uint64, size int, val int64) bool {
-		pc, _ := b.RegRead(arm64.PC)
+		pc, _ := b.RegRead(e.pcReg)
 		if e.cfg.Verbose {
 			fmt.Printf("[mem] INVALID access type=%d addr=0x%x size=%d value=0x%x pc=0x%x (%s)\n",
 				typ, addr, size, uint64(val), pc, e.NearestSym(pc))
@@ -413,6 +449,20 @@ func New(cfg Config) (e *Emulator, err error) {
 		}
 	}
 	return e, nil
+}
+
+// cacheRoleRegs snapshots the ABI's calling-convention role registers into
+// plain fields/slices at boot, so hot paths never walk the interface per call.
+// Callers that build an Emulator literal directly (tests) must call this after
+// setting abi.
+func (e *Emulator) cacheRoleRegs() {
+	for i := range e.argRegs {
+		e.argRegs[i] = e.abi.Arg(i)
+	}
+	e.retReg = e.abi.Ret()
+	e.pcReg = e.abi.PC()
+	e.spReg = e.abi.SP()
+	e.lrReg = e.abi.LR()
 }
 
 // boot maps bionic, then (if configured) loads + initializes the main library.
@@ -493,22 +543,29 @@ func (e *Emulator) LoadModule(path, name string) (*Module, error) {
 // resolveSymbol satisfies loader.Resolver: global export, else a svc stub.
 func (e *Emulator) resolveSymbol(name string) (uint64, bool) {
 	if fn, ok := e.hostByName[name]; ok { // Go override for libc funcs needing init
-		a := e.makeStub("host:" + name)
+		a := e.makeStub("host:"+name, arch.StubHostCall)
 		e.hostImpl[a] = fn
 		return a, true
 	}
 	if a, ok := e.syms[name]; ok {
 		return a, true
 	}
-	return e.makeStub(name), true
+	return e.makeStub(name, arch.StubUnresolved), true
 }
 
-// makeStub emits `svc #0 ; ret` at a fresh stub address (traps to onInterrupt,
-// which returns to the caller). Used for unresolved imports and JNI table slots.
-func (e *Emulator) makeStub(name string) uint64 {
+// makeStub emits a trampoline at a fresh stub address via the architecture's
+// StubEncoder (arm64: `svc #0 ; ret`, which traps to onInterrupt, which
+// returns to the caller). Used for unresolved imports, host functions and JNI
+// table slots. Trap identity is decided by ADDRESS (the stubs map below), not
+// by anything in the emitted bytes — see arch.StubEncoder.
+func (e *Emulator) makeStub(name string, kind arch.StubKind) uint64 {
 	a := e.nextStub
 	e.nextStub += 8
-	_ = e.be.MemWrite(a, []byte{0x01, 0x00, 0x00, 0xd4, 0xc0, 0x03, 0x5f, 0xd6})
+	code, err := e.stubEnc.EmitStub(kind)
+	if err != nil {
+		panic(fmt.Sprintf("makeStub %s: %v", name, err))
+	}
+	_ = e.be.MemWrite(a, code)
 	e.stubs[a] = name
 	return a
 }
@@ -517,12 +574,13 @@ func (e *Emulator) makeStub(name string) uint64 {
 // to function tables filled with svc stubs, so any vm->/env-> call traps to Go.
 // GetEnv is special-cased to hand back the JNIEnv. Sets e.javaVM.
 func (e *Emulator) SetupJNI() uint64 {
-	const envSlots = 256 // > 232 JNINativeInterface entries
+	ps := uint64(e.abi.PtrSize()) // function-table slot stride = guest pointer width
+	const envSlots = 256          // > 232 JNINativeInterface entries
 	envTable := e.MustAlloc(envSlots*8, emu.ProtRead|emu.ProtWrite)
 	for i := 0; i < envSlots; i++ {
-		stub := e.makeStub(fmt.Sprintf("JNIEnv[%d]", i))
+		stub := e.makeStub(fmt.Sprintf("JNIEnv[%d]", i), arch.StubHostCall)
 		e.jniDispatch[stub] = i // dispatched in onInterrupt -> handleJNI
-		_ = putU64(e.be, envTable+uint64(i)*8, stub)
+		_ = putU64(e.be, envTable+uint64(i)*ps, stub)
 	}
 	envPtr := e.MustAlloc(8, emu.ProtRead|emu.ProtWrite)
 	_ = putU64(e.be, envPtr, envTable)
@@ -531,11 +589,11 @@ func (e *Emulator) SetupJNI() uint64 {
 	const vmSlots = 16 // JNIInvokeInterface
 	vmTable := e.MustAlloc(vmSlots*8, emu.ProtRead|emu.ProtWrite)
 	for i := 0; i < vmSlots; i++ {
-		_ = putU64(e.be, vmTable+uint64(i)*8, e.makeStub(fmt.Sprintf("JavaVM[%d]", i)))
+		_ = putU64(e.be, vmTable+uint64(i)*ps, e.makeStub(fmt.Sprintf("JavaVM[%d]", i), arch.StubHostCall))
 	}
-	e.getEnvStub = e.makeStub("JavaVM!GetEnv")
-	_ = putU64(e.be, vmTable+6*8, e.getEnvStub) // GetEnv
-	_ = putU64(e.be, vmTable+4*8, e.getEnvStub) // AttachCurrentThread (also yields env)
+	e.getEnvStub = e.makeStub("JavaVM!GetEnv", arch.StubHostCall)
+	_ = putU64(e.be, vmTable+6*ps, e.getEnvStub) // GetEnv
+	_ = putU64(e.be, vmTable+4*ps, e.getEnvStub) // AttachCurrentThread (also yields env)
 	vmPtr := e.MustAlloc(8, emu.ProtRead|emu.ProtWrite)
 	_ = putU64(e.be, vmPtr, vmTable)
 	e.javaVM = vmPtr
@@ -564,12 +622,12 @@ func (e *Emulator) Sym(name string) (uint64, bool) { a, ok := e.syms[name]; retu
 
 // onInterrupt handles SVC: a stub call (unresolved import) or a real syscall.
 func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
-	pc, _ := b.RegRead(arm64.PC)
+	pc, _ := b.RegRead(e.pcReg)
 	svc := pc - 4            // unicorn advances PC past the svc
 	if svc == e.getEnvStub { // JavaVM->GetEnv(vm, void** env, version)
-		envpp, _ := b.RegRead(arm64.X1)
+		envpp, _ := b.RegRead(e.argRegs[1])
 		_ = putU64(b, envpp, e.jniEnv)
-		_ = b.RegWrite(arm64.X0, 0) // JNI_OK
+		_ = b.RegWrite(e.retReg, 0) // JNI_OK
 		return
 	}
 	if fn, ok := e.replaced[svc]; ok { // user Replace()d function
@@ -589,7 +647,7 @@ func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
 		if e.cfg.Verbose {
 			fmt.Printf("[stub] %s() -> 0\n", name)
 		}
-		_ = b.RegWrite(arm64.X0, 0) // optimistic default
+		_ = b.RegWrite(e.retReg, 0) // optimistic default
 		return
 	}
 	// Scheduler hooks (futex / nanosleep) drive cooperative switching — futex
@@ -615,13 +673,14 @@ func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
 	}
 }
 
-// CallFunc invokes guest code at addr with up to 8 integer args (X0..X7),
-// returning X0. LR is set to a sentinel so emulation stops on return.
+// CallFunc invokes guest code at addr with up to 8 integer args (arg
+// registers 0..7 per the calling ABI), returning the return register. LR is
+// set to a sentinel so emulation stops on return.
 func (e *Emulator) CallFunc(addr uint64, args ...uint64) (uint64, error) {
 	if e.poisonErr != nil {
 		return 0, fmt.Errorf("emulator poisoned: %w", e.poisonErr)
 	}
-	regs := []emu.Reg{arm64.X0, arm64.X1, arm64.X2, arm64.X3, arm64.X4, arm64.X5, arm64.X6, arm64.X7}
+	regs := e.argRegs[:] // boot-cached abi.Arg(0..7)
 	if len(args) > len(regs) {
 		return 0, fmt.Errorf("CallFunc: >8 args not supported")
 	}
@@ -630,7 +689,7 @@ func (e *Emulator) CallFunc(addr uint64, args ...uint64) (uint64, error) {
 			return 0, err
 		}
 	}
-	if err := e.be.RegWrite(arm64.LR, sentinel); err != nil {
+	if err := e.be.RegWrite(e.lrReg, sentinel); err != nil {
 		return 0, err
 	}
 	e.scCount = 0
@@ -642,7 +701,7 @@ func (e *Emulator) CallFunc(addr uint64, args ...uint64) (uint64, error) {
 	if err := e.checkGuestPanic(); err != nil {
 		return 0, err
 	}
-	return e.be.RegRead(arm64.X0)
+	return e.be.RegRead(e.retReg)
 }
 
 // CallSymbol calls an exported function by name with up to 8 integer args.
