@@ -7,7 +7,7 @@ package memory
 // P4/P5; P1 only makes the previously hardcoded emulator constants explicit.
 type Layout struct {
 	ModuleBase uint64 // first module load address; modules bump upward from here
-	ModuleSize uint64 // informational arena bound (the module loader does not enforce it)
+	ModuleSize uint64 // arena bound, enforced by AddressSpace.Alloc (P2.5c)
 	StubBase   uint64 // trampoline region (unresolved imports, host fns, JNI slots)
 	StubSize   uint64
 	StackBase  uint64

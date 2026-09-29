@@ -154,10 +154,11 @@ type Emulator struct {
 	fs     *vfs.VFS
 	kctx   *kernel.Context
 
-	arch    arch.Arch        // CPU properties, resolved once in New (P2.5b; always ARM64 until P4)
-	callABI arch.CallABI     // function calling convention (AAPCS64) — args/results/return flow
-	stubEnc arch.StubEncoder // trampoline encoder; an independent capability, not part of Arch/CallABI
-	layout  memory.Layout    // guest address-space layout in use
+	arch    arch.Arch            // CPU properties, resolved once in New (P2.5b; always ARM64 until P4)
+	callABI arch.CallABI         // function calling convention (AAPCS64) — args/results/return flow
+	stubEnc arch.StubEncoder     // trampoline encoder; an independent capability, not part of Arch/CallABI
+	layout  memory.Layout        // guest address-space layout in use
+	as      *memory.AddressSpace // single guest VA allocation entry (P2.5c, invariant 12)
 
 	// Boot-cached role registers (P1, DESIGN.md §8: no interface walks on hot
 	// paths). Ownership after the P2.5b split (invariant 13): argRegs/retReg/
@@ -173,8 +174,6 @@ type Emulator struct {
 	modules  []*Module
 	main     *Module           // the Config.SOPath module, if any
 	syms     map[string]uint64 // global export table
-	nextBase uint64
-	nextStub uint64
 	stubs    map[uint64]string
 	aForm    bool // 当前 JNI 调用为 Call*MethodA（jvalue 数组）形式 // svc addr -> import/JNI name
 	stubHits map[string]int
@@ -307,12 +306,11 @@ func New(cfg Config) (e *Emulator, err error) {
 		callABI:     callABI,
 		stubEnc:     stubEnc,
 		layout:      legacyARM64Layout,
+		as:          memory.NewAddressSpace(legacyARM64Layout),
 		mem:         memory.NewSpace(),
 		vm:          dvm.NewVM(),
 		fs:          vfs.New(cfg.AssetRoot, pid, cfg.ProcessName),
 		syms:        map[string]uint64{},
-		nextBase:    legacyARM64Layout.ModuleBase,
-		nextStub:    legacyARM64Layout.StubBase,
 		stubs:       map[uint64]string{},
 		stubHits:    map[string]int{},
 		hostByName:  map[string]hostFn{},
@@ -395,8 +393,27 @@ func New(cfg Config) (e *Emulator, err error) {
 		e.fs.MountBattery(func() (int, bool) { return prof.Battery(time.Now()) })
 	}
 
-	// Reserve fixed regions.
+	// Reserve fixed regions. Every guest VA range is registered with the
+	// AddressSpace first (P2.5c, invariant 12: the single VA allocation entry);
+	// the backend MemMap calls below only back ranges the AddressSpace owns.
 	l := e.layout
+	if err := e.as.Reserve(emu.GuestAddr(l.StackBase), l.StackSize, memory.PurposeStack); err != nil {
+		return nil, fmt.Errorf("reserve stack: %w", err)
+	}
+	if err := e.as.Reserve(emu.GuestAddr(l.TLSBase), l.TLSSize, memory.PurposeTLS); err != nil {
+		return nil, fmt.Errorf("reserve tls: %w", err)
+	}
+	// The mmap arena (memory.Space) and the brk heap (kernel brk cursor) keep
+	// their existing internal management this stage; only their region
+	// OWNERSHIP moves into the AddressSpace, so the module bump allocator can
+	// never drift into them. Both live inside the Layout's module arena:
+	// heap = [BrkBase, MmapBase), mmap = [MmapBase, module arena top).
+	if err := e.as.Reserve(emu.GuestAddr(kernel.BrkBase), memory.MmapBase-kernel.BrkBase, memory.PurposeHeap); err != nil {
+		return nil, fmt.Errorf("reserve heap: %w", err)
+	}
+	if err := e.as.Reserve(emu.GuestAddr(memory.MmapBase), l.ModuleBase+l.ModuleSize-memory.MmapBase, memory.PurposeMmap); err != nil {
+		return nil, fmt.Errorf("reserve mmap arena: %w", err)
+	}
 	if err := be.MemMap(emu.GuestAddr(l.StubBase), l.StubSize, emu.ProtAll); err != nil {
 		return nil, fmt.Errorf("map stubs: %w", err)
 	}
@@ -535,9 +552,14 @@ func (e *Emulator) LoadModule(path, name string) (*Module, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", name, err)
 	}
-	base := e.nextBase
+	// Module bases bump upward through the AddressSpace, keeping the 1 MiB
+	// inter-module gap of the pre-P2.5c module cursor.
 	span := (img.LoadSpan + 0xfff) &^ 0xfff
-	e.nextBase = base + span + 0x100000 // gap between modules
+	baseAddr, err := e.as.Alloc(memory.PurposeModule, span+0x100000)
+	if err != nil {
+		return nil, fmt.Errorf("alloc module %s: %w", name, err)
+	}
+	base := uint64(baseAddr)
 
 	plan, err := img.Plan()
 	if err != nil {
@@ -578,8 +600,14 @@ func (e *Emulator) resolveSymbol(name string) (uint64, bool) {
 // table slots. Trap identity is decided by ADDRESS (the stubs map below), not
 // by anything in the emitted bytes — see arch.StubEncoder.
 func (e *Emulator) makeStub(name string, kind arch.StubKind) uint64 {
-	a := e.nextStub
-	e.nextStub += 8
+	// Stub slots come from the AddressSpace's stub region (8 bytes each, the
+	// pre-P2.5c stub-cursor stride). No error channel exists on the resolution
+	// path, so region exhaustion panics like an encoder failure below.
+	a64, err := e.as.Alloc(memory.PurposeStub, 8)
+	if err != nil {
+		panic(fmt.Sprintf("makeStub %s: %v", name, err))
+	}
+	a := uint64(a64)
 	code, err := e.stubEnc.EmitStub(kind)
 	if err != nil {
 		panic(fmt.Sprintf("makeStub %s: %v", name, err))

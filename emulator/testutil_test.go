@@ -34,6 +34,7 @@ func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 		mem:         mem,
 		fs:          fs,
 		layout:      legacyARM64Layout,
+		as:          memory.NewAddressSpace(legacyARM64Layout),
 		stubs:       map[uint64]string{},
 		stubHits:    map[string]int{},
 		hostByName:  map[string]hostFn{},
