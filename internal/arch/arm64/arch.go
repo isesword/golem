@@ -11,11 +11,16 @@ import (
 // valid and stateless. It knows nothing about how functions are called —
 // that is aapcs64 (callabi.go); the trampoline encoding is stubEncoder
 // (stub.go), and the CPU feature set is cpuFeatures (features.go). All four
-// are registered together for (IDARM64, VariantGeneric).
+// are registered together for (IDARM64, VariantGeneric) AND (IDARM64,
+// VariantARM64E) — P5c: ARM64E is the same engine architecture, calling
+// convention, stub encoding and feature set; the variant difference
+// (authenticated chained fixups) is the loader's business, so the quad is
+// deliberately NOT forked.
 type cpuArch struct{}
 
 func init() {
 	arch.Register(arch.IDARM64, arch.VariantGeneric, cpuArch{}, aapcs64{}, stubEncoder{}, cpuFeatures{})
+	arch.Register(arch.IDARM64, arch.VariantARM64E, cpuArch{}, aapcs64{}, stubEncoder{}, cpuFeatures{})
 }
 
 func (cpuArch) EngineArch() emu.Arch { return emu.ArchARM64 }

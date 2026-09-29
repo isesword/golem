@@ -79,9 +79,8 @@ func TestSniffMachOARM64(t *testing.T) {
 
 // TestSniffMachOARM64E: CPU_SUBTYPE_ARM64E (=2, here with the
 // CPU_SUBTYPE_LIB64 capability bit set, as real toolchains emit) maps to
-// VariantARM64E. Nothing registers that variant yet — the probe survives and
-// arch.Resolve fails loudly downstream (the deliberate unsupported-variant
-// surface until P5c's PAC/chained fixups).
+// VariantARM64E. The arm64 package registers that variant (P5c) with the
+// same quad as VariantGeneric, so the probe resolves end to end.
 func TestSniffMachOARM64E(t *testing.T) {
 	f, id, v, err := Sniff(bytes.NewReader(macho64Header(0x0100000c, 0x80000002)))
 	if err != nil {

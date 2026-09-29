@@ -99,10 +99,11 @@ const (
 )
 
 // sniffMachO64 is the 64-bit little-endian Mach-O branch of Sniff: cputype /
-// cpusubtype -> arch.ID + arch.Variant. ARM64E maps to VariantARM64E; nothing
-// registers that variant yet, so the probe survives but arch.Resolve fails
-// loudly at target resolution — the deliberate "unsupported variant" surface
-// for P5c's PAC/chained-fixups world.
+// cpusubtype -> arch.ID + arch.Variant. ARM64E maps to VariantARM64E
+// (CPU_SUBTYPE_ARM64E with the CPU_SUBTYPE_MASK capability bits — including
+// LIB64 — masked off, per mach/machine.h); the arm64 package registers that
+// variant with the SAME quad as VariantGeneric (P5c: the variant difference
+// is authenticated chained fixups, which is the loader's business).
 func sniffMachO64(hdr []byte) (Format, arch.ID, arch.Variant, error) {
 	cputype := binary.LittleEndian.Uint32(hdr[4:])
 	subtype := binary.LittleEndian.Uint32(hdr[8:]) &^ machoSubtypeMask
