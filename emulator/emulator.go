@@ -150,7 +150,7 @@ type AndroidConfig struct {
 
 const defaultPid = 28859
 
-const sentinel = 0xFFFFFF00 // LR for top-level calls; emu stops when PC hits it
+const sentinel = 0xFFFFFF00 // top-level return address for CallFunc frames (ARM64: LR; AMD64: pushed on the stack) — emu stops when PC hits it
 
 // Module is one loaded shared object.
 type Module struct {

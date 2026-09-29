@@ -5,11 +5,11 @@ package emu
 import "testing"
 
 // TestAMD64RegMapFrozenIDs verifies regMapAMD64 translates the frozen
-// arch/amd64 id NUMBERS (RAX=64 .. GS_BASE=83, NoLR=-1) to the right
-// UC_X86_REG_* ids. regMapAMD64 keys on numbers because emu cannot import
-// internal/arch/amd64 (import cycle); arch/amd64's TestFrozenRegIDs pins the
-// numbering on that side. The UC_X86_REG_* targets are pinned against
-// unicorn2's x86.h (see unicorn_amd64.go).
+// arch/amd64 id NUMBERS (RAX=64 .. GS_BASE=83) to the right UC_X86_REG_* ids.
+// regMapAMD64 keys on numbers because emu cannot import internal/arch/amd64
+// (import cycle); arch/amd64's TestFrozenRegIDs pins the numbering on that
+// side. The UC_X86_REG_* targets are pinned against unicorn2's x86.h (see
+// unicorn_amd64.go).
 func TestAMD64RegMapFrozenIDs(t *testing.T) {
 	cases := []struct {
 		name string
@@ -36,7 +36,7 @@ func TestAMD64RegMapFrozenIDs(t *testing.T) {
 		{"EFLAGS", 81, ucX86RegEFLAGS},
 		{"FS_BASE", 82, ucX86RegFSBase},
 		{"GS_BASE", 83, ucX86RegGSBase},
-		{"NoLR", -1, ucRegInvalid}, // stack-returning convention: no LR register
+		{"negative-id", -1, ucRegInvalid}, // no register is ever negative
 		{"invalid", 9999, ucRegInvalid},
 		{"arm64.X0-in-amd64-map", 0, ucRegInvalid}, // cross-arch ids must not alias
 	}

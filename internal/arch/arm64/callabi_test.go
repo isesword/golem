@@ -13,36 +13,6 @@ func resolveCallABI(t *testing.T) arch.CallABI {
 	return c
 }
 
-func TestCallABIRoleRegisters(t *testing.T) {
-	c := resolveCallABI(t)
-	if c.LR() != LR || c.Ret() != X0 {
-		t.Fatalf("role regs: LR=%v Ret=%v, want LR(X30) / X0", c.LR(), c.Ret())
-	}
-	for i := 0; i < 8; i++ {
-		if got, want := c.Arg(i), X0+emu.Reg(i); got != want {
-			t.Fatalf("Arg(%d) = %v, want %v", i, got, want)
-		}
-	}
-}
-
-func TestArgOutOfRangePanics(t *testing.T) {
-	c := resolveCallABI(t)
-	for _, i := range []int{-1, 8, 100} {
-		func() {
-			defer func() {
-				r := recover()
-				if r == nil {
-					t.Fatalf("Arg(%d) must panic", i)
-				}
-				if s, ok := r.(string); !ok || s == "" {
-					t.Fatalf("Arg(%d) panic must carry a message, got %v", i, r)
-				}
-			}()
-			c.Arg(i)
-		}()
-	}
-}
-
 // TestReadArgs pins AAPCS64 argument reads: args 0..n-1 come from X0..X(n-1),
 // for every n in 0..8.
 func TestReadArgs(t *testing.T) {

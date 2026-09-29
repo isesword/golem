@@ -26,9 +26,6 @@ func (f fakeArch) NormalizeCodeAddr(a emu.GuestAddr) emu.GuestAddr {
 
 type fakeCallABI struct{ tag string }
 
-func (f fakeCallABI) Arg(i int) emu.Reg { return emu.Reg(i) }
-func (f fakeCallABI) Ret() emu.Reg      { return 0 }
-func (f fakeCallABI) LR() emu.Reg       { return 0 }
 func (f fakeCallABI) ArgReg(i int) (emu.Reg, bool) {
 	return emu.Reg(i), true
 }

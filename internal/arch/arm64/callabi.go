@@ -18,24 +18,6 @@ type aapcs64 struct{}
 // arguments spill to the stack at [SP, #(i-8)*8] at function entry.
 const numArgRegs = 8
 
-// Arg implements AAPCS64: integer arguments 0..7 arrive in X0..X7.
-//
-// Transitional (P5a.5): register-shaped accessor retained for the emulator's
-// not-yet-migrated call path; new code uses PrepareCall/ReadArgs/ArgReg.
-func (aapcs64) Arg(i int) emu.Reg {
-	if i < 0 || i >= numArgRegs {
-		panic(fmt.Sprintf("arm64: Arg(%d) out of range — AAPCS64 passes integer args 0..7 in X0..X7", i))
-	}
-	return X0 + emu.Reg(i)
-}
-
-func (aapcs64) Ret() emu.Reg { return X0 }
-
-// LR is X30 — AArch64 keeps the return address in a register.
-//
-// Transitional (P5a.5): removed once the emulator's call path is migrated.
-func (aapcs64) LR() emu.Reg { return LR }
-
 // ArgReg names integer argument register i (X0+i) for debugger / inline-hook
 // introspection; ok is false outside the register portion [0,8).
 func (aapcs64) ArgReg(i int) (emu.Reg, bool) {

@@ -13,25 +13,6 @@ func resolveCallABI(t *testing.T) arch.CallABI {
 	return c
 }
 
-// TestCallABIRoleRegisters pins the SysV AMD64 roles: args in
-// RDI/RSI/RDX/RCX/R8/R9, result in RAX, and NO link register — LR() is NoLR
-// (the return address lives on the stack; see ReturnFromCall).
-func TestCallABIRoleRegisters(t *testing.T) {
-	c := resolveCallABI(t)
-	if c.LR() != NoLR {
-		t.Fatalf("LR() = %v, want NoLR — SysV AMD64 has no link register (return address is on the stack)", c.LR())
-	}
-	if c.Ret() != RAX {
-		t.Fatalf("Ret() = %v, want RAX", c.Ret())
-	}
-	want := []emu.Reg{RDI, RSI, RDX, RCX, R8, R9}
-	for i, w := range want {
-		if got := c.Arg(i); got != w {
-			t.Fatalf("Arg(%d) = %v, want %v", i, got, w)
-		}
-	}
-}
-
 // TestArgRegsVsSyscallABI pins the two-ABI separation (P5a requirement): the
 // SysV FUNCTION call's 4th integer argument is RCX, while the Linux x86-64
 // SYSCALL ABI's 4th argument is R10 (the `syscall` instruction itself
@@ -39,32 +20,15 @@ func TestCallABIRoleRegisters(t *testing.T) {
 // registers and differ exactly here; merging them is the classic bug.
 func TestArgRegsVsSyscallABI(t *testing.T) {
 	c := resolveCallABI(t)
-	if got := c.Arg(3); got != RCX {
-		t.Fatalf("SysV function arg 3 = %v, want RCX", got)
+	r3, ok := c.ArgReg(3)
+	if !ok || r3 != RCX {
+		t.Fatalf("SysV function arg 3 = %v, %v, want RCX, true", r3, ok)
 	}
 	// The syscall ABI's registers are platform/android's transport — asserted
 	// there against the same frozen ids (TestLinuxAMD64TransportDecode reads
 	// R10 for arg 3). Here we pin only that the function ABI is NOT R10.
-	if c.Arg(3) == R10 {
+	if r3 == R10 {
 		t.Fatal("SysV function arg 3 must not be R10 — that is the syscall ABI")
-	}
-}
-
-func TestArgOutOfRangePanics(t *testing.T) {
-	c := resolveCallABI(t)
-	for _, i := range []int{-1, 6, 100} {
-		func() {
-			defer func() {
-				r := recover()
-				if r == nil {
-					t.Fatalf("Arg(%d) must panic (SysV has 6 integer argument registers)", i)
-				}
-				if s, ok := r.(string); !ok || s == "" {
-					t.Fatalf("Arg(%d) panic must carry a message, got %v", i, r)
-				}
-			}()
-			c.Arg(i)
-		}()
 	}
 }
 

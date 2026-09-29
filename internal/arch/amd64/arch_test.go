@@ -93,7 +93,6 @@ func TestFrozenRegIDs(t *testing.T) {
 		{"R12", R12, 76}, {"R13", R13, 77}, {"R14", R14, 78}, {"R15", R15, 79},
 		{"RIP", RIP, 80}, {"EFLAGS", EFLAGS, 81},
 		{"FS_BASE", FS_BASE, 82}, {"GS_BASE", GS_BASE, 83},
-		{"NoLR", NoLR, -1},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {

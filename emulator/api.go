@@ -201,7 +201,8 @@ func (e *Emulator) ReadCString(addr uint64) (string, error) { return e.ReadCStr(
 // ---- function replacement (native hook) -----------------------------------
 
 // Hook is the context passed to a Replace callback: read the incoming args and
-// reach the emulator for memory access; the callback's return value becomes X0.
+// reach the emulator for memory access; the callback's return value becomes the
+// call's result (written back per the target's CallABI).
 type Hook struct{ e *Emulator }
 
 // Emu returns the emulator, for memory access inside a Replace callback.
@@ -222,7 +223,8 @@ func (h *Hook) Arg(i int) uint64 {
 }
 
 // Reg returns register Xi for any i in 0..30 (also 31=SP, 32=PC, 33=NZCV) via the
-// full GP register file. Use this instead of Arg for X8..X30 (Arg only covers X0..X7).
+// full GP register file — for registers that are not call arguments (Arg covers
+// every integer argument, registers and stack spill alike).
 func (h *Hook) Reg(i int) uint64 {
 	if i < 0 || i > 33 {
 		return 0

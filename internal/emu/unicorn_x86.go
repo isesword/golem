@@ -97,7 +97,7 @@ func regMapAMD64(r Reg) int32 {
 		return ucX86RegFSBase
 	case 83: // amd64.GS_BASE
 		return ucX86RegGSBase
-	default: // includes amd64.NoLR (-1) and every arm64 id — loud failure
+	default: // every unassigned id (negative, arm64's 0..16, ...) — loud failure
 		return ucRegInvalid
 	}
 }

@@ -79,17 +79,4 @@ type CallABI interface {
 	// register-shaped answer does not exist for stack-spilled arguments.
 	// Call establishment must go through PrepareCall, never through ArgReg.
 	ArgReg(i int) (reg emu.Reg, ok bool)
-
-	// --- transitional (P5a.5) ---------------------------------------------
-	// Arg/Ret/LR are the pre-P5a.5 register-shaped role accessors, retained
-	// while the emulator's call path migrates to the whole-call operations
-	// above; they are removed in the P5a.5 cleanup commit. New code must not
-	// use them.
-	Arg(i int) emu.Reg
-	Ret() emu.Reg
-	// LR reports the register holding the return address; conventions
-	// without one (SysV AMD64) report a sentinel that maps to no engine
-	// register. Removed with the migration — the return-address role is
-	// expressed through PrepareCall/ReturnFromCall.
-	LR() emu.Reg
 }

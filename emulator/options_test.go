@@ -154,9 +154,6 @@ func (fakeArch) NormalizeCodeAddr(a emu.GuestAddr) emu.GuestAddr {
 
 type fakeCallABI struct{}
 
-func (fakeCallABI) Arg(i int) emu.Reg { return emu.Reg(i) }
-func (fakeCallABI) Ret() emu.Reg      { return 0 }
-func (fakeCallABI) LR() emu.Reg       { return 0 }
 func (fakeCallABI) ArgReg(i int) (emu.Reg, bool) {
 	return emu.Reg(i), true
 }

@@ -42,15 +42,6 @@ const (
 	GS_BASE
 )
 
-// NoLR is the value sysV64.LR() reports: the SysV AMD64 calling convention
-// has NO link register — the return address lives on the stack (pushed by
-// `call`, popped by `ret`). CallABI.LR documents that the register-shaped
-// accessor does not apply to stack-returning conventions; NoLR makes the
-// absence explicit and UNUSABLE: it maps to no engine register, so any
-// register-based LR consumer fails loudly instead of silently faking one.
-// The same role is expressed through ReturnFromCall (stack pop) instead.
-const NoLR emu.Reg = -1
-
 // Compile-time type pin: the ids must stay emu.Reg so they can be passed to
 // Backend.RegRead/RegWrite without conversion.
 const _ emu.Reg = RAX

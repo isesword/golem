@@ -29,31 +29,6 @@ const numArgRegs = 6
 // argRegs are the SysV integer argument registers in argument order.
 var argRegs = [numArgRegs]emu.Reg{RDI, RSI, RDX, RCX, R8, R9}
 
-// Arg implements SysV AMD64: integer arguments 0..5 arrive in
-// RDI/RSI/RDX/RCX/R8/R9. Arguments 6+ spill to the stack — there is no
-// register to name for them, so an out-of-range i panics (programming error,
-// per the arch.CallABI contract).
-//
-// Transitional (P5a.5): register-shaped accessor retained for the emulator's
-// not-yet-migrated call path; new code uses PrepareCall/ReadArgs/ArgReg.
-func (sysV64) Arg(i int) emu.Reg {
-	if i < 0 || i >= numArgRegs {
-		panic(fmt.Sprintf("amd64: Arg(%d) out of range — SysV passes integer args 0..5 in RDI/RSI/RDX/RCX/R8/R9, args 6+ spill to the stack", i))
-	}
-	return argRegs[i]
-}
-
-func (sysV64) Ret() emu.Reg { return RAX }
-
-// LR reports NoLR: SysV AMD64 keeps the return address on the stack, so the
-// register-shaped LR accessor does not apply (arch.CallABI documents this).
-// NoLR maps to no engine register — a register-based LR consumer fails loudly
-// instead of operating on a fabricated register. The return-address role is
-// expressed through PrepareCall/ReturnFromCall.
-//
-// Transitional (P5a.5): removed once the emulator's call path is migrated.
-func (sysV64) LR() emu.Reg { return NoLR }
-
 // ArgReg names integer argument register i for debugger / inline-hook
 // introspection; ok is false outside the register portion [0,6) — args 6+
 // live on the stack and have no register to name.
