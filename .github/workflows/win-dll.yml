@@ -307,9 +307,10 @@ jobs:
             echo "version=v0.1.0-dev.$(date -u +%Y%m%d)-${{ github.run_number }}" >> $GITHUB_OUTPUT
             echo "prerelease=true" >> $GITHUB_OUTPUT
           fi
-
+      - name: Publish golem release with DLLs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.version }}
           name: golem ${{ steps.ver.outputs.version }}
