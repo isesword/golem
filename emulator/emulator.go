@@ -22,6 +22,7 @@ import (
 	"github.com/isesword/golem/dvm"
 	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/emu"
+	"github.com/isesword/golem/internal/interpose"
 	"github.com/isesword/golem/internal/kernel"
 	"github.com/isesword/golem/internal/loader"
 	"github.com/isesword/golem/internal/memory"
@@ -38,10 +39,10 @@ type Config struct {
 	// NoSharedModules opts out of Phase B page sharing: by default, read-only
 	// segments of every loaded module are mapped zero-copy from ONE set of
 	// host buffers (uc_mem_map_ptr), so a pool of engines loads each .so's
-	// read-only pages into physical RAM exactly once. Writes that would touch
-	// a shared range (Replace/HookAddr patching) transparently privatize the
-	// module's pages in that engine first. Set true to disable (fresh
-	// anonymous memory per engine, pre-Phase-B behavior).
+	// read-only pages into physical RAM exactly once. Since P2.5d guest .text
+	// is immutable (function replacement is interposition via an execution
+	// hook, not a memory patch), nothing ever writes a shared range. Set true
+	// to disable (fresh anonymous memory per engine, pre-Phase-B behavior).
 	NoSharedModules bool
 	// SOPath is an optional "main" shared object to load+init at boot (its
 	// DT_INIT/init_array run, and JNI_OnLoad if exported). Empty = boot bionic
@@ -98,8 +99,9 @@ type AndroidConfig struct {
 	// ReplaceFns installs Go implementations by symbol name, with two binding
 	// paths: names the loaded modules import as UNRESOLVED symbols get their
 	// stub bound to the implementation (before linking); names the loaded
-	// modules EXPORT are entry-patched (Replace) after boot completes. Model
-	// NDK/libc functions the guest calls here (e.g. the AAssetManager family).
+	// modules EXPORT are interposed (Replace) after boot completes — an entry
+	// execution hook, not a code patch. Model NDK/libc functions the guest
+	// calls here (e.g. the AAssetManager family).
 	ReplaceFns map[string]func(h *Hook) uint64
 	// PropertyProvider, if set, answers the loaded .so's __system_property_get(key)
 	// calls: return (value, true) to supply a value, or ("", false) for "unset".
@@ -156,9 +158,15 @@ type Emulator struct {
 
 	arch    arch.Arch            // CPU properties, resolved once in New (P2.5b; always ARM64 until P4)
 	callABI arch.CallABI         // function calling convention (AAPCS64) — args/results/return flow
-	stubEnc arch.StubEncoder     // trampoline encoder; an independent capability, not part of Arch/CallABI
 	layout  memory.Layout        // guest address-space layout in use
 	as      *memory.AddressSpace // single guest VA allocation entry (P2.5c, invariant 12)
+
+	// P2.5d (DESIGN.md §3.8, invariant 11): all guest trampolines are owned by
+	// the StubManager; exported-symbol replacement is Function Interposition
+	// via the InterposeTable + a per-entry execution hook — guest .text is
+	// never patched.
+	stubMgr interpose.StubManager
+	itab    interpose.InterposeTable
 
 	// Boot-cached role registers (P1, DESIGN.md §8: no interface walks on hot
 	// paths). Ownership after the P2.5b split (invariant 13): argRegs/retReg/
@@ -171,20 +179,18 @@ type Emulator struct {
 	pcReg   emu.Reg    // arch.PC()
 	spReg   emu.Reg    // arch.SP()
 
-	modules  []*Module
-	main     *Module           // the Config.SOPath module, if any
-	syms     map[string]uint64 // global export table
-	stubs    map[uint64]string
-	aForm    bool // 当前 JNI 调用为 Call*MethodA（jvalue 数组）形式 // svc addr -> import/JNI name
-	stubHits map[string]int
-	scCount  int // syscalls in current CallFunc (runaway guard)
+	modules []*Module
+	main    *Module           // the Config.SOPath module, if any
+	syms    map[string]uint64 // global export table
+	aForm   bool              // 当前 JNI 调用为 Call*MethodA（jvalue 数组）形式
+	scCount int               // syscalls in current CallFunc (runaway guard)
 
 	jniEnv       uint64         // guest JNIEnv* (points to a stub function table)
 	javaVM       uint64         // guest JavaVM*
 	getEnvStub   uint64         // JavaVM->GetEnv svc stub (special-cased)
 	jniDispatch  map[uint64]int // JNIEnv stub addr -> JNINativeInterface index
 	classRefs    map[string]dvm.Ref
-	shared       []sharedRange          // guest ranges mapped via MemMapPtr (privatize-on-write)
+	shared       []sharedRange          // guest ranges mapped via MemMapPtr (Phase B page sharing; P2.5d: diagnostic tracking, the privatize-on-write compensation retired with text patching)
 	poisonErr    error                  // set when a failed address-space transition leaves the emulator unusable
 	pendingPanic any                    // panic recovered inside a guarded backend callback; poisons at the next run boundary
 	classMeta    *dvm.Class             // java/lang/Class
@@ -198,7 +204,6 @@ type Emulator struct {
 
 	hostByName map[string]hostFn // libc funcs we implement in Go (override bionic)
 	hostImpl   map[uint64]hostFn // svc addr -> host impl
-	replaced   map[uint64]hostFn // user Replace()d functions (svc addr -> Go impl)
 	atRandom   uint64            // guest ptr to 16 "random" bytes (AT_RANDOM)
 
 	// cooperative scheduler state (see scheduler.go)
@@ -304,18 +309,14 @@ func New(cfg Config) (e *Emulator, err error) {
 		be:          be,
 		arch:        cpuArch,
 		callABI:     callABI,
-		stubEnc:     stubEnc,
 		layout:      legacyARM64Layout,
 		as:          memory.NewAddressSpace(legacyARM64Layout),
 		mem:         memory.NewSpace(),
 		vm:          dvm.NewVM(),
 		fs:          vfs.New(cfg.AssetRoot, pid, cfg.ProcessName),
 		syms:        map[string]uint64{},
-		stubs:       map[uint64]string{},
-		stubHits:    map[string]int{},
 		hostByName:  map[string]hostFn{},
 		hostImpl:    map[uint64]hostFn{},
-		replaced:    map[uint64]hostFn{},
 		jniDispatch: map[uint64]int{},
 		classRefs:   map[string]dvm.Ref{},
 		shared:      []sharedRange{},
@@ -324,12 +325,16 @@ func New(cfg Config) (e *Emulator, err error) {
 		fields:      map[dvm.Ref]*fieldRef{},
 		arrayPins:   map[uint64]pinEntry{},
 	}
+	// P2.5d: trampolines and interposition state live in the interpose
+	// package (DESIGN.md §3.8); the stub manager draws slots from the
+	// AddressSpace's stub region and encodes them with the StubEncoder.
+	e.stubMgr = interpose.NewStubManager(e.as, stubEnc, be)
+	e.itab = interpose.NewInterposeTable()
 	e.cacheRoleRegs()
 	// On any construction failure the half-booted engine must be torn down:
 	// it already holds unicorn mappings, and repeated failed New calls would
-	// otherwise leak engines. The post-boot ReplaceFns pass may PANIC (a
-	// Replace that cannot patch is fatal), so the cleanup must catch panics
-	// too — close the backend, then re-panic to preserve the original signal.
+	// otherwise leak engines. The cleanup must catch panics too — close the
+	// backend, then re-panic to preserve the original signal.
 	defer func() {
 		if r := recover(); r != nil {
 			if e != nil {
@@ -476,7 +481,7 @@ func New(cfg Config) (e *Emulator, err error) {
 	// ReplaceFns second pass: exports of the freshly loaded modules are only
 	// in e.syms now. Names bound as import overrides during linking are not
 	// in e.syms (they resolved to stubs) and are naturally skipped; exported
-	// symbols get their entry patched.
+	// symbols get an interposition entry hook (P2.5d).
 	for name, fn := range cfg.Android.ReplaceFns {
 		if addr, ok := e.syms[name]; ok {
 			if err := e.ReplaceE(addr, fn); err != nil {
@@ -594,27 +599,21 @@ func (e *Emulator) resolveSymbol(name string) (uint64, bool) {
 	return e.makeStub(name, arch.StubUnresolved), true
 }
 
-// makeStub emits a trampoline at a fresh stub address via the architecture's
-// StubEncoder (arm64: `svc #0 ; ret`, which traps to onInterrupt, which
-// returns to the caller). Used for unresolved imports, host functions and JNI
-// table slots. Trap identity is decided by ADDRESS (the stubs map below), not
-// by anything in the emitted bytes — see arch.StubEncoder.
+// makeStub emits a trampoline at a fresh stub address through the StubManager
+// (P2.5d): the slot comes from the AddressSpace's stub region and the bytes
+// from the architecture's StubEncoder (arm64: `svc #0 ; ret`, which traps to
+// onInterrupt, which returns to the caller). Used for unresolved imports,
+// host functions and JNI table slots. Trap identity is decided by ADDRESS
+// (the StubManager's descriptor table), not by anything in the emitted bytes
+// — see arch.StubEncoder.
 func (e *Emulator) makeStub(name string, kind arch.StubKind) uint64 {
-	// Stub slots come from the AddressSpace's stub region (8 bytes each, the
-	// pre-P2.5c stub-cursor stride). No error channel exists on the resolution
-	// path, so region exhaustion panics like an encoder failure below.
-	a64, err := e.as.Alloc(memory.PurposeStub, 8)
+	// No error channel exists on the resolution path, so allocation/encoding
+	// failures (e.g. stub-region exhaustion) panic, as before P2.5d.
+	a, err := e.stubMgr.Allocate(kind, name)
 	if err != nil {
 		panic(fmt.Sprintf("makeStub %s: %v", name, err))
 	}
-	a := uint64(a64)
-	code, err := e.stubEnc.EmitStub(kind)
-	if err != nil {
-		panic(fmt.Sprintf("makeStub %s: %v", name, err))
-	}
-	_ = e.be.MemWrite(emu.GuestAddr(a), code)
-	e.stubs[a] = name
-	return a
+	return uint64(a)
 }
 
 // SetupJNI builds a minimal JavaVM + JNIEnv in guest memory: both are pointers
@@ -677,10 +676,6 @@ func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
 		_ = b.RegWrite(e.retReg, 0) // JNI_OK
 		return
 	}
-	if fn, ok := e.replaced[svc]; ok { // user Replace()d function
-		fn(e, b)
-		return
-	}
 	if idx, ok := e.jniDispatch[svc]; ok { // JNIEnv->function(...)
 		e.handleJNI(idx, b)
 		return
@@ -689,10 +684,11 @@ func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
 		fn(e, b)
 		return
 	}
-	if name, ok := e.stubs[svc]; ok {
-		e.stubHits[name]++
+	// Unresolved-import placeholder / unbound trampoline: count the hit by
+	// name (the pre-P2.5d stubHits semantics) and return an optimistic 0.
+	if desc, ok := e.stubMgr.Hit(emu.GuestAddr(svc)); ok {
 		if e.cfg.Verbose {
-			fmt.Printf("[stub] %s() -> 0\n", name)
+			fmt.Printf("[stub] %s() -> 0\n", desc.Name)
 		}
 		_ = b.RegWrite(e.retReg, 0) // optimistic default
 		return

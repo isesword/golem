@@ -40,6 +40,11 @@ func TestCapabilityProbeDegrades(t *testing.T) {
 			_, err := e.Trace(0x1000, 0x2000)
 			return err
 		},
+		// P2.5d: ReplaceE is interposition now — capability-gated on
+		// InstructionHooker like the other entry hooks.
+		"ReplaceE": func() error {
+			return e.ReplaceE(0x1000, func(*Hook) uint64 { return 0 })
+		},
 		"NewDebugger": func() error {
 			_, err := e.NewDebugger()
 			return err
@@ -52,17 +57,5 @@ func TestCapabilityProbeDegrades(t *testing.T) {
 		if err := call(); !errors.Is(err, emu.ErrUnsupported) {
 			t.Errorf("%s on a core-only backend: err = %v, want errors.Is(emu.ErrUnsupported)", name, err)
 		}
-	}
-}
-
-// The faultBE test double implements the CacheInvalidator capability — the
-// ReplaceE/privatize tests depend on the probe SUCCEEDING for it.
-func TestFaultBESatisfiesCacheInvalidator(t *testing.T) {
-	var be emu.Backend = newFaultBE()
-	if _, ok := be.(emu.CacheInvalidator); !ok {
-		t.Fatal("faultBE must satisfy emu.CacheInvalidator")
-	}
-	if _, ok := be.(emu.InstructionHooker); ok {
-		t.Fatal("faultBE must NOT satisfy emu.InstructionHooker")
 	}
 }

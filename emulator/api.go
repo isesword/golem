@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/emu"
+	"github.com/isesword/golem/internal/interpose"
 )
 
 // capabilityErr rewrites an engine-capability failure (an error wrapping
@@ -31,16 +33,6 @@ func (e *Emulator) capabilityErr(op string, err error) error {
 // assertion failed) or present but refused (backend returned ErrUnsupported).
 func (e *Emulator) capabilityUnavailable(op string) error {
 	return fmt.Errorf("%s: %w (engine %q)", op, emu.ErrUnsupported, e.engine)
-}
-
-// flushCache invalidates the engine's translated code cache via the
-// CacheInvalidator capability; an engine without it reports ErrUnsupported,
-// exactly as a backend whose FlushCache fails.
-func (e *Emulator) flushCache() error {
-	if ci, ok := e.be.(emu.CacheInvalidator); ok {
-		return ci.FlushCache()
-	}
-	return e.capabilityUnavailable("FlushCache")
 }
 
 // Guest memory protection bits (mirror the CPU backend's UC_PROT_*).
@@ -253,67 +245,99 @@ func (h *Hook) LR() uint64 { v, _ := h.e.be.RegRead(h.e.lrReg); return v }
 // SetPC redirects execution (e.g. skip an instruction, jump elsewhere).
 func (h *Hook) SetPC(v uint64) { _ = h.e.be.RegWrite(h.e.pcReg, v) }
 
+// RegRead / RegWrite / MemRead / MemWrite make *Hook satisfy
+// interpose.CallContext (P2.5d): the interpose package cannot import
+// emulator, so the interposition callback contract is defined there and the
+// Hook — the emulator's own callback context — adapts to it.
+func (h *Hook) RegRead(r emu.Reg) (uint64, error)  { return h.e.be.RegRead(r) }
+func (h *Hook) RegWrite(r emu.Reg, v uint64) error { return h.e.be.RegWrite(r, v) }
+func (h *Hook) MemWrite(a emu.GuestAddr, d []byte) error {
+	return h.e.be.MemWrite(a, d)
+}
+func (h *Hook) MemRead(a emu.GuestAddr, n uint64) ([]byte, error) {
+	return h.e.be.MemRead(a, n)
+}
+
 // ReplaceFunc is a Go stand-in for a native function; its return value is the
 // function's return (X0).
 type ReplaceFunc func(h *Hook) uint64
 
-// Replace makes calls to the function at addr run fn instead (the entry is
-// overwritten with an `svc; ret` trampoline). This is golem's analogue of
-// unidbg's hook/replace: model or stub a native function in Go. Works on both
-// engines (it's a trap, not an inline patch).
-// Replace entry-patches `addr` with an SVC trap dispatched to fn. Panics if
-// any step fails (privatize/write/flush): a half-applied patch — code
-// patched but stale translation cached, or a registered hook the guest
-// never reaches — is worse than a loud failure at setup time.
-// ReplaceE entry-patches addr with an SVC trap dispatched to fn — the
-// transactional form: privatize shared pages, save the original instructions,
-// write the patch, flush, and only then register the hook. Any failure rolls
-// the patch back (original instructions restored + flushed); if even the
-// rollback cannot be verified the emulator is POISONED and every later
-// CallFunc/RunThreads rejects with that error. On a recoverable failure the
-// emulator remains usable and the original code still runs.
+// Replace makes calls to the function at addr run fn instead. Since P2.5d
+// (DESIGN.md §3.8, invariant 11) this is FUNCTION INTERPOSITION, not a code
+// patch: guest .text is immutable, so instead of overwriting the entry with a
+// trampoline the emulator binds fn in the InterposeTable and installs a
+// per-entry execution hook (emu.InstructionHooker.HookCode on exactly
+// [addr, addr]). When guest PC reaches addr the hook fires BEFORE the first
+// instruction executes: fn runs, its result is written back via
+// CallABI.WriteResult, and CallABI.ReturnFromCall hands control to the guest
+// caller — the original function body never executes.
+//
+// Interposition needs per-instruction code hooks; an engine without the
+// InstructionHooker capability fails ReplaceE with an error wrapping
+// emu.ErrUnsupported. Replacing an already-replaced address is an error (an
+// interposed entry owns exactly one hook).
 func (e *Emulator) ReplaceE(addr uint64, fn ReplaceFunc) error {
 	if e.poisonErr != nil {
 		return fmt.Errorf("emulator poisoned: %w", e.poisonErr)
 	}
-	// 1. privatize (shared -> private with identical content). On a
-	// recoverable privatize failure the original code is intact.
-	if err := e.privatize(addr, 8); err != nil {
-		if e.poisonErr != nil {
-			return e.poisonErr
-		}
-		return fmt.Errorf("privatize %#x: %w", addr, err)
+	ih, ok := e.be.(emu.InstructionHooker)
+	if !ok {
+		return e.capabilityUnavailable("Replace")
 	}
-	// 2. save the original instructions we are about to overwrite.
-	orig, err := e.be.MemRead(emu.GuestAddr(addr), 8)
-	if err != nil {
-		return fmt.Errorf("read original %#x: %w", addr, err)
-	}
-	// 3. write the patch. A partial write cannot be verified -> poison.
-	// ARCH-LEAK / P5a-BLOCKER: these bytes are guest machine-code generation
-	// (AArch64 `svc #0; ret`) hardcoded in the emulator — guest instruction
-	// encoding belongs to the arch layer (a StubEncoder-shaped capability).
-	// Not fixed in P2; must be resolved before the AMD64 bring-up in P5a.
-	if err := e.be.MemWrite(emu.GuestAddr(addr), []byte{0x01, 0x00, 0x00, 0xd4, 0xc0, 0x03, 0x5f, 0xd6}); err != nil {
-		return e.poison(fmt.Sprintf("patch write %#x", addr), err)
-	}
-	// 4. flush stale translations. If it fails, roll the original
-	// instructions back; if even the rollback cannot be verified -> poison.
-	if err := e.flushCache(); err != nil {
-		if rerr := e.be.MemWrite(emu.GuestAddr(addr), orig); rerr != nil {
-			return e.poison(fmt.Sprintf("rollback write %#x", addr), rerr)
-		}
-		if rerr := e.flushCache(); rerr != nil {
-			return e.poison(fmt.Sprintf("rollback flush %#x", addr), rerr)
-		}
-		return fmt.Errorf("Replace %#x: flush failed (%v) — original instructions restored", addr, err)
-	}
-	// 5. success: register the dispatch hook last.
-	e.replaced[addr] = e.guardHostFn(func(em *Emulator, b emu.Backend) {
-		ret := fn(&Hook{em})
-		_ = b.RegWrite(em.retReg, ret)
+	// Adapt the ReplaceFunc to an interpose.HostFunc: the callback context is
+	// the Hook, which satisfies interpose.CallContext.
+	hf := interpose.HostFunc(func(ctx interpose.CallContext) uint64 {
+		return fn(ctx.(*Hook))
 	})
+	// Duplicate pre-check: an interposed entry owns exactly one hook — a
+	// second Replace on the same address would stack hooks that both fire.
+	if _, dup := e.itab.LookupAddress(emu.GuestAddr(addr)); dup {
+		return fmt.Errorf("Replace %#x: address already interposed", addr)
+	}
+	// Performance constraint (DESIGN.md §8): the hook covers exactly the one
+	// entry address, never a range. Installed BEFORE binding so a failed
+	// ReplaceE leaves no state at all (an unbound entry hook is a benign
+	// no-op: onInterpose's LookupAddress misses and the guest runs on).
+	hook, err := ih.HookCode(emu.GuestAddr(addr), emu.GuestAddr(addr), e.guardCode(e.onInterpose))
+	if err != nil {
+		return e.capabilityErr("Replace", err)
+	}
+	// Unicorn instruments hook callouts into translated blocks AT TRANSLATION
+	// TIME: a TB translated before this hook was added (the function already
+	// ran once) would never fire it, so the translation cache must be
+	// flushed after installing the hook. A failed flush leaves the hook
+	// installed-but-inert — remove it so a retry does not stack hooks.
+	// An engine with hooks but no CacheInvalidator capability presumably does
+	// not cache translations (nothing to invalidate), so absence is tolerated.
+	if ci, ok := e.be.(emu.CacheInvalidator); ok {
+		if err := ci.FlushCache(); err != nil {
+			_ = hook.Remove()
+			return e.capabilityErr("Replace", err)
+		}
+	}
+	if err := e.itab.BindAddress(emu.GuestAddr(addr), hf); err != nil {
+		_ = hook.Remove()
+		return err // unreachable after the pre-check (single-threaded)
+	}
 	return nil
+}
+
+// onInterpose is the single dispatch behind every interposition entry hook:
+// look the entry up in the InterposeTable, run the host function, write its
+// result back per the CallABI and return to the guest caller. Runs inside the
+// engine's callback trampoline, guarded like every backend callback.
+func (e *Emulator) onInterpose(b emu.Backend, addr uint64, _ uint32) {
+	hf, ok := e.itab.LookupAddress(emu.GuestAddr(addr))
+	if !ok {
+		return // hook outlived its binding (cannot happen today; keep it benign)
+	}
+	ret := hf(&Hook{e})
+	if err := e.callABI.WriteResult(b, arch.CallResult{Value: ret}); err != nil && e.cfg.Verbose {
+		fmt.Printf("[interpose] %#x: WriteResult: %v\n", addr, err)
+	}
+	if err := e.callABI.ReturnFromCall(b); err != nil && e.cfg.Verbose {
+		fmt.Printf("[interpose] %#x: ReturnFromCall: %v\n", addr, err)
+	}
 }
 
 // Replace is ReplaceE with panic-on-error, for call sites that cannot
@@ -341,9 +365,9 @@ func (e *Emulator) ReplaceSymbol(name string, fn ReplaceFunc) error {
 // or redirect. Returns a remover.
 //
 // Inline hooks need per-instruction code hooks; an engine without the
-// InstructionHooker capability returns an error wrapping emu.ErrUnsupported
-// (use Replace for entry interception, which works on any engine — it is a
-// trap, not an inline patch).
+// InstructionHooker capability returns an error wrapping emu.ErrUnsupported.
+// (Replace uses the same capability since P2.5d — entry interception is an
+// execution hook too, no longer an SVC trap patch.)
 func (e *Emulator) HookAddr(addr uint64, fn func(h *Hook)) (func(), error) {
 	ih, ok := e.be.(emu.InstructionHooker)
 	if !ok {

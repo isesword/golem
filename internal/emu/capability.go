@@ -65,8 +65,9 @@ type ContextManager interface {
 
 // CacheInvalidator invalidates the engine's translated/JIT'd code cache.
 // Called after writing new code into an executable region (self-modifying
-// code / Replace), otherwise a previously executed block keeps running its
-// stale translation.
+// code) and after installing an interposition entry hook (P2.5d): unicorn
+// instruments hook callouts at TB translation time, so a block translated
+// before the hook existed would never fire it unless the cache is flushed.
 type CacheInvalidator interface {
 	FlushCache() error
 }

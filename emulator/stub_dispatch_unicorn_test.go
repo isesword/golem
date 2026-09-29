@@ -22,12 +22,12 @@ func TestStubVsSyscallChannelsE2E(t *testing.T) {
 	if _, err := e.CallSymbol("uname_machine_len"); err != nil {
 		t.Fatal(err)
 	}
-	if len(e.stubHits) != 0 {
-		t.Fatalf("guest syscalls misclassified as stubs: %v", e.stubHits)
+	if h := e.stubMgr.HitCounts(); len(h) != 0 {
+		t.Fatalf("guest syscalls misclassified as stubs: %v", h)
 	}
 
-	// Host-call and unresolved stubs trap into the stubs branch (recorded in
-	// stubHits, optimistic 0 return) — not into the kernel dispatcher.
+	// Host-call and unresolved stubs trap into the stub branch (recorded as
+	// hits, optimistic 0 return) — not into the kernel dispatcher.
 	for _, kind := range []arch.StubKind{arch.StubHostCall, arch.StubUnresolved} {
 		stub := e.makeStub("synthetic_stub", kind)
 		r, err := e.CallFunc(stub)
@@ -38,8 +38,8 @@ func TestStubVsSyscallChannelsE2E(t *testing.T) {
 			t.Fatalf("stub (kind %d) return = %#x, want 0", kind, r)
 		}
 	}
-	if e.stubHits["synthetic_stub"] != 2 {
-		t.Fatalf("stub hits = %v, want synthetic_stub x2", e.stubHits)
+	if e.stubMgr.Hits("synthetic_stub") != 2 {
+		t.Fatalf("stub hits = %d, want synthetic_stub x2", e.stubMgr.Hits("synthetic_stub"))
 	}
 	if exited, code := e.GuestExited(); exited {
 		t.Fatalf("guest exited(%d) — stub trap must not reach the kernel", code)

@@ -5,6 +5,7 @@ import (
 
 	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/emu"
+	"github.com/isesword/golem/internal/interpose"
 	"github.com/isesword/golem/internal/kernel"
 	"github.com/isesword/golem/internal/memory"
 	"github.com/isesword/golem/internal/platform/android"
@@ -30,16 +31,12 @@ func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 		be:          be,
 		arch:        cpuArch,
 		callABI:     callABI,
-		stubEnc:     stubEnc,
 		mem:         mem,
 		fs:          fs,
 		layout:      legacyARM64Layout,
 		as:          memory.NewAddressSpace(legacyARM64Layout),
-		stubs:       map[uint64]string{},
-		stubHits:    map[string]int{},
 		hostByName:  map[string]hostFn{},
 		hostImpl:    map[uint64]hostFn{},
-		replaced:    map[uint64]hostFn{},
 		jniDispatch: map[uint64]int{},
 		kctx: &kernel.Context{
 			B: be, Mem: mem, VFS: fs, Pid: defaultPid,
@@ -48,6 +45,10 @@ func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 			Codecs:    android.AsmGenericLP64Codecs{},
 		},
 	}
+	// P2.5d: the interpose components New wires (stub manager over the
+	// AddressSpace stub region; empty interposition table).
+	e.stubMgr = interpose.NewStubManager(e.as, stubEnc, be)
+	e.itab = interpose.NewInterposeTable()
 	e.cacheRoleRegs()
 	return e
 }
