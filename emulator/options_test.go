@@ -45,12 +45,12 @@ func TestLegacyShimEquivalence(t *testing.T) {
 		PropertyProvider: provider,
 		Profile:          prof,
 	}}
-	shimmed, _, err := normalizePlatformConfig(&cfg, androidNormTarget)
-	if err != nil {
+	if err := normalizePlatformConfig(&cfg, androidNormTarget); err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
-	if cfg.acfg != shimmed {
-		t.Fatal("normalized config must be stored back into cfg.acfg (single read site)")
+	shimmed, ok := cfg.pcfg.(*android.Config)
+	if !ok {
+		t.Fatalf("shimmed config = %T, want *android.Config stored in cfg.pcfg (single read site)", cfg.pcfg)
 	}
 
 	direct := android.NewConfig(
@@ -93,16 +93,15 @@ func TestLegacyShimEquivalence(t *testing.T) {
 	}
 }
 
-// TestLegacyShimZeroConfig: neither legacy field nor option → zero android.Config.
+// TestLegacyShimZeroConfig: neither legacy field nor option → pcfg stays
+// nil; the platform factory's Bind supplies the zero-value defaults (P5b.5).
 func TestLegacyShimZeroConfig(t *testing.T) {
 	cfg := Config{}
-	acfg, _, err := normalizePlatformConfig(&cfg, androidNormTarget)
-	if err != nil {
+	if err := normalizePlatformConfig(&cfg, androidNormTarget); err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
-	if acfg == nil || acfg.JNI != nil || acfg.DexPath != "" || len(acfg.ReplaceFns) != 0 ||
-		acfg.PropertyProvider != nil || acfg.Profile != nil {
-		t.Fatalf("expected zero android.Config, got %+v", acfg)
+	if cfg.pcfg != nil {
+		t.Fatalf("empty legacy + no option must leave pcfg nil (factory defaults), got %T", cfg.pcfg)
 	}
 }
 
@@ -114,34 +113,44 @@ func TestLegacyShimConflict(t *testing.T) {
 	if err := opt(&cfg); err != nil {
 		t.Fatalf("apply option: %v", err)
 	}
-	if _, _, err := normalizePlatformConfig(&cfg, androidNormTarget); err == nil {
+	if err := normalizePlatformConfig(&cfg, androidNormTarget); err == nil {
 		t.Fatal("legacy field + WithPlatformConfig must be an ambiguity error")
 	}
 }
 
-// TestWithPlatformConfigValidation: nil and unknown platform configs are
-// rejected at the option boundary; android and darwin (P5b) configs are
-// accepted.
+// TestWithPlatformConfigValidation: nil is rejected at the option boundary;
+// any non-nil platform.Config is accepted and stored, routed by PlatformID()
+// only (P5b.5 — no type-switch). A config for a platform that doesn't match
+// the probed target fails in the normalization step.
 func TestWithPlatformConfigValidation(t *testing.T) {
 	var cfg Config
 	if err := WithPlatformConfig(nil)(&cfg); err == nil {
 		t.Fatal("WithPlatformConfig(nil) must error")
 	}
-	if err := WithPlatformConfig(fakePlatformConfig{})(&cfg); err == nil {
-		t.Fatal("an unknown platform config implementation must error")
+	// An unknown platform config implementation is accepted at the boundary
+	// (stored as-is) — and fails normalization against the probed target.
+	if err := WithPlatformConfig(fakePlatformConfig{})(&cfg); err != nil {
+		t.Fatalf("any platform.Config must be accepted at the boundary: %v", err)
 	}
+	if cfg.pcfg != platform.Config(fakePlatformConfig{}) {
+		t.Fatal("the config must land in cfg.pcfg as supplied")
+	}
+	if err := normalizePlatformConfig(&cfg, androidNormTarget); err == nil {
+		t.Fatal("an unknown-platform config must fail normalization against the probed target")
+	}
+	cfg = Config{}
 	if err := WithPlatformConfig(android.NewConfig())(&cfg); err != nil {
 		t.Fatalf("android config must be accepted: %v", err)
 	}
-	if cfg.acfg == nil {
-		t.Fatal("accepted config must land in cfg.acfg")
+	if cfg.pcfg == nil {
+		t.Fatal("accepted config must land in cfg.pcfg")
 	}
 	cfg = Config{}
 	if err := WithPlatformConfig(darwin.NewConfig())(&cfg); err != nil {
 		t.Fatalf("darwin config must be accepted (P5b): %v", err)
 	}
-	if cfg.dcfg == nil {
-		t.Fatal("accepted config must land in cfg.dcfg")
+	if cfg.pcfg == nil {
+		t.Fatal("accepted config must land in cfg.pcfg")
 	}
 }
 
@@ -153,7 +162,7 @@ func TestNormalizePlatformMismatch(t *testing.T) {
 	if err := WithPlatformConfig(darwin.NewConfig())(&cfg); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := normalizePlatformConfig(&cfg, androidNormTarget); err == nil {
+	if err := normalizePlatformConfig(&cfg, androidNormTarget); err == nil {
 		t.Fatal("darwin config + android target must error")
 	}
 	// explicit android config with a darwin (Mach-O) target.
@@ -161,22 +170,22 @@ func TestNormalizePlatformMismatch(t *testing.T) {
 	if err := WithPlatformConfig(android.NewConfig())(&cfg); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := normalizePlatformConfig(&cfg, darwinNormTarget); err == nil {
+	if err := normalizePlatformConfig(&cfg, darwinNormTarget); err == nil {
 		t.Fatal("android config + darwin target must error")
 	}
 	// the legacy Config.Android field with a darwin target.
 	cfg = Config{Android: AndroidConfig{DexPath: "/x.dex"}}
-	if _, _, err := normalizePlatformConfig(&cfg, darwinNormTarget); err == nil {
+	if err := normalizePlatformConfig(&cfg, darwinNormTarget); err == nil {
 		t.Fatal("legacy Android field + darwin target must error")
 	}
-	// darwin target with no config at all: the platform defaults apply.
+	// darwin target with no config at all: pcfg stays nil — the platform
+	// factory's Bind supplies the defaults (P5b.5).
 	cfg = Config{}
-	_, dcfg, err := normalizePlatformConfig(&cfg, darwinNormTarget)
-	if err != nil {
+	if err := normalizePlatformConfig(&cfg, darwinNormTarget); err != nil {
 		t.Fatal(err)
 	}
-	if dcfg == nil || cfg.dcfg != dcfg {
-		t.Fatal("darwin defaults must be built and stored into cfg.dcfg (single read site)")
+	if cfg.pcfg != nil {
+		t.Fatal("no config on a darwin target must leave pcfg nil (factory defaults)")
 	}
 }
 

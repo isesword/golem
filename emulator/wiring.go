@@ -18,4 +18,13 @@ import (
 	// P5a: register the AMD64 (Arch, CallABI, StubEncoder, CPUFeatures) quad.
 	// (The ARM64 quad arrives via debugger.go's functional import.)
 	_ "github.com/isesword/golem/internal/arch/amd64"
+
+	// P5b.5: register the platform personalities — the emulator resolves
+	// the probed Target.Platform through platform.Resolve, so every
+	// supported platform's Factory must be linked in. (platform/android is
+	// also imported directly for the legacy Config.Android shim; the blank
+	// import documents the registration role and keeps it linked if the
+	// shim ever retires.)
+	_ "github.com/isesword/golem/internal/platform/android"
+	_ "github.com/isesword/golem/internal/platform/darwin"
 )

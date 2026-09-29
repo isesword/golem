@@ -8,10 +8,8 @@ import (
 	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/interpose"
 	"github.com/isesword/golem/internal/loader"
-	"github.com/isesword/golem/internal/memory"
 	"github.com/isesword/golem/internal/platform"
 	"github.com/isesword/golem/internal/platform/android"
-	"github.com/isesword/golem/internal/platform/darwin"
 	"github.com/isesword/golem/internal/target"
 )
 
@@ -27,23 +25,17 @@ type Option func(*Config) error
 // with the deprecated Config.Android field: setting both fails New with an
 // error instead of silently picking one.
 //
-// Supported configs (checked once here, at the option boundary — the core
-// never dispatches platform configs via any + type-switch): *android.Config
-// and *darwin.Config (P5b). The config's platform must match the platform the
-// SOPath probe derives — a mismatch fails New in the normalization step.
+// The option boundary accepts ANY platform.Config and routes it by
+// PlatformID() only (P5b.5 — the core never dispatches platform configs via
+// any + type-switch): the config's platform must match the platform the
+// SOPath probe derives, checked once in the normalization step; the platform
+// factory's Bind then asserts its own concrete config type.
 func WithPlatformConfig(c platform.Config) Option {
 	return func(cfg *Config) error {
 		if c == nil {
 			return errors.New("emulator: WithPlatformConfig(nil)")
 		}
-		switch pc := c.(type) {
-		case *android.Config:
-			cfg.acfg = pc
-		case *darwin.Config:
-			cfg.dcfg = pc
-		default:
-			return fmt.Errorf("emulator: unsupported platform config %T (platform %s)", c, c.PlatformID())
-		}
+		cfg.pcfg = c
 		return nil
 	}
 }
@@ -54,42 +46,40 @@ func WithPlatformConfig(c platform.Config) Option {
 // (resolveTarget), because the platform the config speaks for must match the
 // probed platform: an android.Config with a Mach-O target (or a
 // darwin.Config with an ELF target) is a boot-time error, not a silent
-// mis-wiring.
+// mis-wiring. The matching is PlatformID() routing, not a type-switch
+// (P5b.5).
 //
 // Android precedence: an explicit WithPlatformConfig wins; Config.Android is
 // then required to be zero (setting both is an ambiguity error, not a silent
-// override). With neither, the platform defaults (all-zero Config) apply.
-func normalizePlatformConfig(cfg *Config, tgt *target.Target) (*android.Config, *darwin.Config, error) {
-	switch tgt.Platform {
-	case platform.Android:
-		if cfg.dcfg != nil {
-			return nil, nil, fmt.Errorf("emulator: WithPlatformConfig(darwin.Config) but %s probes as android (ELF); the platform config must match the guest platform", cfg.SOPath)
+// override). With neither, cfg.pcfg stays nil and the platform factory's
+// Bind supplies the platform defaults.
+func normalizePlatformConfig(cfg *Config, tgt *target.Target) error {
+	if cfg.pcfg != nil {
+		if cfg.pcfg.PlatformID() != tgt.Platform {
+			return fmt.Errorf("emulator: WithPlatformConfig(%s) but %s probes as %s; the platform config must match the guest platform", cfg.pcfg.PlatformID(), cfg.SOPath, tgt.Platform)
 		}
-		if cfg.acfg != nil {
-			if legacy := legacyAndroidUsed(cfg.Android); legacy {
-				return nil, nil, errors.New("emulator: Config.Android (deprecated) and WithPlatformConfig are mutually exclusive; move the AndroidConfig fields to android.NewConfig options")
-			}
-			return cfg.acfg, nil, nil
+		if legacyAndroidUsed(cfg.Android) {
+			return errors.New("emulator: Config.Android (deprecated) and WithPlatformConfig are mutually exclusive; move the AndroidConfig fields to android.NewConfig options")
 		}
-		cfg.acfg = android.NewConfig(
+		return nil
+	}
+	// No explicit platform config: the legacy shim converts the deprecated
+	// Config.Android fields into an android.Config exactly once, here (P4a
+	// compatibility semantics preserved — only the storage location moved,
+	// from the acfg field to the single pcfg slot).
+	if legacyAndroidUsed(cfg.Android) {
+		if tgt.Platform != platform.Android {
+			return fmt.Errorf("emulator: Config.Android (deprecated) is the android personality but %s probes as %s; the platform config must match the guest platform", cfg.SOPath, tgt.Platform)
+		}
+		cfg.pcfg = android.NewConfig(
 			android.WithJNI(cfg.Android.JNI),
 			android.WithDexPath(cfg.Android.DexPath),
 			android.WithReplaceFns(legacyReplaceFns(cfg.Android.ReplaceFns)),
 			android.WithPropertyProvider(cfg.Android.PropertyProvider),
 			android.WithProfile(cfg.Android.Profile),
 		)
-		return cfg.acfg, nil, nil
-	case platform.Darwin:
-		if cfg.acfg != nil || legacyAndroidUsed(cfg.Android) {
-			return nil, nil, fmt.Errorf("emulator: android platform config but %s probes as darwin (Mach-O); the platform config must match the guest platform", cfg.SOPath)
-		}
-		if cfg.dcfg == nil {
-			cfg.dcfg = darwin.NewConfig()
-		}
-		return nil, cfg.dcfg, nil
-	default:
-		return nil, nil, fmt.Errorf("emulator: no platform-config normalization for platform %s", tgt.Platform)
 	}
+	return nil
 }
 
 // legacyAndroidUsed reports whether any field of the deprecated AndroidConfig
@@ -172,23 +162,4 @@ func resolveTarget(cfg Config) (*target.Target, error) {
 		Platform: plat,
 		Variant:  variant,
 	}, nil
-}
-
-// resolveLayout is the LayoutPolicy step of the boot sequence (DESIGN.md §4,
-// P4c): the target's platform personality plans the initial guest address
-// space from the arch's address-space capabilities plus user overrides. The
-// result is pure data — backend mappings and AddressSpace state are built
-// from it later, never inside the policy. The platform-keyed policy selection
-// is bound here at the composition root (same shape as the
-// Transport/Table/Codecs injection in New).
-func resolveLayout(tgt *target.Target, overrides platform.LayoutOverrides) (memory.Layout, error) {
-	info := platform.TargetInfo{Platform: tgt.Platform, Caps: tgt.Arch.Caps()}
-	switch tgt.Platform {
-	case platform.Android:
-		return android.LayoutPolicy{}.Resolve(info, overrides)
-	case platform.Darwin:
-		return darwin.LayoutPolicy{}.Resolve(info, overrides)
-	default:
-		return memory.Layout{}, fmt.Errorf("emulator: no LayoutPolicy for platform %s", tgt.Platform)
-	}
 }

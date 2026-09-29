@@ -29,7 +29,6 @@ import (
 	"github.com/isesword/golem/internal/memory"
 	"github.com/isesword/golem/internal/platform"
 	"github.com/isesword/golem/internal/platform/android"
-	"github.com/isesword/golem/internal/platform/darwin"
 	"github.com/isesword/golem/internal/profile"
 	"github.com/isesword/golem/internal/target"
 	"github.com/isesword/golem/internal/vfs"
@@ -102,15 +101,13 @@ type Config struct {
 	// supported value (reserved for P5+).
 	LayoutOverrides platform.LayoutOverrides
 
-	// acfg is the normalized Android platform config, set by
-	// WithPlatformConfig and resolved by the legacy shim in New. Never set
-	// it directly; it is unexported so positional Config literals outside
-	// this package already fail to compile.
-	acfg *android.Config
-	// dcfg is the normalized Darwin platform config (P5b) — same contract as
-	// acfg. Exactly one of acfg/dcfg is non-nil after New's normalization,
-	// matching the probed target platform.
-	dcfg *darwin.Config
+	// pcfg is the normalized platform config, set by WithPlatformConfig or
+	// converted from the deprecated Android field by the legacy shim in
+	// New's options normalization. Never set it directly; it is unexported
+	// so positional Config literals outside this package already fail to
+	// compile. nil after normalization = the platform factory's Bind
+	// supplies the platform defaults (P5b.5).
+	pcfg platform.Config
 }
 
 // AndroidConfig is the Android personality of an emulated process: the pieces
@@ -229,13 +226,22 @@ type Emulator struct {
 	pinGen       uint64                 // bumped per host-initiated native call
 	pendingExc   bool                   // a pending JNI exception (Throw/ThrowNew)
 
+	// P4d/P5b.5: the platform Runtime is the factory's composition product —
+	// the complete personality as data (startup ABI, layout, syscall
+	// personality, runtime libraries, ReplaceFns, optional interop
+	// surface), bound once in New from the probed Target.Platform and
+	// consumed below as feature tests, never dispatched on identity.
+	rt *platform.Runtime
+
 	// P4d (DESIGN.md §3.4, invariant 10): the process initial state is built
 	// ONCE by the platform's StartupABI — Android materializes the auxv data
 	// block (HWCAP from target.Features, PHDR/ENTRY from the main image
 	// metadata, deterministic AT_RANDOM) and the interposed getauxval serves
-	// from that same vector; Darwin (P5b) materializes an exec-style initial
-	// stack frame (argc/argv/envp/apple) and has no auxv at all.
+	// from that same vector via auxvLookup; Darwin (P5b) materializes an
+	// exec-style initial stack frame (argc/argv/envp/apple) and has no auxv
+	// at all. auxvLookup is nil exactly when the platform has no auxv.
 	startup      platform.StartupABI
+	auxvLookup   func(typ uint64) uint64
 	startupBuilt bool
 
 	// cooperative scheduler state (see scheduler.go)
@@ -362,16 +368,34 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	}
 	// Then normalize the platform config against the PROBED platform (P5b):
 	// this is the legacy shim's only read site of Config.Android, and the
-	// android/darwin config <-> target platform mismatch check. Exactly one
-	// of acfg/dcfg comes back non-nil.
-	acfg, dcfg, err := normalizePlatformConfig(&cfg, tgt)
+	// platform config <-> target platform match check (PlatformID routing,
+	// P5b.5). A nil pcfg afterwards means "platform defaults", supplied by
+	// the factory's Bind below.
+	if err := normalizePlatformConfig(&cfg, tgt); err != nil {
+		return nil, err
+	}
+	// §4 stages 3–4 seam (P5b.5): resolve the platform factory registered
+	// under the probed Target.Platform and bind the complete platform
+	// Runtime — ONE struct of data, consumed below as feature tests. The
+	// emulator holds no per-platform selection logic: the registry consumes
+	// Target.Platform as-is (probe → Target resolution is untouched), and
+	// the per-arch selection lives inside the factory.
+	factory, err := platform.Resolve(tgt.Platform)
 	if err != nil {
 		return nil, err
 	}
-	// §4 stage 4: the platform's LayoutPolicy plans the initial guest address
-	// space (pure geometry — no Map/Alloc/Reserve here, P4c). This precedes
-	// backend creation so a layout failure never leaves an engine behind.
-	layout, err := resolveLayout(tgt, cfg.LayoutOverrides)
+	rt, err := factory.Bind(platform.BindContext{ArchID: tgt.ID, Config: cfg.pcfg})
+	if err != nil {
+		return nil, fmt.Errorf("platform %s: %w", tgt.Platform, err)
+	}
+	// §4 stage 4: the bound Runtime's LayoutPolicy plans the initial guest
+	// address space (pure geometry — no Map/Alloc/Reserve here, P4c). This
+	// precedes backend creation so a layout failure never leaves an engine
+	// behind.
+	layout, err := rt.Layout.Resolve(
+		platform.TargetInfo{Platform: tgt.Platform, Caps: tgt.Arch.Caps()},
+		cfg.LayoutOverrides,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -415,6 +439,7 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 		arch:        tgt.Arch,
 		callABI:     tgt.CallABI,
 		target:      tgt,
+		rt:          rt,
 		layout:      layout,
 		as:          memory.NewAddressSpace(layout),
 		dl:          loader.NewDynamicLinker(),
@@ -434,17 +459,14 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	// AddressSpace's stub region and encodes them with the StubEncoder.
 	e.stubMgr = interpose.NewStubManager(e.as, tgt.Stubs, be)
 	e.itab = interpose.NewInterposeTable()
-	// P4d/P5b: the platform's StartupABI builds the process initial state once
-	// the main image's metadata is complete (LoadLibrary) or, bionic-only,
-	// lazily at the first getauxval — a deliberate P4e rule, see
-	// ensureStartup. Android builds the auxv data block; Darwin builds the
-	// exec-style initial stack frame (no auxv exists on XNU).
-	switch tgt.Platform {
-	case platform.Darwin:
-		e.startup = &darwin.StartupABI{}
-	default:
-		e.startup = &android.StartupABI{}
-	}
+	// P4d/P5b.5: the bound Runtime's StartupABI builds the process initial
+	// state once the main image's metadata is complete (LoadLibrary) or,
+	// bionic-only, lazily at the first getauxval — a deliberate P4e rule,
+	// see ensureStartup. auxvLookup serves the interposed getauxval from
+	// the SAME StartupABI instance the factory bound (nil when the platform
+	// has no auxv, e.g. Darwin).
+	e.startup = rt.Startup
+	e.auxvLookup = rt.AuxvLookup
 	// P3.5: the boot symbol-resolution chain — host replacement symbols
 	// (InterposeTable via the HostResolver adapter) → global guest exports
 	// (DynamicLinker scope) → unresolved fallback stub. The historical
@@ -470,46 +492,40 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 			e.be.Close()
 		}
 	}()
-	// §4 stage 8: platform runtime components — host functions, the JNI
-	// handler (Android only — a Darwin guest has no Java runtime), and the
-	// injected syscall personality.
+	// §4 stage 8: platform runtime components, consumed from the bound
+	// Runtime as feature tests (P5b.5) — a non-nil Interop wires the JNI
+	// handler and dex metadata, the Runtime's own data decides which
+	// platform host functions registerHostFns binds. No platform identity
+	// is dispatched on here.
 	if cfg.FileResolver != nil {
 		e.fs.SetFallback(cfg.FileResolver)
 	}
-	// replaceFns is the per-platform view of the ReplaceFns contract: both
+	// replaceFns is the Runtime's view of the ReplaceFns contract: both
 	// personalities carry the same interpose.HostFunc map, and the two
 	// binding passes (import-override below, export interposition in stage
 	// 12) consume this view, never a concrete config type.
-	var replaceFns map[string]interpose.HostFunc
-	switch tgt.Platform {
-	case platform.Darwin:
-		replaceFns = dcfg.ReplaceFns
-		// No classMeta/SetJni/Dex/registerHostFns/profile battery: no Java
-		// runtime on Darwin, and P5b ships no Darwin libc, so there are no
-		// platform host functions — ReplaceFns is the only interposition
-		// source.
-	default: // platform.Android
-		replaceFns = acfg.ReplaceFns
+	replaceFns := rt.ReplaceFns
+	if rt.Interop != nil {
 		e.classMeta = e.vm.ResolveClass("java/lang/Class")
-		jni := acfg.JNI
+		jni := rt.Interop.Jni
 		if jni == nil {
 			jni = dvm.AbstractJni{}
 		}
 		// The four JNI time getters are always modeled from the kernel clock (see
 		// clockJni) — returning 0 for currentTimeMillis is a louder emulator tell
 		// than answering them, and Epoch mode keeps them deterministic.
-		e.vm.SetJni(&clockJni{Jni: jni, e: e, prof: acfg.Profile})
-		if acfg.DexPath != "" {
-			nc, derr := e.vm.LoadDexFile(acfg.DexPath)
+		e.vm.SetJni(&clockJni{Jni: jni, e: e, prof: rt.Interop.Profile})
+		if rt.Interop.DexPath != "" {
+			nc, derr := e.vm.LoadDexFile(rt.Interop.DexPath)
 			if derr != nil {
 				return nil, fmt.Errorf("load dex: %w", derr)
 			}
 			if cfg.Verbose {
-				fmt.Printf("[dex] %s -> %d classes\n", acfg.DexPath, nc)
+				fmt.Printf("[dex] %s -> %d classes\n", rt.Interop.DexPath, nc)
 			}
 		}
-		registerHostFns(e)
 	}
+	registerHostFns(e) // binds exactly what the Runtime's data opts into
 	for name, hf := range replaceFns {
 		hf := hf
 		// Import-override path (P3.5): bind by NAME in the InterposeTable —
@@ -523,48 +539,24 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 			_ = em.callABI.WriteResult(b, arch.CallResult{Value: ret})
 		}))
 	} // libc functions we implement in Go (need no libc init)
-	// P2/P4b/P5a.5: the syscall transport ABI, dispatch table, guest struct
-	// codecs and scheduler interception numbers are injected platform
-	// personality, resolved by the platform package from the Target's machine
-	// identity — the kernel and the emulator hold no syscall numbers and no
-	// per-arch register knowledge. The binding is assembled by hand here at
-	// the composition root; a platform.Factory.Bind taking only a minimal
-	// BindContext (TargetInfo/Layout/Features) is the P5 wiring point
-	// (DESIGN.md §4), deliberately not pre-built in P4.
-	var (
-		persTransport kernel.SyscallTransport
-		persTable     *kernel.Table
-		persCodecs    kernel.StructCodecs
-	)
-	switch tgt.Platform {
-	case platform.Darwin:
-		pers, perr := darwin.SyscallPersonalityFor(tgt.ID)
-		if perr != nil {
-			return nil, fmt.Errorf("platform personality: %w", perr)
-		}
-		persTransport, persTable, persCodecs = pers.Transport, pers.Table, pers.Codecs
-		e.sysFutex, e.sysNanosleep, e.sysClockNanosleep = pers.Futex, pers.Nanosleep, pers.ClockNanosleep
-	default: // platform.Android
-		pers, perr := android.SyscallPersonalityFor(tgt.ID)
-		if perr != nil {
-			return nil, fmt.Errorf("platform personality: %w", perr)
-		}
-		persTransport, persTable, persCodecs = pers.Transport, pers.Table, pers.Codecs
-		e.sysFutex, e.sysNanosleep, e.sysClockNanosleep = pers.Futex, pers.Nanosleep, pers.ClockNanosleep
-	}
+	// P2/P4b/P5a.5/P5b.5: the syscall transport ABI, dispatch table, guest
+	// struct codecs and scheduler interception numbers come from the bound
+	// Runtime — resolved by the platform's factory from the Target's machine
+	// identity, injected here as pure data. The kernel and the emulator hold
+	// no syscall numbers and no per-arch register knowledge.
+	e.sysFutex, e.sysNanosleep, e.sysClockNanosleep = rt.Futex, rt.Nanosleep, rt.ClockNanosleep
 	e.kctx = &kernel.Context{
 		B: be, Mem: e.mem, VFS: e.fs, Pid: pid, Verbose: cfg.Verbose, Epoch: cfg.Epoch,
-		Transport: persTransport,
-		Table:     persTable,
-		Codecs:    persCodecs,
+		Transport: rt.Transport,
+		Table:     rt.Table,
+		Codecs:    rt.Codecs,
 	}
 	// A device profile anchors the monotonic clock at the persona's boot time
-	// and serves live battery sysfs (Android persona only). Epoch keeps
-	// winning (kernel.clock checks it first), so deterministic signing runs
-	// are unaffected.
-	if acfg != nil && acfg.Profile != nil {
-		e.kctx.Clock = profileClock{prof: acfg.Profile}
-		prof := acfg.Profile
+	// and serves live battery sysfs. Epoch keeps winning (kernel.clock checks
+	// it first), so deterministic signing runs are unaffected.
+	if rt.Interop != nil && rt.Interop.Profile != nil {
+		e.kctx.Clock = profileClock{prof: rt.Interop.Profile}
+		prof := rt.Interop.Profile
 		e.fs.MountBattery(func() (int, bool) { return prof.Battery(time.Now()) })
 	}
 
@@ -599,31 +591,25 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	if err := be.MemMap(emu.GuestAddr(l.TLSBase), l.TLSSize, emu.ProtRead|emu.ProtWrite); err != nil {
 		return nil, fmt.Errorf("map tls: %w", err)
 	}
-	// SP near top of stack (16-aligned); the headroom reserve is owned by the
-	// platform's StartupABI (P4d, invariant 10): Android parks the auxv block
-	// just below it, Darwin lays out the exec-style initial frame with argc
-	// AT that SP. The constant travels with the platform.
-	_ = be.RegWrite(e.spReg, l.StackBase+l.StackSize-stackTopReserve(tgt.Platform))
+	// SP near top of stack (16-aligned); the headroom reserve travels with
+	// the platform Runtime (P4d/P5b.5, invariant 10): Android's StartupABI
+	// parks the auxv block just below it, Darwin's lays out the exec-style
+	// initial frame with argc AT that SP.
+	_ = be.RegWrite(e.spReg, l.StackBase+l.StackSize-rt.StackTopReserve)
 
 	// The thread-pointer register itself is platform-neutral: every 64-bit
 	// guest expects TLSBase reachable through it.
 	if err := tgt.Arch.SetTLSBase(be, emu.GuestAddr(l.TLSBase)); err != nil {
 		return nil, fmt.Errorf("set TLS base: %w", err)
 	}
-	if tgt.Platform == platform.Android {
-		// bionic TLS slot layout: TPIDR_EL0 -> slot array;
-		// slot[TLS_SLOT_THREAD_ID] -> a mapped pthread_internal_t (zeroed).
-		// Without this, libc reads a NULL thread ptr and faults writing
-		// thread-local fields. The struct lives inside the TLS region so its
-		// fields are always mapped. Darwin's TLS layout is dyld's business
-		// and P5b models none of it.
-		const (
-			tlsSlotSelf     = 0 // __get_tls()[0] = tls base
-			tlsSlotThreadID = 1 // -> pthread_internal_t*
-		)
-		pthreadStruct := l.TLSBase + 0x1000
-		_ = putU64(be, l.TLSBase+tlsSlotSelf*8, l.TLSBase)
-		_ = putU64(be, l.TLSBase+tlsSlotThreadID*8, pthreadStruct)
+	// Platform-specific initial address-space state is the Runtime's
+	// InitGuest hook (Android: bionic's TLS slot array — TPIDR_EL0 -> slot
+	// array, slot[TLS_SLOT_THREAD_ID] -> a mapped pthread_internal_t, or
+	// libc faults on thread-local writes). nil = the platform models none.
+	if rt.InitGuest != nil {
+		if err := rt.InitGuest(be, l); err != nil {
+			return nil, fmt.Errorf("platform init: %w", err)
+		}
 	}
 
 	// §4 stage 10: install runtime hooks/traps. Two kind-annotated channels
@@ -701,44 +687,29 @@ func (e *Emulator) cacheRoleRegs() {
 	e.spReg = e.arch.SP()
 }
 
-// stackTopReserve is the platform StartupABI's SP-headroom constant (P4d,
-// invariant 10): Android's auxv block sits below the reserve, Darwin's
-// exec-style initial frame parks argc exactly at SP. The boot sets SP from
-// this and the StartupABI builds against the same constant, so the two never
-// drift.
-func stackTopReserve(p platform.ID) uint64 {
-	if p == platform.Darwin {
-		return darwin.StackTopReserve
-	}
-	return android.StackTopReserve
-}
-
-// boot is §4 stage 11: map + link the platform runtime libraries (LoadModule:
-// Load → Relocate/bind → FinalizeImage per image, no init run), then (if
-// configured) load + initialize the main library (LoadLibrary adds
-// StartupABI + init execution).
+// boot is §4 stage 11: map + link the platform Runtime's runtime libraries
+// (LoadModule: Load → Relocate/bind → FinalizeImage per image, no init run),
+// then (if configured) load + initialize the main library (LoadLibrary adds
+// StartupABI + init execution). Android binds bionic from the asset tree;
+// Darwin's Runtime carries no libraries — the guest links against its own
+// image plus host stubs (ReplaceFns / unresolved fallbacks).
 func (e *Emulator) boot() error {
-	if e.target.Platform == platform.Android {
-		// Android runtime libraries: bionic from the asset tree. Darwin has
-		// NO runtime libraries in P5b — the asset tree ships no dyld/libSystem
-		// and a Darwin guest links against nothing but its own image plus host
-		// stubs (ReplaceFns / unresolved fallbacks).
-		lib := e.cfg.AssetRoot + "/android/sdk23/lib64/"
-		for _, l := range []string{"libc.so", "libm.so", "libdl.so"} {
-			// P5a.5 transitional: the asset tree only ships AArch64 bionic
-			// (sdk23/lib64), so on a non-ARM64 target these modules would fail
-			// the LoadModule machine check. Pre-parse via CompileOnce (cached,
-			// no double parse) and skip with a verbose note instead of erroring;
-			// LoadModule keeps the hard check for every other caller.
-			if img, err := loader.CompileOnce(lib + l); err == nil && img.Machine != e.target.ID {
-				if e.cfg.Verbose {
-					fmt.Printf("[boot] skip %s: machine %v != target %v (asset tree is AArch64-only)\n", l, img.Machine, e.target.ID)
-				}
-				continue
+	for _, rel := range e.rt.RuntimeLibs {
+		path := e.cfg.AssetRoot + "/" + rel
+		name := filepath.Base(rel)
+		// P5a.5 transitional: the asset tree only ships AArch64 bionic
+		// (sdk23/lib64), so on a non-ARM64 target these modules would fail
+		// the LoadModule machine check. Pre-parse via CompileOnce (cached,
+		// no double parse) and skip with a verbose note instead of erroring;
+		// LoadModule keeps the hard check for every other caller.
+		if img, err := loader.CompileOnce(path); err == nil && img.Machine != e.target.ID {
+			if e.cfg.Verbose {
+				fmt.Printf("[boot] skip %s: machine %v != target %v (asset tree is AArch64-only)\n", name, img.Machine, e.target.ID)
 			}
-			if _, err := e.LoadModule(lib+l, l); err != nil {
-				return fmt.Errorf("load %s: %w", l, err)
-			}
+			continue
+		}
+		if _, err := e.LoadModule(path, name); err != nil {
+			return fmt.Errorf("load %s: %w", name, err)
 		}
 	}
 	if e.cfg.SOPath == "" {
@@ -853,10 +824,13 @@ func (e *Emulator) ensureStartup(img *loader.Image, base uint64) error {
 	}
 	if e.startup == nil {
 		// Lazy fallback for Emulators built by hand in tests (New always
-		// instantiates per platform): the lazy path exists for bionic-only
-		// boots whose first getauxval precedes any LoadLibrary, so Android is
-		// the honest default here.
-		e.startup = &android.StartupABI{}
+		// binds the Runtime's pair): the lazy path exists for bionic-only
+		// boots whose first getauxval precedes any LoadLibrary, so Android
+		// is the honest default here. Startup and lookup stay the SAME
+		// instance, as the factory binds them.
+		as := &android.StartupABI{}
+		e.startup = as
+		e.auxvLookup = as.Lookup
 	}
 	if e.target == nil || e.target.Features == nil {
 		return fmt.Errorf("startup ABI: the Target carries no CPUFeatures")
