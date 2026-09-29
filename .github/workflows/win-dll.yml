@@ -279,7 +279,7 @@ jobs:
 
   # ------------------------------------------------------------------
   # release: publish both DLLs + provenance to a GitHub Release.
-  #   dev-win push  -> prerelease, tag v<version>-dev.<run_number>
+  #   dev-win push  -> prerelease, tag v<version>-dev.<UTC date+time>
   #   main tag push -> full release (latest)
   # Notes are auto-generated from merged PR titles (squash-merge policy).
   # ------------------------------------------------------------------
@@ -304,7 +304,9 @@ jobs:
             echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
             echo "prerelease=false" >> $GITHUB_OUTPUT
           else
-            echo "version=v0.1.0-dev.$(date -u +%Y%m%d)-${{ github.run_number }}" >> $GITHUB_OUTPUT
+            # Dev channel: UTC date+time, dot-separated fixed-width numerics =>
+            # semver sorts chronologically. Bump the 0.1.0 anchor on release.
+            echo "version=v0.1.0-dev.$(date -u +%Y%m%d.%H%M)" >> $GITHUB_OUTPUT
             echo "prerelease=true" >> $GITHUB_OUTPUT
           fi
       - name: Publish golem release with DLLs
@@ -312,6 +314,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.ver.outputs.version }}
+          name: golem ${{ steps.ver.outputs.version }}
+          prerelease: ${{ steps.ver.outputs.prerelease }}
+          generate_release_notes: true
           # Per-arch names: both files are named unicorn.dll in their own
           # artifact dirs, so a bare glob would copy one over the other.
           files: |
