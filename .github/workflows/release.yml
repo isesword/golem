@@ -192,7 +192,7 @@ jobs:
             dir=$(basename $(dirname $(dirname $f)))
             cp "$f" "release/unicorn-$dir.dll"
           done
-          find artifacts -name "PROVENANCE-*" -exec cp {} release/ +
+          find artifacts -name "PROVENANCE-*" -exec cp -t release/ {} +
           ls -la release/
       - name: Create release with auto-generated notes
         uses: softprops/action-gh-release@v2
