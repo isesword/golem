@@ -635,12 +635,12 @@ type trapReg struct {
 
 // InstallTrap adapts the generic trap interface onto unicorn's single
 // interrupt hook (UC_HOOK_INTR), installed lazily on first use. There is NO
-// runtime kind discrimination yet: every SVC invokes every registered
-// handler, and each handler receives the kind it was REGISTERED under —
-// behavior identical to the equivalent HookInterrupt registrations today.
-//
-// FREEZE-BLOCKER: P1 EmitStub 落地后用 svc 立即数区分 TrapHostCall/TrapSyscall
-// 做运行时判别（intno 里取立即数），届时这里按运行时 kind 分发。
+// Runtime kind discrimination is deliberately NOT done via svc immediates
+// (P1 design decision: not a cross-arch contract). Trampoline identity is
+// decided by address — PC in the stub region resolves via
+// interpose.StubManager metadata; anything else is a guest syscall.
+// Every SVC invokes every registered handler, each receiving the kind it
+// was REGISTERED under — behavior identical to HookInterrupt registrations.
 func (b *unicornBackend) InstallTrap(kind TrapKind, h TrapHandler) (HookHandle, error) {
 	if b.trapHook == nil {
 		hh, err := b.HookInterrupt(func(bk Backend, _ uint32) {

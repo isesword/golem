@@ -118,12 +118,17 @@ type Backend interface {
 	MemMapPtr(addr GuestAddr, size uint64, prot int, host unsafe.Pointer) error
 
 	// InstallTrap registers h for guest traps classified as kind (host calls,
-	// syscalls, ...). P0: the unicorn backend implements this as an adapter
-	// over its single interrupt hook with NO runtime kind discrimination —
-	// every SVC invokes every registered handler, each receiving the kind it
-	// was registered under (behavior identical to HookInterrupt today).
-	// FREEZE-BLOCKER: P1 EmitStub 落地后用 svc 立即数区分 TrapHostCall/TrapSyscall
-	// 做运行时判别。Callers migrate from HookInterrupt in P1/P2.
+	// syscalls, ...). The unicorn backend implements this as an adapter over
+	// its single interrupt hook: every SVC invokes every registered handler,
+	// each receiving the kind it was registered under.
+	//
+	// Runtime kind discrimination is deliberately NOT done via svc immediates
+	// (P1 design decision: immediates are not a cross-arch contract — AMD64
+	// has no equivalent encoding). Instead, trampoline identity is decided by
+	// address: traps whose PC lies in the stub region resolve through
+	// interpose.StubManager metadata; anything else is a guest syscall.
+	// Callers keep HookInterrupt for the raw path; InstallTrap is the
+	// kind-annotated path.
 	InstallTrap(kind TrapKind, h TrapHandler) (HookHandle, error)
 
 	// Execution
