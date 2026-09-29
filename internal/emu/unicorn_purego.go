@@ -236,11 +236,20 @@ func loadUnicorn() error {
 	tryRegister("uc_context_restore", &pCtxRestore)
 	tryRegister("uc_context_free", &pCtxFree)
 
-	// Static C→Go trampolines. Three, total, for the process lifetime — hook
+	// Static C→Go trampolines. Four, total, for the process lifetime — hook
 	// identity rides in user_data (the cbid), never in the trampoline.
 	codeTramp = purego.NewCallback(goCodeHook)
 	intrTramp = purego.NewCallback(goIntrHook)
 	memTramp = purego.NewCallback(goMemHook)
+	insnTramp = purego.NewCallback(goInsnHook)
+
+	// Fixed-arity declarations of uc_hook_add's variadic tail for UC_HOOK_INSN
+	// (the instruction id). Both bind the same symbol; hookAddInsn picks the
+	// host-ABI correct one (see unicorn_amd64.go).
+	if sym, err := findSymbol(handle, "uc_hook_add"); err == nil {
+		purego.RegisterFunc(&pHookAddInsn, sym)
+		purego.RegisterFunc(&pHookAddInsnPad, sym)
+	}
 	return nil
 }
 
@@ -295,6 +304,7 @@ var (
 	codeTramp uintptr
 	intrTramp uintptr
 	memTramp  uintptr
+	insnTramp uintptr
 )
 
 func goCodeHook(uc uintptr, addr uint64, size uint64, user uintptr) uintptr {
@@ -348,6 +358,7 @@ type hookReg struct {
 	be    *unicornBackend
 	code  CodeHookFunc
 	intr  InterruptHookFunc
+	insn  func(be Backend) // UC_HOOK_INSN (AMD64: the syscall instruction)
 	mem   MemInvalidHookFunc
 	memrd MemReadHookFunc
 	memwr MemWriteHookFunc
@@ -389,26 +400,34 @@ var (
 type unicornBackend struct {
 	uc       unsafe.Pointer
 	cbs      []uint64
+	arch     Arch   // the guest architecture this engine was created for
 	pageSize uint64 // unicorn's guest page size (4 KiB on aarch64 — NOT the host page size)
 
 	traps    []*trapReg // InstallTrap registrations, dispatched from trapHook
 	trapHook HookHandle // lazily-installed UC_HOOK_INTR serving InstallTrap
+
+	insnTraps []*trapReg // AMD64: TrapSyscall registrations served by UC_HOOK_INSN
+	insnHook  HookHandle // lazily-installed UC_HOOK_INSN(UC_X86_INS_SYSCALL)
 }
 
 func newUnicornBackend(a Arch) (Backend, error) {
-	if a != ArchARM64 {
+	var ucArch, ucMode int32
+	switch a {
+	case ArchARM64:
+		ucArch, ucMode = ucArchARM64, ucModeARM
+	case ArchAMD64:
+		ucArch, ucMode = ucArchX86, ucMode64
+	default:
 		return nil, fmt.Errorf("emu: unicorn backend: arch %s: %w", a, ErrUnsupported)
 	}
 	if err := ensureLoaded(); err != nil {
 		return nil, err
 	}
-	// ucOpen stays on UC_ARCH_ARM64: the engine only supports ARM64 for now;
-	// the per-arch ucOpen/const mapping table lands in P5a.
 	var uc unsafe.Pointer
-	if e := pOpen(ucArchARM64, ucModeARM, unsafe.Pointer(&uc)); e != ucOK {
+	if e := pOpen(ucArch, ucMode, unsafe.Pointer(&uc)); e != ucOK {
 		return nil, ucErr("uc_open", e)
 	}
-	b := &unicornBackend{uc: uc, pageSize: 4096}
+	b := &unicornBackend{uc: uc, arch: a, pageSize: 4096}
 	if runtime.GOOS == "windows" {
 		if err := b.applyWindowsDefaults(); err != nil {
 			pClose(uc)
@@ -490,16 +509,28 @@ func SetTCGBufferSize(b Backend, size uint32) error {
 	return nil
 }
 
+// toUCReg translates an abstract emu.Reg to this engine's UC register id,
+// dispatching on the engine's guest architecture. Both mappings key on the
+// frozen id NUMBERS of internal/arch/arm64 (regMap) and internal/arch/amd64
+// (regMapAMD64) — emu cannot import those packages (import cycle); their
+// TestFrozenRegIDs pin the numbers on the other side.
+func (b *unicornBackend) toUCReg(r Reg) int32 {
+	if b.arch == ArchAMD64 {
+		return regMapAMD64(r)
+	}
+	return regMap(r)
+}
+
 func (b *unicornBackend) RegRead(r Reg) (uint64, error) {
 	var v uint64
-	if e := pRegRead(b.uc, regMap(r), unsafe.Pointer(&v)); e != ucOK {
+	if e := pRegRead(b.uc, b.toUCReg(r), unsafe.Pointer(&v)); e != ucOK {
 		return 0, ucErr("reg_read", e)
 	}
 	return v, nil
 }
 
 func (b *unicornBackend) RegWrite(r Reg, val uint64) error {
-	if e := pRegWrite(b.uc, regMap(r), unsafe.Pointer(&val)); e != ucOK {
+	if e := pRegWrite(b.uc, b.toUCReg(r), unsafe.Pointer(&val)); e != ucOK {
 		return ucErr("reg_write", e)
 	}
 	return nil
@@ -507,6 +538,9 @@ func (b *unicornBackend) RegWrite(r Reg, val uint64) error {
 
 func (b *unicornBackend) ReadGPRegs() ([34]uint64, error) {
 	var out [34]uint64
+	if b.arch != ArchARM64 {
+		return out, errNoGPRegs(b.arch)
+	}
 	var ptrs [34]unsafe.Pointer
 	for i := range out {
 		ptrs[i] = unsafe.Pointer(&out[i])
@@ -633,15 +667,25 @@ type trapReg struct {
 	h    TrapHandler
 }
 
-// InstallTrap adapts the generic trap interface onto unicorn's single
-// interrupt hook (UC_HOOK_INTR), installed lazily on first use. There is NO
-// Runtime kind discrimination is deliberately NOT done via svc immediates
-// (P1 design decision: not a cross-arch contract). Trampoline identity is
-// decided by address — PC in the stub region resolves via
-// interpose.StubManager metadata; anything else is a guest syscall.
-// Every SVC invokes every registered handler, each receiving the kind it
-// was REGISTERED under — behavior identical to HookInterrupt registrations.
+// InstallTrap adapts the generic trap interface onto the engine's trap
+// channels. Runtime kind discrimination is deliberately NOT done via stub
+// instruction bytes (P1 design decision: not a cross-arch contract).
+// Trampoline identity is decided by address — PC in the stub region resolves
+// via interpose.StubManager metadata; anything else is a guest syscall.
+//
+// Channel selection is an engine+arch implementation detail (the Backend
+// contract stays arch-neutral):
+//   - ARM64: every SVC fires UC_HOOK_INTR; all kinds share that hook
+//     (installed lazily on first use), each handler receiving the kind it was
+//     REGISTERED under — behavior identical to HookInterrupt registrations.
+//   - AMD64: host stubs (`int3`) fire UC_HOOK_INTR and take the same path;
+//     the guest `syscall` instruction is NOT an interrupt, so TrapSyscall is
+//     served by UC_HOOK_INSN(UC_X86_INS_SYSCALL) instead (unicorn_amd64.go) —
+//     the real guest-syscall channel, kept strictly separate from host stubs.
 func (b *unicornBackend) InstallTrap(kind TrapKind, h TrapHandler) (HookHandle, error) {
+	if b.arch == ArchAMD64 && kind == TrapSyscall {
+		return b.installInsnTrap(kind, h)
+	}
 	if b.trapHook == nil {
 		hh, err := b.HookInterrupt(func(bk Backend, _ uint32) {
 			for _, tr := range b.traps {

@@ -7,14 +7,23 @@ import (
 	"testing"
 )
 
-// TestUnicornFactoryRejectsNonARM64 checks the real unicorn factory's arch
-// gate — it must fire BEFORE any libunicorn loading, so this test needs no
-// engine and no library.
-func TestUnicornFactoryRejectsNonARM64(t *testing.T) {
-	for _, a := range []Arch{ArchARM, ArchAMD64} {
-		if _, err := NewNamed("unicorn", a); !errors.Is(err, ErrUnsupported) {
-			t.Errorf("NewNamed(unicorn, %v): err = %v, want errors.Is(ErrUnsupported)", a, err)
+// TestUnicornFactoryArchGate checks the real unicorn factory's arch gate:
+// ArchARM is refused BEFORE any libunicorn loading (this test needs no engine
+// and no library), while ArchARM64 and ArchAMD64 are both creatable (P5a —
+// the AMD64 path needs the library, so it skips when libunicorn is absent).
+func TestUnicornFactoryArchGate(t *testing.T) {
+	if _, err := NewNamed("unicorn", ArchARM); !errors.Is(err, ErrUnsupported) {
+		t.Errorf("NewNamed(unicorn, arm): err = %v, want errors.Is(ErrUnsupported)", err)
+	}
+	if err := ensureLoaded(); err != nil {
+		t.Skipf("libunicorn unavailable: %v", err)
+	}
+	for _, a := range []Arch{ArchARM64, ArchAMD64} {
+		be, err := NewNamed("unicorn", a)
+		if err != nil {
+			t.Fatalf("NewNamed(unicorn, %s): %v", a, err)
 		}
+		be.Close()
 	}
 }
 
