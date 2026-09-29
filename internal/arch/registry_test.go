@@ -29,11 +29,16 @@ type fakeCallABI struct{ tag string }
 func (f fakeCallABI) Arg(i int) emu.Reg { return emu.Reg(i) }
 func (f fakeCallABI) Ret() emu.Reg      { return 0 }
 func (f fakeCallABI) LR() emu.Reg       { return 0 }
+func (f fakeCallABI) ArgReg(i int) (emu.Reg, bool) {
+	return emu.Reg(i), true
+}
+func (f fakeCallABI) PrepareCall(emu.Backend, CallRequest) error { return nil }
 func (f fakeCallABI) ReadArgs(emu.Backend, int) ([]uint64, error) {
 	return nil, nil
 }
-func (f fakeCallABI) WriteResult(emu.Backend, CallResult) error { return nil }
-func (f fakeCallABI) ReturnFromCall(emu.Backend) error          { return nil }
+func (f fakeCallABI) WriteResult(emu.Backend, CallResult) error  { return nil }
+func (f fakeCallABI) ReadResult(emu.Backend) (CallResult, error) { return CallResult{}, nil }
+func (f fakeCallABI) ReturnFromCall(emu.Backend) error           { return nil }
 
 type fakeStubEnc struct{ tag string }
 

@@ -42,16 +42,27 @@ func (r *regRec) MemRead(addr emu.GuestAddr, size uint64) ([]byte, error) {
 	return out, nil
 }
 
-// setU64 presets a little-endian qword in the fake guest memory.
-func (r *regRec) setU64(addr uint64, v uint64) {
+func (r *regRec) MemWrite(addr emu.GuestAddr, data []byte) error {
 	if r.mem == nil {
 		r.mem = map[uint64][]byte{}
 	}
+	for i, b := range data {
+		r.mem[uint64(addr)+uint64(i)] = []byte{b}
+	}
+	return nil
+}
+
+// setU64 presets a little-endian qword in the fake guest memory.
+func (r *regRec) setU64(addr uint64, v uint64) {
 	var b [8]byte
 	binary.LittleEndian.PutUint64(b[:], v)
-	for i := 0; i < 8; i++ {
-		r.mem[addr+uint64(i)] = []byte{b[i]}
-	}
+	_ = r.MemWrite(emu.GuestAddr(addr), b[:])
+}
+
+// getU64 reads a little-endian qword back from the fake guest memory.
+func (r *regRec) getU64(addr uint64) uint64 {
+	raw, _ := r.MemRead(emu.GuestAddr(addr), 8)
+	return binary.LittleEndian.Uint64(raw)
 }
 
 // resolveQuad resolves the registered (Arch, CallABI, StubEncoder,

@@ -9,10 +9,10 @@ import (
 )
 
 // sysV64 is the System V AMD64 user-space function calling convention
-// (arch.CallABI): integer arguments in RDI/RSI/RDX/RCX/R8/R9, the result in
-// RAX (with RDX as the high half of a 128-bit result), and the return address
-// ON THE STACK — pushed by `call`, popped by `ret`. The zero value is valid
-// and stateless.
+// (arch.CallABI): integer arguments in RDI/RSI/RDX/RCX/R8/R9 (excess spilled
+// to the stack above the return address), the result in RAX (with RDX as the
+// high half of a 128-bit result), and the return address ON THE STACK —
+// pushed by `call`, popped by `ret`. The zero value is valid and stateless.
 //
 // This is the FUNCTION call ABI only. The Linux x86-64 syscall ABI is a
 // different convention (number in RAX, 4th argument in R10 — NOT RCX, which
@@ -22,7 +22,8 @@ import (
 type sysV64 struct{}
 
 // numArgRegs is the number of integer argument registers (RDI..R9); further
-// arguments spill to the stack (not implemented yet — see ReadArgs).
+// arguments spill to the stack at [RSP+8+(i-6)*8] at function entry (above
+// the return address).
 const numArgRegs = 6
 
 // argRegs are the SysV integer argument registers in argument order.
@@ -32,6 +33,9 @@ var argRegs = [numArgRegs]emu.Reg{RDI, RSI, RDX, RCX, R8, R9}
 // RDI/RSI/RDX/RCX/R8/R9. Arguments 6+ spill to the stack — there is no
 // register to name for them, so an out-of-range i panics (programming error,
 // per the arch.CallABI contract).
+//
+// Transitional (P5a.5): register-shaped accessor retained for the emulator's
+// not-yet-migrated call path; new code uses PrepareCall/ReadArgs/ArgReg.
 func (sysV64) Arg(i int) emu.Reg {
 	if i < 0 || i >= numArgRegs {
 		panic(fmt.Sprintf("amd64: Arg(%d) out of range — SysV passes integer args 0..5 in RDI/RSI/RDX/RCX/R8/R9, args 6+ spill to the stack", i))
@@ -45,29 +49,102 @@ func (sysV64) Ret() emu.Reg { return RAX }
 // register-shaped LR accessor does not apply (arch.CallABI documents this).
 // NoLR maps to no engine register — a register-based LR consumer fails loudly
 // instead of operating on a fabricated register. The return-address role is
-// expressed through ReturnFromCall.
+// expressed through PrepareCall/ReturnFromCall.
+//
+// Transitional (P5a.5): removed once the emulator's call path is migrated.
 func (sysV64) LR() emu.Reg { return NoLR }
 
-// ReadArgs reads integer arguments 0..n-1 from RDI/RSI/RDX/RCX/R8/R9.
-// Arguments beyond the six registers spill to the stack per SysV; that path
-// is not implemented yet (no current consumer) and reports an error.
-func (c sysV64) ReadArgs(b emu.Backend, n int) ([]uint64, error) {
+// ArgReg names integer argument register i for debugger / inline-hook
+// introspection; ok is false outside the register portion [0,6) — args 6+
+// live on the stack and have no register to name.
+func (sysV64) ArgReg(i int) (emu.Reg, bool) {
+	if i < 0 || i >= numArgRegs {
+		return 0, false
+	}
+	return argRegs[i], true
+}
+
+// PrepareCall establishes a SysV call frame on the current stack — the exact
+// stack/register state a `call Entry` instruction would produce:
+//
+//	RDI/RSI/RDX/RCX/R8/R9 ← Args[0:6]
+//	[RSP]                ← Return (the return address `ret` will pop)
+//	[RSP+8+(i-6)*8]      ← Args[i] for i ≥ 6 (stack args above the return
+//	                       address, in argument order)
+//	RSP ≡ 8 (mod 16) at entry (the ABI wants RSP+8 16-aligned after the
+//	                       implicit return-address push)
+//	RIP                  ← Entry
+//
+// Nothing below the new RSP is written: the 128-byte red zone of the frame
+// being created stays intact.
+func (sysV64) PrepareCall(b emu.Backend, req arch.CallRequest) error {
+	for i, v := range req.Args {
+		if i >= numArgRegs {
+			break
+		}
+		if err := b.RegWrite(argRegs[i], v); err != nil {
+			return fmt.Errorf("amd64: PrepareCall: arg %d: %w", i, err)
+		}
+	}
+	rsp, err := b.RegRead(RSP)
+	if err != nil {
+		return fmt.Errorf("amd64: PrepareCall: read RSP: %w", err)
+	}
+	var stackArgs []uint64
+	if len(req.Args) > numArgRegs {
+		stackArgs = req.Args[numArgRegs:]
+	}
+	slots := uint64(len(stackArgs)) + 1 // stack args + return address
+	// Round down to the highest RSP ≡ 8 (mod 16) that still fits all slots.
+	newRSP := ((rsp - slots*8) &^ 15) - 8
+	frame := make([]byte, slots*8)
+	binary.LittleEndian.PutUint64(frame, uint64(req.Return))
+	for i, v := range stackArgs {
+		binary.LittleEndian.PutUint64(frame[8+i*8:], v)
+	}
+	if err := b.MemWrite(emu.GuestAddr(newRSP), frame); err != nil {
+		return fmt.Errorf("amd64: PrepareCall: write %d stack slots at RSP %#x: %w", slots, newRSP, err)
+	}
+	if err := b.RegWrite(RSP, newRSP); err != nil {
+		return fmt.Errorf("amd64: PrepareCall: write RSP: %w", err)
+	}
+	if err := b.RegWrite(RIP, uint64(req.Entry)); err != nil {
+		return fmt.Errorf("amd64: PrepareCall: write RIP: %w", err)
+	}
+	return nil
+}
+
+// ReadArgs reads integer arguments 0..n-1: args 0..5 from
+// RDI/RSI/RDX/RCX/R8/R9, args 6+ from the stack at [RSP+8+(i-6)*8] — valid
+// at function entry, before the callee moves RSP.
+func (sysV64) ReadArgs(b emu.Backend, n int) ([]uint64, error) {
 	if n < 0 {
 		return nil, fmt.Errorf("amd64: ReadArgs(%d): negative count", n)
 	}
-	if n > numArgRegs {
-		// Stack-spill arguments live at [RSP+8 + 8*(i-6)] at function entry
-		// (above the return address). Left for when a caller actually needs
-		// >6 integer args through this interface.
-		return nil, fmt.Errorf("amd64: ReadArgs(%d): stack-spill arguments not implemented (register limit %d)", n, numArgRegs)
-	}
 	args := make([]uint64, n)
-	for i := range args {
-		v, err := b.RegRead(c.Arg(i))
+	reg := n
+	if reg > numArgRegs {
+		reg = numArgRegs
+	}
+	for i := 0; i < reg; i++ {
+		v, err := b.RegRead(argRegs[i])
 		if err != nil {
 			return nil, fmt.Errorf("amd64: ReadArgs: arg %d: %w", i, err)
 		}
 		args[i] = v
+	}
+	if n > numArgRegs {
+		rsp, err := b.RegRead(RSP)
+		if err != nil {
+			return nil, fmt.Errorf("amd64: ReadArgs: read RSP: %w", err)
+		}
+		raw, err := b.MemRead(emu.GuestAddr(rsp+8), uint64(n-numArgRegs)*8)
+		if err != nil {
+			return nil, fmt.Errorf("amd64: ReadArgs: read stack args at RSP+8 %#x: %w", rsp+8, err)
+		}
+		for i := numArgRegs; i < n; i++ {
+			args[i] = binary.LittleEndian.Uint64(raw[(i-numArgRegs)*8:])
+		}
 	}
 	return args, nil
 }
@@ -76,14 +153,28 @@ func (c sysV64) ReadArgs(b emu.Backend, n int) ([]uint64, error) {
 // high half of a SysV 128-bit integer result — exactly what
 // arch.CallResult.Value2 is reserved for; for a plain 64-bit result Value2 is
 // 0 and writing RDX is harmless (caller-saved scratch at return).
-func (c sysV64) WriteResult(b emu.Backend, r arch.CallResult) error {
-	if err := b.RegWrite(c.Ret(), r.Value); err != nil {
+func (sysV64) WriteResult(b emu.Backend, r arch.CallResult) error {
+	if err := b.RegWrite(RAX, r.Value); err != nil {
 		return fmt.Errorf("amd64: WriteResult: %w", err)
 	}
 	if err := b.RegWrite(RDX, r.Value2); err != nil {
 		return fmt.Errorf("amd64: WriteResult (Value2/RDX): %w", err)
 	}
 	return nil
+}
+
+// ReadResult reads the call result: Value ← RAX, Value2 ← RDX — the exact
+// inverse of WriteResult.
+func (sysV64) ReadResult(b emu.Backend) (arch.CallResult, error) {
+	v, err := b.RegRead(RAX)
+	if err != nil {
+		return arch.CallResult{}, fmt.Errorf("amd64: ReadResult: %w", err)
+	}
+	v2, err := b.RegRead(RDX)
+	if err != nil {
+		return arch.CallResult{}, fmt.Errorf("amd64: ReadResult (Value2/RDX): %w", err)
+	}
+	return arch.CallResult{Value: v, Value2: v2}, nil
 }
 
 // ReturnFromCall performs the SysV return: retAddr ← [RSP]; RSP += 8;

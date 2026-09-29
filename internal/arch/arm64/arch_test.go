@@ -8,13 +8,15 @@ import (
 	"github.com/isesword/golem/internal/emu"
 )
 
-// regRec is an emu.Backend test double with a programmable register file:
-// RegRead serves preset values, RegWrite is recorded. Everything else panics
-// via the nil embedded interface.
+// regRec is an emu.Backend test double with a programmable register file and
+// guest memory: RegRead serves preset values, RegWrite is recorded (and kept
+// readable, for stack pop sequences), MemRead serves recorded/preset bytes.
+// Everything else panics via the nil embedded interface.
 type regRec struct {
 	emu.Backend // nil embedded: unimplemented ops fail loudly
 	regs        map[emu.Reg]uint64
 	writes      map[emu.Reg]uint64
+	mem         map[uint64][]byte // addr -> bytes
 }
 
 func (r *regRec) RegRead(reg emu.Reg) (uint64, error) { return r.regs[reg], nil }
@@ -24,7 +26,44 @@ func (r *regRec) RegWrite(reg emu.Reg, v uint64) error {
 		r.writes = map[emu.Reg]uint64{}
 	}
 	r.writes[reg] = v
+	if r.regs == nil {
+		r.regs = map[emu.Reg]uint64{}
+	}
+	r.regs[reg] = v // keep reads consistent with writes (stack pop sequences)
 	return nil
+}
+
+func (r *regRec) MemRead(addr emu.GuestAddr, size uint64) ([]byte, error) {
+	out := make([]byte, size)
+	for i := range out {
+		if b, ok := r.mem[uint64(addr)+uint64(i)]; ok {
+			out[i] = b[0]
+		}
+	}
+	return out, nil
+}
+
+func (r *regRec) MemWrite(addr emu.GuestAddr, data []byte) error {
+	if r.mem == nil {
+		r.mem = map[uint64][]byte{}
+	}
+	for i, b := range data {
+		r.mem[uint64(addr)+uint64(i)] = []byte{b}
+	}
+	return nil
+}
+
+// setU64 presets a little-endian qword in the fake guest memory.
+func (r *regRec) setU64(addr uint64, v uint64) {
+	var b [8]byte
+	binary.LittleEndian.PutUint64(b[:], v)
+	_ = r.MemWrite(emu.GuestAddr(addr), b[:])
+}
+
+// getU64 reads a little-endian qword back from the fake guest memory.
+func (r *regRec) getU64(addr uint64) uint64 {
+	raw, _ := r.MemRead(emu.GuestAddr(addr), 8)
+	return binary.LittleEndian.Uint64(raw)
 }
 
 // resolveQuad resolves the registered (Arch, CallABI, StubEncoder,

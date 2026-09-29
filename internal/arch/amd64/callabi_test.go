@@ -92,14 +92,161 @@ func TestReadArgs(t *testing.T) {
 	}
 }
 
-// TestReadArgsOutOfRange pins the not-yet-implemented stack-spill path: n>6
-// (and nonsense n<0) must error, not silently read the wrong registers.
-func TestReadArgsOutOfRange(t *testing.T) {
+// TestReadArgsStackSpill pins the SysV stack-spill reads: args 6+ come from
+// [RSP+8+(i-6)*8] — above the return address at [RSP].
+func TestReadArgsStackSpill(t *testing.T) {
 	c := resolveCallABI(t)
-	b := &regRec{regs: map[emu.Reg]uint64{}}
-	for _, n := range []int{-1, 7, 100} {
-		if _, err := c.ReadArgs(b, n); err == nil {
-			t.Fatalf("ReadArgs(%d) must error (stack-spill args unimplemented)", n)
+	b := &regRec{regs: map[emu.Reg]uint64{RSP: 0xC0001000}}
+	for i := 0; i < 6; i++ {
+		b.regs[argRegs[i]] = uint64(0x1000 + i)
+	}
+	b.setU64(0xC0001000, 0xFFFFFF00) // the return address — never an argument
+	b.setU64(0xC0001008, 0x2006)     // arg 6
+	b.setU64(0xC0001010, 0x2007)     // arg 7
+	args, err := c.ReadArgs(b, 8)
+	if err != nil {
+		t.Fatalf("ReadArgs(8): %v", err)
+	}
+	for i := 0; i < 6; i++ {
+		if want := uint64(0x1000 + i); args[i] != want {
+			t.Fatalf("args[%d] = %#x, want %#x", i, args[i], want)
+		}
+	}
+	if args[6] != 0x2006 || args[7] != 0x2007 {
+		t.Fatalf("stack args = %#x, %#x, want 0x2006, 0x2007 ([RSP+8], [RSP+16])", args[6], args[7])
+	}
+}
+
+// TestReadArgsNegative pins that a nonsense count errors instead of reading
+// the wrong registers.
+func TestReadArgsNegative(t *testing.T) {
+	c := resolveCallABI(t)
+	if _, err := c.ReadArgs(&regRec{}, -1); err == nil {
+		t.Fatal("ReadArgs(-1) must error")
+	}
+}
+
+// TestPrepareCallRegisters pins the register portion of a SysV call: args
+// 0..5 land in RDI/RSI/RDX/RCX/R8/R9, the return address is pushed at the new
+// [RSP], entry RSP ≡ 8 (mod 16), RIP ← Entry.
+func TestPrepareCallRegisters(t *testing.T) {
+	c := resolveCallABI(t)
+	b := &regRec{regs: map[emu.Reg]uint64{RSP: 0xC0002000}}
+	args := []uint64{1, 2, 3, 4, 5, 6}
+	if err := c.PrepareCall(b, arch.CallRequest{Entry: 0xAAAA, Return: 0xFFFFFF00, Args: args}); err != nil {
+		t.Fatal(err)
+	}
+	for i, v := range args {
+		if got := b.regs[argRegs[i]]; got != v {
+			t.Fatalf("arg reg %d = %#x, want %#x", i, got, v)
+		}
+	}
+	rsp := b.regs[RSP]
+	if rsp%16 != 8 {
+		t.Fatalf("entry RSP = %#x, want ≡ 8 (mod 16) — the post-`call` convention", rsp)
+	}
+	if got := b.getU64(rsp); got != 0xFFFFFF00 {
+		t.Fatalf("[RSP] = %#x, want the pushed return address 0xffffff00", got)
+	}
+	if got := b.regs[RIP]; got != 0xAAAA {
+		t.Fatalf("RIP = %#x, want the entry 0xaaaa", got)
+	}
+}
+
+// TestPrepareCallStackSpill pins SysV stack arguments: args 6+ at
+// [RSP+8+(i-6)*8] above the return address, and a subsequent ReadArgs at
+// entry recovers every argument (the round trip CallFunc-style paths rely
+// on). 8 arguments = 6 registers + 2 stack slots.
+func TestPrepareCallStackSpill(t *testing.T) {
+	c := resolveCallABI(t)
+	b := &regRec{regs: map[emu.Reg]uint64{RSP: 0xC0002000}}
+	args := []uint64{1, 2, 3, 4, 5, 6, 7, 8}
+	if err := c.PrepareCall(b, arch.CallRequest{Entry: 0xAAAA, Return: 0xFFFFFF00, Args: args}); err != nil {
+		t.Fatal(err)
+	}
+	rsp := b.regs[RSP]
+	if rsp%16 != 8 {
+		t.Fatalf("entry RSP = %#x, want ≡ 8 (mod 16)", rsp)
+	}
+	if got := b.getU64(rsp); got != 0xFFFFFF00 {
+		t.Fatalf("[RSP] = %#x, want the return address", got)
+	}
+	if got := b.getU64(rsp + 8); got != 7 {
+		t.Fatalf("[RSP+8] = %#x, want arg 6 (= 7)", got)
+	}
+	if got := b.getU64(rsp + 16); got != 8 {
+		t.Fatalf("[RSP+16] = %#x, want arg 7 (= 8)", got)
+	}
+	// Nothing below the new RSP may be written (the red zone stays intact):
+	// the fake memory map must not extend below rsp.
+	for addr := range b.mem {
+		if addr < rsp {
+			t.Fatalf("PrepareCall wrote at %#x, below the new RSP %#x (red-zone violation)", addr, rsp)
+		}
+	}
+	// Round trip: ReadArgs at entry must recover the full argument list.
+	got, err := c.ReadArgs(b, len(args))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, v := range args {
+		if got[i] != v {
+			t.Fatalf("ReadArgs[%d] = %#x, want %#x", i, got[i], v)
+		}
+	}
+}
+
+// TestPrepareCallAlignmentOddSpill pins alignment with an ODD number of stack
+// arguments: one padding slot is required so entry RSP still lands ≡ 8
+// (mod 16).
+func TestPrepareCallAlignmentOddSpill(t *testing.T) {
+	c := resolveCallABI(t)
+	for _, origRSP := range []uint64{0xC0002000, 0xC0002010, 0xC0002008} {
+		b := &regRec{regs: map[emu.Reg]uint64{RSP: origRSP}}
+		args := []uint64{1, 2, 3, 4, 5, 6, 7} // one stack arg
+		if err := c.PrepareCall(b, arch.CallRequest{Entry: 0xAAAA, Return: 0xFFFFFF00, Args: args}); err != nil {
+			t.Fatal(err)
+		}
+		rsp := b.regs[RSP]
+		if rsp%16 != 8 {
+			t.Fatalf("origRSP %#x: entry RSP = %#x, want ≡ 8 (mod 16)", origRSP, rsp)
+		}
+		if got := b.getU64(rsp); got != 0xFFFFFF00 {
+			t.Fatalf("origRSP %#x: [RSP] = %#x, want the return address", origRSP, got)
+		}
+		if got := b.getU64(rsp + 8); got != 7 {
+			t.Fatalf("origRSP %#x: [RSP+8] = %#x, want arg 6 (= 7)", origRSP, got)
+		}
+	}
+}
+
+// TestReadResult pins the SysV result read: Value ← RAX, Value2 ← RDX — the
+// exact inverse of WriteResult.
+func TestReadResult(t *testing.T) {
+	c := resolveCallABI(t)
+	b := &regRec{regs: map[emu.Reg]uint64{RAX: 0xdeadbeef, RDX: 0xfeed}}
+	r, err := c.ReadResult(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Value != 0xdeadbeef || r.Value2 != 0xfeed {
+		t.Fatalf("ReadResult = %#x/%#x, want 0xdeadbeef/0xfeed (RAX/RDX)", r.Value, r.Value2)
+	}
+}
+
+// TestArgReg pins the introspection accessor: RDI/RSI/RDX/RCX/R8/R9 for 0..5,
+// ok=false beyond the register portion (stack args have no register).
+func TestArgReg(t *testing.T) {
+	c := resolveCallABI(t)
+	for i, w := range argRegs {
+		r, ok := c.ArgReg(i)
+		if !ok || r != w {
+			t.Fatalf("ArgReg(%d) = %v, %v, want %v, true", i, r, ok, w)
+		}
+	}
+	for _, i := range []int{-1, 6, 100} {
+		if r, ok := c.ArgReg(i); ok {
+			t.Fatalf("ArgReg(%d) = %v, true, want ok=false (args 6+ spill to the stack)", i, r)
 		}
 	}
 }

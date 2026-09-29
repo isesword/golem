@@ -157,11 +157,16 @@ type fakeCallABI struct{}
 func (fakeCallABI) Arg(i int) emu.Reg { return emu.Reg(i) }
 func (fakeCallABI) Ret() emu.Reg      { return 0 }
 func (fakeCallABI) LR() emu.Reg       { return 0 }
+func (fakeCallABI) ArgReg(i int) (emu.Reg, bool) {
+	return emu.Reg(i), true
+}
+func (fakeCallABI) PrepareCall(emu.Backend, arch.CallRequest) error { return nil }
 func (fakeCallABI) ReadArgs(emu.Backend, int) ([]uint64, error) {
 	return nil, nil
 }
-func (fakeCallABI) WriteResult(emu.Backend, arch.CallResult) error { return nil }
-func (fakeCallABI) ReturnFromCall(emu.Backend) error               { return nil }
+func (fakeCallABI) WriteResult(emu.Backend, arch.CallResult) error  { return nil }
+func (fakeCallABI) ReadResult(emu.Backend) (arch.CallResult, error) { return arch.CallResult{}, nil }
+func (fakeCallABI) ReturnFromCall(emu.Backend) error                { return nil }
 
 type fakeStubEnc struct{}
 
