@@ -240,6 +240,13 @@ type Emulator struct {
 	threadOps   int    // syscalls serviced in the current slice
 	yieldReason int    // why the current slice stopped (yield*)
 	yieldAddr   uint64 // futex uaddr the fiber parked on
+
+	// Scheduler interception numbers, from the platform's SyscallPersonality
+	// (P5a.5 — the numbers differ per guest arch; the emulator holds data,
+	// not arch knowledge).
+	sysFutex          uint64
+	sysNanosleep      uint64
+	sysClockNanosleep uint64
 }
 
 // hostFn is a native function implemented on the Go side (args in X0.., ret X0).
@@ -482,19 +489,25 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 			_ = em.callABI.WriteResult(b, arch.CallResult{Value: ret})
 		}))
 	} // libc functions we implement in Go (need no libc init)
+	// P2/P4b/P5a.5: the syscall transport ABI, dispatch table, guest struct
+	// codecs and scheduler interception numbers are injected platform
+	// personality, resolved by the platform package from the Target's machine
+	// identity — the kernel and the emulator hold no syscall numbers and no
+	// per-arch register knowledge. The binding is assembled by hand here at
+	// the composition root; a platform.Factory.Bind taking only a minimal
+	// BindContext (TargetInfo/Layout/Features) is the P5 wiring point
+	// (DESIGN.md §4), deliberately not pre-built in P4.
+	pers, err := android.SyscallPersonalityFor(tgt.ID)
+	if err != nil {
+		return nil, fmt.Errorf("platform personality: %w", err)
+	}
 	e.kctx = &kernel.Context{
 		B: be, Mem: e.mem, VFS: e.fs, Pid: pid, Verbose: cfg.Verbose, Epoch: cfg.Epoch,
-		// P2/P4b: the syscall transport ABI, dispatch table and guest struct
-		// codecs are injected platform personality (Android / AArch64 Linux
-		// today), not hardcoded in the kernel — the kernel holds no syscall
-		// numbers. The binding is assembled by hand here at the composition
-		// root; a platform.Factory.Bind taking only a minimal BindContext
-		// (TargetInfo/Layout/Features) is the P5 wiring point (DESIGN.md §4),
-		// deliberately not pre-built in P4.
-		Transport: android.LinuxARM64Transport{},
-		Table:     android.NewARM64SyscallTable(kernel.DefaultHandlers()),
-		Codecs:    android.AsmGenericLP64Codecs{},
+		Transport: pers.Transport,
+		Table:     pers.Table,
+		Codecs:    pers.Codecs,
 	}
+	e.sysFutex, e.sysNanosleep, e.sysClockNanosleep = pers.Futex, pers.Nanosleep, pers.ClockNanosleep
 	// A device profile anchors the monotonic clock at the persona's boot time
 	// and serves live battery sysfs. Epoch keeps winning (kernel.clock checks
 	// it first), so deterministic signing runs are unaffected.
@@ -555,25 +568,36 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	_ = putU64(be, l.TLSBase+tlsSlotSelf*8, l.TLSBase)
 	_ = putU64(be, l.TLSBase+tlsSlotThreadID*8, pthreadStruct)
 
-	// §4 stage 10: install runtime hooks/traps. Route SVC: distinguish
-	// import-stub calls (by PC) from real syscalls. Every Go callback handed
-	// to the backend goes through the panic guard (guard.go): a panic must
-	// never escape across the purego trampoline.
-	// InterruptHooker/InvalidMemHooker are capability probes (P2.5a): an
-	// engine without them fails New with ErrUnsupported, matching the old
-	// unconditional-method error path.
+	// §4 stage 10: install runtime hooks/traps. Two kind-annotated channels
+	// through the backend's core InstallTrap (P5a.5 — the raw InterruptHooker
+	// path is gone from the emulator):
+	//
+	//   - TrapHostCall → onStubTrap: host-call trampolines (svc stubs on
+	//     ARM64, int3 stubs on AMD64), classified by trap-source ADDRESS via
+	//     the StubManager — never by anything encoded in the stub bytes;
+	//   - TrapSyscall → onSyscallTrap: real guest syscalls. On ARM64 both
+	//     registrations share the engine's single interrupt hook (every svc
+	//     fires every handler, so each handler first checks whether the trap
+	//     source is a known stub and declines if so/not); on AMD64 the
+	//     syscall instruction routes through a strictly separate engine
+	//     channel (unicorn: UC_HOOK_INSN) that never carries stub traps.
+	//
+	// Every Go callback handed to the backend goes through the panic guard
+	// (guard.go): a panic must never escape across the purego trampoline.
+	// InvalidMemHooker stays a capability probe (P2.5a): an engine without it
+	// fails New with ErrUnsupported, matching the old unconditional-method
+	// error path.
 	//
 	// §4 lists hook installation after StartupABI; here it deliberately sits
 	// BEFORE stage 11's load: golem's LoadLibrary couples loading with init
 	// execution (RunInit runs guest code that can trap), so the trap path
 	// must be live before the first image executes. The hooks are inert
 	// until guest code runs, so the placement changes no behavior.
-	intr, ok := be.(emu.InterruptHooker)
-	if !ok {
-		return nil, fmt.Errorf("hook interrupt: %w (engine %q)", emu.ErrUnsupported, e.engine)
+	if _, err := be.InstallTrap(emu.TrapHostCall, e.guardTrap(e.onStubTrap)); err != nil {
+		return nil, fmt.Errorf("install host-call trap: %w (engine %q)", err, e.engine)
 	}
-	if _, err := intr.HookInterrupt(e.guardInterrupt(e.onInterrupt)); err != nil {
-		return nil, err
+	if _, err := be.InstallTrap(emu.TrapSyscall, e.guardTrap(e.onSyscallTrap)); err != nil {
+		return nil, fmt.Errorf("install syscall trap: %w (engine %q)", err, e.engine)
 	}
 	// Diagnose unmapped/protected accesses during bring-up.
 	inv, ok := be.(emu.InvalidMemHooker)
@@ -625,6 +649,17 @@ func (e *Emulator) cacheRoleRegs() {
 func (e *Emulator) boot() error {
 	lib := e.cfg.AssetRoot + "/android/sdk23/lib64/"
 	for _, l := range []string{"libc.so", "libm.so", "libdl.so"} {
+		// P5a.5 transitional: the asset tree only ships AArch64 bionic
+		// (sdk23/lib64), so on a non-ARM64 target these modules would fail
+		// the LoadModule machine check. Pre-parse via CompileOnce (cached,
+		// no double parse) and skip with a verbose note instead of erroring;
+		// LoadModule keeps the hard check for every other caller.
+		if img, err := loader.CompileOnce(lib + l); err == nil && img.Machine != e.target.ID {
+			if e.cfg.Verbose {
+				fmt.Printf("[boot] skip %s: machine %v != target %v (asset tree is AArch64-only)\n", l, img.Machine, e.target.ID)
+			}
+			continue
+		}
 		if _, err := e.LoadModule(lib+l, l); err != nil {
 			return fmt.Errorf("load %s: %w", l, err)
 		}
@@ -681,6 +716,13 @@ func (e *Emulator) LoadModule(path, name string) (*Module, error) {
 	img, err := loader.CompileOnce(path)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", name, err)
+	}
+	// P5a.5: refuse to map an image built for a different machine — running
+	// foreign instructions would fault deep inside guest execution with no
+	// diagnosable cause. (boot's bionic loop pre-filters via CompileOnce and
+	// skips instead, because the asset tree is AArch64-only for now.)
+	if e.target != nil && img.Machine != e.target.ID {
+		return nil, fmt.Errorf("load %s: image machine %v does not match target %v", name, img.Machine, e.target.ID)
 	}
 	// Module bases bump upward through the AddressSpace, keeping the 1 MiB
 	// inter-module gap of the pre-P2.5c module cursor.
@@ -771,7 +813,7 @@ func (e *Emulator) bindHostFn(name string, fn hostFn) {
 // makeStub emits a trampoline at a fresh stub address through the StubManager
 // (P2.5d): the slot comes from the AddressSpace's stub region and the bytes
 // from the architecture's StubEncoder (arm64: `svc #0 ; ret`, which traps to
-// onInterrupt, which returns to the caller). Used for unresolved imports,
+// onStubTrap, which returns to the caller). Used for unresolved imports,
 // host functions and JNI table slots. Trap identity is decided by ADDRESS
 // (the StubManager's descriptor table), not by anything in the emitted bytes
 // — see arch.StubEncoder.
@@ -794,7 +836,7 @@ func (e *Emulator) SetupJNI() uint64 {
 	envTable := e.MustAlloc(envSlots*8, emu.ProtRead|emu.ProtWrite)
 	for i := 0; i < envSlots; i++ {
 		stub := e.makeStub(fmt.Sprintf("JNIEnv[%d]", i), arch.StubHostCall)
-		e.jniDispatch[stub] = i // dispatched in onInterrupt -> handleJNI
+		e.jniDispatch[stub] = i // dispatched in onStubTrap -> handleJNI
 		_ = putU64(e.be, envTable+uint64(i)*ps, stub)
 	}
 	envPtr := e.MustAlloc(8, emu.ProtRead|emu.ProtWrite)
@@ -838,11 +880,26 @@ func (e *Emulator) Sym(name string) (uint64, bool) {
 	return uint64(a), ok
 }
 
-// onInterrupt handles SVC: a stub call (unresolved import) or a real syscall.
-func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
+// trapStubAddr maps the engine-reported trap PC back to the trapping
+// instruction's address — for a stub trap, the stub's entry — through the
+// Target's StubEncoder (P5a.5: the emulator holds no per-arch trap-offset
+// constant like the old hardcoded pc-4).
+func (e *Emulator) trapStubAddr(b emu.Backend) emu.GuestAddr {
 	pc, _ := b.RegRead(e.pcReg)
-	svc := pc - 4            // unicorn advances PC past the svc
-	if svc == e.getEnvStub { // JavaVM->GetEnv(vm, void** env, version)
+	return e.target.Stubs.TrapStubAddr(emu.GuestAddr(pc))
+}
+
+// onStubTrap handles TrapHostCall: a guest→host trampoline trap — the JNI
+// table slots, Go-implemented libc functions / ReplaceFns import overrides,
+// or an unresolved-import placeholder. Classification is by trap-source
+// ADDRESS (the StubManager's descriptor table), never by the trap bytes.
+//
+// A trap whose source is no known stub is NOT consumed here: on ARM64 the
+// engine's single interrupt hook also delivers real guest syscalls to this
+// handler — those fall through to onSyscallTrap (registered alongside).
+func (e *Emulator) onStubTrap(b emu.Backend, _ emu.TrapKind) {
+	stub := e.trapStubAddr(b)
+	if stub == emu.GuestAddr(e.getEnvStub) { // JavaVM->GetEnv(vm, void** env, version)
 		args, err := e.callABI.ReadArgs(b, 2)
 		if err != nil {
 			if e.cfg.Verbose {
@@ -854,7 +911,7 @@ func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
 		_ = e.callABI.WriteResult(b, arch.CallResult{Value: 0}) // JNI_OK
 		return
 	}
-	if idx, ok := e.jniDispatch[svc]; ok { // JNIEnv->function(...)
+	if idx, ok := e.jniDispatch[uint64(stub)]; ok { // JNIEnv->function(...)
 		e.handleJNI(idx, b)
 		return
 	}
@@ -863,7 +920,7 @@ func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
 	// "host:<symbol>"; recover the bound HostFunc from the InterposeTable.
 	// The hostFn contract is self-written result register, so the HostFunc's
 	// return value is intentionally ignored here.
-	if desc, ok := e.stubMgr.Lookup(emu.GuestAddr(svc)); ok && desc.Kind == arch.StubHostCall {
+	if desc, ok := e.stubMgr.Lookup(stub); ok && desc.Kind == arch.StubHostCall {
 		if name, cut := strings.CutPrefix(desc.Name, "host:"); cut {
 			if hf, ok := e.itab.LookupSymbol(name); ok {
 				hf(&Hook{e})
@@ -873,17 +930,34 @@ func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
 	}
 	// Unresolved-import placeholder / unbound trampoline: count the hit by
 	// name (the pre-P2.5d stubHits semantics) and return an optimistic 0.
-	if desc, ok := e.stubMgr.Hit(emu.GuestAddr(svc)); ok {
+	if desc, ok := e.stubMgr.Hit(stub); ok {
 		if e.cfg.Verbose {
 			fmt.Printf("[stub] %s() -> 0\n", desc.Name)
 		}
 		_ = e.callABI.WriteResult(b, arch.CallResult{Value: 0}) // optimistic default
 		return
 	}
-	// Real guest syscall: decode the frame ONCE via the injected platform
-	// transport (no register identities in the emulator), let the scheduler
-	// intercept futex/nanosleep to drive cooperative switching, then hand the
-	// frame to the kernel dispatcher.
+	// Not a stub: decline. On ARM64 this trap may be a real guest syscall
+	// sharing the interrupt hook; onSyscallTrap services it.
+}
+
+// onSyscallTrap handles TrapSyscall: a real guest syscall. The frame is
+// decoded ONCE via the injected platform transport (no register identities in
+// the emulator), the scheduler intercepts futex/nanosleep to drive
+// cooperative switching, and the kernel dispatcher services the rest.
+//
+// Stub-exclusion check: on ARM64 the interrupt hook delivers EVERY trap
+// (stubs included) to every InstallTrap handler, so a stub trap arrives here
+// too — anything the StubManager knows was already serviced by onStubTrap.
+// The address arithmetic (TrapStubAddr) is stub-trap-shaped, but the check is
+// a pure exclusion: a syscall instruction never executes from the stub
+// region, so its neighborhood can never collide with a stub entry. On AMD64
+// the syscall-instruction channel carries only real syscalls and the check
+// never matches.
+func (e *Emulator) onSyscallTrap(b emu.Backend, _ emu.TrapKind) {
+	if _, ok := e.stubMgr.Lookup(e.trapStubAddr(b)); ok {
+		return // a stub trap, already handled by onStubTrap
+	}
 	frame, err := e.kctx.Transport.Decode(b)
 	if err != nil {
 		if e.cfg.Verbose {

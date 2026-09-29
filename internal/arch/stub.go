@@ -1,5 +1,7 @@
 package arch
 
+import "github.com/isesword/golem/internal/emu"
+
 // StubKind classifies a guest trampoline stub.
 type StubKind uint8
 
@@ -25,4 +27,13 @@ const (
 // plus the emulator's stub metadata table.
 type StubEncoder interface {
 	EmitStub(kind StubKind) ([]byte, error)
+
+	// TrapStubAddr maps the engine-reported PC at a trap back to the address
+	// of the trapping instruction — for a stub trap, the stub's entry. The
+	// offset is the trap instruction's length under the engine's
+	// reports-PC-past-the-instruction semantics (unicorn: UC_HOOK_INTR fires
+	// with PC just past the trap instruction): svc #0 is 4 bytes on ARM64,
+	// int3 is 1 byte on AMD64. Meaningful only for trap PCs; the caller uses
+	// the result for stub-table lookup, never as an execution address.
+	TrapStubAddr(pc emu.GuestAddr) emu.GuestAddr
 }

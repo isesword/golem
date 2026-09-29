@@ -39,11 +39,15 @@ func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 	}
 	mem := memory.NewSpaceAt(layout.MmapRegion.Addr)
 	fs := vfs.New(t.TempDir(), defaultPid, "testproc")
+	pers, err := android.SyscallPersonalityFor(arch.IDARM64)
+	if err != nil {
+		t.Fatal(err)
+	}
 	e := &Emulator{
 		be:          be,
 		arch:        cpuArch,
 		callABI:     callABI,
-		target:      &target.Target{Arch: cpuArch, CallABI: callABI, Stubs: stubEnc, Features: feats, Format: loader.FormatELF, Platform: platform.Android},
+		target:      &target.Target{ID: arch.IDARM64, Arch: cpuArch, CallABI: callABI, Stubs: stubEnc, Features: feats, Format: loader.FormatELF, Platform: platform.Android},
 		startup:     &android.StartupABI{},
 		mem:         mem,
 		fs:          fs,
@@ -53,10 +57,13 @@ func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 		jniDispatch: map[uint64]int{},
 		kctx: &kernel.Context{
 			B: be, Mem: mem, VFS: fs, Pid: defaultPid,
-			Transport: android.LinuxARM64Transport{},
-			Table:     android.NewARM64SyscallTable(kernel.DefaultHandlers()),
-			Codecs:    android.AsmGenericLP64Codecs{},
+			Transport: pers.Transport,
+			Table:     pers.Table,
+			Codecs:    pers.Codecs,
 		},
+		sysFutex:         pers.Futex,
+		sysNanosleep:     pers.Nanosleep,
+		sysClockNanosleep: pers.ClockNanosleep,
 	}
 	// P2.5d: the interpose components New wires (stub manager over the
 	// AddressSpace stub region; empty interposition table).

@@ -8,9 +8,10 @@ import (
 
 // This file is the panic boundary between Go callbacks and the CPU engine.
 //
-// Guest up-calls — SVC dispatch (onInterrupt) and everything behind it (JNI
-// handlers, Replace callbacks, Go-implemented libc functions), plus code and
-// memory hooks — run INSIDE the engine's C→Go trampoline (purego). A panic
+// Guest up-calls — trap dispatch (onStubTrap / onSyscallTrap) and everything
+// behind it (JNI handlers, Replace callbacks, Go-implemented libc functions),
+// plus code and memory hooks — run INSIDE the engine's C→Go trampoline
+// (purego). A panic
 // that escapes one of those callbacks unwinds across the C boundary, where
 // nobody can recover it: the whole process dies, and the Go caller that
 // started the run never sees an error. MustAlloc/WriteScratch panic by design
@@ -48,17 +49,17 @@ func (e *Emulator) checkGuestPanic() error {
 	return nil
 }
 
-// guardInterrupt / guardCode / guardMemInvalid / guardMemRead / guardMemWrite
+// guardTrap / guardCode / guardMemInvalid / guardMemRead / guardMemWrite
 // wrap the callback signatures the emu capability interfaces accept;
 // guardHostFn wraps the internal hostFn entries (Replace callbacks, Go libc
-// implementations) that fire from onInterrupt — already covered by the
-// interrupt guard, but the boundary belongs on every entry the backend can
+// implementations) that fire from onStubTrap — already covered by the trap
+// guard, but the boundary belongs on every entry the backend can
 // reach. The emulator's own callbacks keep plain uint64 addresses; the
 // GuestAddr→uint64 conversion happens here, at the backend boundary.
-func (e *Emulator) guardInterrupt(fn emu.InterruptHookFunc) emu.InterruptHookFunc {
-	return func(b emu.Backend, intno uint32) {
+func (e *Emulator) guardTrap(fn emu.TrapHandler) emu.TrapHandler {
+	return func(b emu.Backend, kind emu.TrapKind) {
 		defer e.recoverGuestPanic()
-		fn(b, intno)
+		fn(b, kind)
 	}
 }
 

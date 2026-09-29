@@ -135,6 +135,7 @@ func resolveTarget(cfg Config) (*target.Target, error) {
 	// the quad's CPUFeatures — the single HWCAP source of truth the platform
 	// StartupABI and the interposed getauxval both derive from.
 	return &target.Target{
+		ID:       id,
 		Arch:     cpuArch,
 		CallABI:  callABI,
 		Stubs:    stubEnc,

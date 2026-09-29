@@ -35,6 +35,10 @@ func (testEncoder) EmitStub(kind arch.StubKind) ([]byte, error) {
 	return []byte{0x01, 0x00, 0x00, 0xd4, 0xc0, 0x03, 0x5f, 0xd6}, nil
 }
 
+// TrapStubAddr mirrors the arm64 encoder the bytes above imitate (svc #0 = 4
+// bytes, PC reported past it).
+func (testEncoder) TrapStubAddr(pc emu.GuestAddr) emu.GuestAddr { return pc - 4 }
+
 var testLayout = memory.Layout{
 	ModuleRegion: memory.Region{Addr: 0x12000000, Size: 0x1000000},
 	StubBase:     0x60000000, StubSize: 0x1000,

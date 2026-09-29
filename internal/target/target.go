@@ -23,6 +23,7 @@ import (
 // the CPUFeatures / HWCAP single source of truth (P4d) — is resolved together
 // with the Arch/CallABI/StubEncoder quad and never re-derived downstream.
 type Target struct {
+	ID       arch.ID          // object-format machine identity (ELF e_machine) — P5a.5
 	Arch     arch.Arch        // pure CPU properties (invariant 13)
 	CallABI  arch.CallABI     // function calling convention
 	Stubs    arch.StubEncoder // guest trampoline encoding

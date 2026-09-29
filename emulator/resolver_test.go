@@ -46,7 +46,7 @@ func TestBindSymbolConsumedByResolutionAndTrap(t *testing.T) {
 	// Trap dispatch: PC just past the stub's svc → the bound host fn runs.
 	e.kctx = nil // any fall-through into the kernel would nil-panic
 	be.pc = uint64(rs.Addr) + 4
-	e.onInterrupt(be, 0)
+	e.onStubTrap(be, emu.TrapHostCall)
 	if ran != 1 {
 		t.Fatalf("host fn ran %d times, want 1", ran)
 	}
@@ -107,7 +107,7 @@ func TestJavaVMStubStillFallsThrough(t *testing.T) {
 	}
 	be.pc = uint64(svc64) + 4
 	e.kctx = nil
-	e.onInterrupt(be, 0)
+	e.onStubTrap(be, emu.TrapHostCall)
 	if n := e.stubMgr.Hits("JavaVM[3]"); n != 1 {
 		t.Fatalf("JavaVM[3] hit count = %d, want 1 (optimistic-0 stub path)", n)
 	}

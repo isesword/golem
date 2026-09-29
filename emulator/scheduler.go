@@ -6,7 +6,6 @@ import (
 	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/emu"
 	"github.com/isesword/golem/internal/kernel"
-	"github.com/isesword/golem/internal/platform/android"
 )
 
 // This file is golem's cooperative thread scheduler — the green-thread runtime
@@ -49,9 +48,9 @@ const (
 )
 
 // The syscall numbers the scheduler intercepts to drive switching come from
-// the Android/AArch64 platform table (android.SYS_futex / SYS_nanosleep /
-// SYS_clock_nanosleep); only the futex op bits stay local (they are scheduler
-// policy, not table data).
+// the platform personality selected at boot (e.sysFutex / e.sysNanosleep /
+// e.sysClockNanosleep — set from android.SyscallPersonalityFor); only the
+// futex op bits stay local (they are scheduler policy, not table data).
 const (
 	futexOpWait = 0
 	futexOpWake = 1
@@ -271,7 +270,7 @@ func (e *Emulator) wakeFutex(uaddr uint64) int {
 // any thread; WAIT/sleep only suspend a fiber (the main thread never blocks).
 //
 // P2: the frame arrives pre-decoded by the platform syscall transport
-// (onInterrupt decodes once per trap), and results are written back through
+// (onSyscallTrap decodes once per trap), and results are written back through
 // the same transport — no syscall-register identities (X8/X0/X1) appear here
 // anymore. The interception SEMANTICS are unchanged: the scheduler answers
 // these syscalls itself and the kernel table never sees them.
@@ -280,7 +279,7 @@ func (e *Emulator) handleSchedSyscall(b emu.Backend, f *kernel.SyscallFrame) boo
 		_ = e.kctx.Transport.EncodeResult(b, res)
 	}
 	switch f.Num {
-	case android.SYS_futex:
+	case e.sysFutex:
 		uaddr, op := f.Args[0], f.Args[1]
 		switch op & 0x7f {
 		case futexOpWake:
@@ -295,7 +294,7 @@ func (e *Emulator) handleSchedSyscall(b emu.Backend, f *kernel.SyscallFrame) boo
 			encode(kernel.Result{})
 		}
 		return true
-	case android.SYS_nanosleep, android.SYS_clock_nanosleep:
+	case e.sysNanosleep, e.sysClockNanosleep:
 		encode(kernel.Result{})
 		if e.curFiber != nil {
 			e.yieldReason = yieldSleep

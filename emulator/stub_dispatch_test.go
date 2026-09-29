@@ -8,7 +8,7 @@ import (
 	"github.com/isesword/golem/internal/emu"
 )
 
-// trapBE is a minimal emu.Backend for driving onInterrupt without a CPU
+// trapBE is a minimal emu.Backend for driving the trap handlers without a CPU
 // engine: programmable PC/X8, recorded register writes. MemWrite is a no-op
 // so the StubManager can "emit" trampolines. Everything else panics via the
 // nil embedded interface.
@@ -39,7 +39,7 @@ func (b *trapBE) RegWrite(r emu.Reg, v uint64) error {
 
 func (b *trapBE) MemWrite(addr emu.GuestAddr, data []byte) error { return nil }
 
-// newTrapEmu builds an Emulator for interrupt-dispatch tests through the
+// newTrapEmu builds an Emulator for trap-dispatch tests through the
 // shared test constructor (full Arch/CallABI triple + role regs +
 // transport/table/codecs injected); tests that want a specific backend pass
 // it in, and may still nil out e.kctx to prove the stub path never reaches
@@ -67,7 +67,12 @@ func TestHostCallStubSkipsKernelDispatch(t *testing.T) {
 	be.pc = svc + 4 // the engine has advanced PC past the svc
 	e.kctx = nil    // a fall-through into kctx.DispatchFrame would nil-panic
 
-	e.onInterrupt(be, 0)
+	// Drive both trap handlers in the engine's delivery order (on ARM64 the
+	// shared interrupt hook fires every InstallTrap handler per trap): the
+	// stub handler must dispatch, the syscall handler must decline at its
+	// stub-exclusion check — before ever touching the (nil) kernel context.
+	e.onStubTrap(be, emu.TrapHostCall)
+	e.onSyscallTrap(be, emu.TrapSyscall)
 
 	if e.stubMgr.Hits("unresolved_import") != 1 {
 		t.Fatal("stub hit not recorded")
@@ -88,7 +93,8 @@ func TestGuestSyscallNotClassifiedAsStub(t *testing.T) {
 	be := &trapBE{pc: 0x12000004, x8: 99999} // module region; unimplemented nr
 	e := newTrapEmu(t, be)                   // kctx injected with transport+table by newTestEmulator
 
-	e.onInterrupt(be, 0)
+	e.onStubTrap(be, emu.TrapHostCall) // declines: the source is no known stub
+	e.onSyscallTrap(be, emu.TrapSyscall)
 
 	if h := e.stubMgr.HitCounts(); len(h) != 0 {
 		t.Fatalf("guest syscall misclassified as stub: %v", h)

@@ -58,3 +58,14 @@ func TestEmitStubFreshCopy(t *testing.T) {
 		t.Fatal("EmitStub must return a fresh copy — a caller write leaked into the next stub")
 	}
 }
+
+// TestTrapStubAddr pins the trap-PC → stub-entry mapping: int3 is 1 byte and
+// unicorn reports RIP just past it (stub+1, pinned on the real engine by
+// emu's TestUnicornAMD64HostStubTrap), so a stub at S traps with PC = S+1.
+func TestTrapStubAddr(t *testing.T) {
+	_, _, s, _ := resolveQuad(t)
+	const stub = 0x78000000
+	if got := s.TrapStubAddr(stub + 1); got != stub {
+		t.Fatalf("TrapStubAddr(%#x) = %#x, want %#x (pc-1, int3 width)", stub+1, got, stub)
+	}
+}

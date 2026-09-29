@@ -43,6 +43,9 @@ func (f fakeCallABI) ReturnFromCall(emu.Backend) error           { return nil }
 type fakeStubEnc struct{ tag string }
 
 func (f fakeStubEnc) EmitStub(StubKind) ([]byte, error) { return nil, nil }
+func (f fakeStubEnc) TrapStubAddr(pc emu.GuestAddr) emu.GuestAddr {
+	return pc
+}
 
 type fakeFeatures struct{ tag string }
 

@@ -45,3 +45,13 @@ func bytesEqual(a, b []byte) bool {
 	}
 	return true
 }
+
+// TestTrapStubAddr pins the trap-PC → stub-entry mapping: svc #0 is 4 bytes
+// and unicorn reports PC just past it, so a stub at S traps with PC = S+4.
+func TestTrapStubAddr(t *testing.T) {
+	_, _, enc, _ := resolveQuad(t)
+	const stub = 0x78000000
+	if got := enc.TrapStubAddr(stub + 4); got != stub {
+		t.Fatalf("TrapStubAddr(%#x) = %#x, want %#x (pc-4, svc #0 width)", stub+4, got, stub)
+	}
+}

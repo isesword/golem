@@ -171,6 +171,9 @@ func (fakeCallABI) ReturnFromCall(emu.Backend) error                { return nil
 type fakeStubEnc struct{}
 
 func (fakeStubEnc) EmitStub(arch.StubKind) ([]byte, error) { return nil, nil }
+func (fakeStubEnc) TrapStubAddr(pc emu.GuestAddr) emu.GuestAddr {
+	return pc
+}
 
 type fakeFeatures struct{}
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/isesword/golem/internal/arch"
+	"github.com/isesword/golem/internal/emu"
 )
 
 // stubCode is `svc #0 ; ret` (AArch64, little-endian) — the exact bytes the
@@ -29,3 +30,7 @@ func (stubEncoder) EmitStub(kind arch.StubKind) ([]byte, error) {
 	}
 	return nil, fmt.Errorf("arm64: unknown stub kind %d", kind)
 }
+
+// TrapStubAddr implements arch.StubEncoder: svc #0 is 4 bytes and the engine
+// reports PC just past it, so the trapping instruction sits at pc-4.
+func (stubEncoder) TrapStubAddr(pc emu.GuestAddr) emu.GuestAddr { return pc - 4 }

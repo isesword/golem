@@ -8,10 +8,11 @@
 // → a real guest syscall through the UC_HOOK_INSN channel → normal returns
 // with the stack fully restored.
 //
-// The chain is assembled COMPONENT-LEVEL here on purpose: emulator.New's boot
-// flow is frozen in P5a (its call setup writes an LR register and its trap
-// handler assumes ARM64's 4-byte svc — both ARM-shaped), so the AMD64
-// combination is proven at the layer the architecture quad is defined at.
+// The chain is assembled COMPONENT-LEVEL here on purpose: it pins each layer
+// (probe, quad, backend, layout, link, startup, traps, calls) in isolation,
+// with per-step red-zone and stack-discipline assertions a full boot cannot
+// make. The same chain driven through emulator.New's real boot flow is
+// emulator/boot_amd64_unicorn_test.go (P5a.5).
 package android
 
 import (

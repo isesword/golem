@@ -39,15 +39,15 @@ type bootEvent struct {
 
 // bootBE is an in-memory emu.Backend (sparse pages + MemMapPtr host aliases,
 // the same model as the loader linker's memBE) that appends every mutating
-// operation to an event log. It also implements the two hook capabilities
-// New probes for (InterruptHooker / InvalidMemHooker); the hooks are stored,
-// never fired — the fake executes no instructions.
+// operation to an event log. It also implements the InvalidMemHooker
+// capability New probes for; the hook is stored, never fired — the fake
+// executes no instructions. (Trap registration goes through the core
+// Backend.InstallTrap, which every backend must implement.)
 type bootBE struct {
 	pages  map[uint64][]byte
 	ptrs   []bootPtrRange
 	regs   map[emu.Reg]uint64
 	events []bootEvent
-	intr   emu.InterruptHookFunc
 	inv    emu.MemInvalidHookFunc
 }
 
@@ -152,11 +152,7 @@ func (b *bootBE) Close() error {
 	return nil
 }
 
-// Capability probes New performs (P2.5a): without these two, New fails.
-func (b *bootBE) HookInterrupt(fn emu.InterruptHookFunc) (emu.HookHandle, error) {
-	b.intr = fn
-	return bootHook{}, nil
-}
+// Capability probe New performs (P2.5a): without it, New fails.
 func (b *bootBE) HookMemInvalid(fn emu.MemInvalidHookFunc) (emu.HookHandle, error) {
 	b.inv = fn
 	return bootHook{}, nil

@@ -4,16 +4,19 @@ import (
 	"fmt"
 
 	"github.com/isesword/golem/internal/arch"
+	"github.com/isesword/golem/internal/emu"
 )
 
 // stubCode is `int3 ; ret` (x86-64):
 //
 //	0xCC        int3   — traps to the host (unicorn: UC_HOOK_INTR, intno 3,
 //	                     RIP already advanced to stub+1 when the hook fires)
-//	0xC3        ret    — safety net; dead in practice: the trap handler hands
-//	                     control back through CallABI.ReturnFromCall (which
-//	                     pops the guest return address itself), so this byte
-//	                     never executes
+//	0xC3        ret    — the return path: the trap handler leaves RIP here,
+//	                     and ret pops the guest return address the caller's
+//	                     `call` pushed (the emulator's onStubTrap relies on
+//	                     this; a component-level handler may instead end the
+//	                     call itself via CallABI.ReturnFromCall, making this
+//	                     byte dead — either way the frame unwinds exactly once)
 //
 // Both stub kinds emit the SAME bytes on purpose: the emulator classifies a
 // trap by its source address (inside the stub region) plus its stub metadata
@@ -38,3 +41,8 @@ func (stubEncoder) EmitStub(kind arch.StubKind) ([]byte, error) {
 	}
 	return nil, fmt.Errorf("amd64: unknown stub kind %d", kind)
 }
+
+// TrapStubAddr implements arch.StubEncoder: int3 is 1 byte and the engine
+// reports RIP just past it (stub+1 — pinned by TestUnicornAMD64HostStubTrap),
+// so the trapping instruction sits at pc-1.
+func (stubEncoder) TrapStubAddr(pc emu.GuestAddr) emu.GuestAddr { return pc - 1 }
