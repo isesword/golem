@@ -29,7 +29,8 @@ const numArgRegs = 6
 // argRegs are the SysV integer argument registers in argument order.
 var argRegs = [numArgRegs]emu.Reg{RDI, RSI, RDX, RCX, R8, R9}
 
-// ArgReg names integer argument register i for debugger / inline-hook
+// ArgReg names integer argument register i, satisfying the optional
+// arch.CallABIIntrospector capability for debugger / inline-hook
 // introspection; ok is false outside the register portion [0,6) — args 6+
 // live on the stack and have no register to name.
 func (sysV64) ArgReg(i int) (emu.Reg, bool) {
@@ -37,6 +38,18 @@ func (sysV64) ArgReg(i int) (emu.Reg, bool) {
 		return 0, false
 	}
 	return argRegs[i], true
+}
+
+// ResultReg names integer result register i (arch.CallABIIntrospector):
+// 0 → RAX, 1 → RDX, matching WriteResult/ReadResult; i>1 is ok=false.
+func (sysV64) ResultReg(i int) (emu.Reg, bool) {
+	switch i {
+	case 0:
+		return RAX, true
+	case 1:
+		return RDX, true
+	}
+	return 0, false
 }
 
 // PrepareCall establishes a SysV call frame on the current stack — the exact

@@ -237,11 +237,15 @@ func (h *Hook) Reg(i int) uint64 {
 }
 
 // SetArg sets integer argument register i — e.g. to rewrite an argument from
-// an inline hook. Register-shaped introspection only (CallABI.ArgReg): an
-// argument beyond the register portion lives on the stack and must be
-// rewritten in guest memory instead.
+// an inline hook. Register-shaped introspection only (the optional
+// arch.CallABIIntrospector capability): an argument beyond the register
+// portion lives on the stack and must be rewritten in guest memory instead.
 func (h *Hook) SetArg(i int, v uint64) {
-	if r, ok := h.e.callABI.ArgReg(i); ok {
+	intro, ok := h.e.callABI.(arch.CallABIIntrospector)
+	if !ok {
+		return
+	}
+	if r, ok := intro.ArgReg(i); ok {
 		_ = h.e.be.RegWrite(r, v)
 	}
 }

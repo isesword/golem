@@ -18,13 +18,24 @@ type aapcs64 struct{}
 // arguments spill to the stack at [SP, #(i-8)*8] at function entry.
 const numArgRegs = 8
 
-// ArgReg names integer argument register i (X0+i) for debugger / inline-hook
+// ArgReg names integer argument register i (X0+i), satisfying the optional
+// arch.CallABIIntrospector capability for debugger / inline-hook
 // introspection; ok is false outside the register portion [0,8).
 func (aapcs64) ArgReg(i int) (emu.Reg, bool) {
 	if i < 0 || i >= numArgRegs {
 		return 0, false
 	}
 	return X0 + emu.Reg(i), true
+}
+
+// ResultReg names integer result register i (arch.CallABIIntrospector):
+// 0 → X0; AAPCS64 has no second integer result register in use, so i>0 is
+// ok=false.
+func (aapcs64) ResultReg(i int) (emu.Reg, bool) {
+	if i != 0 {
+		return 0, false
+	}
+	return X0, true
 }
 
 // PrepareCall establishes an AAPCS64 call frame on the current stack: args

@@ -31,9 +31,11 @@ type CallRequest struct {
 // P5a.5 reshaped the interface around whole-call operations: call
 // establishment (PrepareCall), argument reads (ReadArgs) and result access
 // (WriteResult/ReadResult) are convention-level transactions, so callers
-// never name an argument/result/link register. The one exception is ArgReg —
-// a debugger-grade introspection accessor (inline hooks rewriting an argument
-// register); it must never appear on a call-establishment path.
+// never name an argument/result/link register. Register-shaped questions are
+// NOT part of the core contract — they live on the optional
+// CallABIIntrospector interface below (debugger / inline hooks), so a future
+// convention whose arguments do not map to plain registers is not forced to
+// invent fake ones.
 type CallABI interface {
 	// PrepareCall establishes a call frame for req on the current thread's
 	// existing stack and registers:
@@ -72,11 +74,22 @@ type CallABI interface {
 	// (DESIGN.md §3.8): after WriteResult, the interceptor hands control
 	// back to the guest caller through ReturnFromCall.
 	ReturnFromCall(b emu.Backend) error
+}
 
-	// ArgReg names the register carrying integer argument i, for debugger /
-	// inline-hook introspection (e.g. Hook.SetArg rewriting one argument).
-	// ok is false when i has no register (beyond the register portion) — a
+// CallABIIntrospector is an optional capability a CallABI may implement for
+// debugger / inline-hook introspection (e.g. Hook.SetArg rewriting one
+// argument register). It is NOT part of the core call contract: call
+// establishment must go through PrepareCall, never through these accessors.
+// Consumers type-assert:
+//
+//	if intro, ok := abi.(arch.CallABIIntrospector); ok { ... }
+type CallABIIntrospector interface {
+	// ArgReg names the register carrying integer argument i. ok is false
+	// when i has no register (beyond the register portion) — a
 	// register-shaped answer does not exist for stack-spilled arguments.
-	// Call establishment must go through PrepareCall, never through ArgReg.
 	ArgReg(i int) (reg emu.Reg, ok bool)
+	// ResultReg names the register carrying integer result i of the
+	// convention (SysV: 0→RAX, 1→RDX; AAPCS64: 0→X0). ok is false when the
+	// convention has no such result register.
+	ResultReg(i int) (reg emu.Reg, ok bool)
 }

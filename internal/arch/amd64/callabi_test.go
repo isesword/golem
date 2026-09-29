@@ -20,7 +20,11 @@ func resolveCallABI(t *testing.T) arch.CallABI {
 // registers and differ exactly here; merging them is the classic bug.
 func TestArgRegsVsSyscallABI(t *testing.T) {
 	c := resolveCallABI(t)
-	r3, ok := c.ArgReg(3)
+	intro, ok := c.(arch.CallABIIntrospector)
+	if !ok {
+		t.Fatal("sysV64 does not implement arch.CallABIIntrospector")
+	}
+	r3, ok := intro.ArgReg(3)
 	if !ok || r3 != RCX {
 		t.Fatalf("SysV function arg 3 = %v, %v, want RCX, true", r3, ok)
 	}
@@ -198,19 +202,46 @@ func TestReadResult(t *testing.T) {
 	}
 }
 
-// TestArgReg pins the introspection accessor: RDI/RSI/RDX/RCX/R8/R9 for 0..5,
-// ok=false beyond the register portion (stack args have no register).
+// TestArgReg pins the optional introspection capability: RDI/RSI/RDX/RCX/R8/R9
+// for 0..5, ok=false beyond the register portion (stack args have no
+// register). ArgReg is NOT part of the core CallABI contract, so the test
+// goes through CallABIIntrospector.
 func TestArgReg(t *testing.T) {
 	c := resolveCallABI(t)
+	intro, ok := c.(arch.CallABIIntrospector)
+	if !ok {
+		t.Fatal("sysV64 does not implement arch.CallABIIntrospector")
+	}
 	for i, w := range argRegs {
-		r, ok := c.ArgReg(i)
+		r, ok := intro.ArgReg(i)
 		if !ok || r != w {
 			t.Fatalf("ArgReg(%d) = %v, %v, want %v, true", i, r, ok, w)
 		}
 	}
 	for _, i := range []int{-1, 6, 100} {
-		if r, ok := c.ArgReg(i); ok {
+		if r, ok := intro.ArgReg(i); ok {
 			t.Fatalf("ArgReg(%d) = %v, true, want ok=false (args 6+ spill to the stack)", i, r)
+		}
+	}
+}
+
+// TestResultReg pins the introspection result registers: 0 → RAX, 1 → RDX,
+// matching WriteResult/ReadResult; anything else is ok=false.
+func TestResultReg(t *testing.T) {
+	c := resolveCallABI(t)
+	intro, ok := c.(arch.CallABIIntrospector)
+	if !ok {
+		t.Fatal("sysV64 does not implement arch.CallABIIntrospector")
+	}
+	for i, w := range []emu.Reg{RAX, RDX} {
+		r, ok := intro.ResultReg(i)
+		if !ok || r != w {
+			t.Fatalf("ResultReg(%d) = %v, %v, want %v, true", i, r, ok, w)
+		}
+	}
+	for _, i := range []int{-1, 2, 100} {
+		if r, ok := intro.ResultReg(i); ok {
+			t.Fatalf("ResultReg(%d) = %v, true, want ok=false", i, r)
 		}
 	}
 }

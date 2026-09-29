@@ -144,19 +144,42 @@ func TestReadResult(t *testing.T) {
 	}
 }
 
-// TestArgReg pins the introspection accessor: X0..X7 for 0..7, ok=false
-// beyond the register portion.
+// TestArgReg pins the optional introspection capability: X0..X7 for 0..7,
+// ok=false beyond the register portion. ArgReg is NOT part of the core
+// CallABI contract, so the test goes through CallABIIntrospector.
 func TestArgReg(t *testing.T) {
 	c := resolveCallABI(t)
+	intro, ok := c.(arch.CallABIIntrospector)
+	if !ok {
+		t.Fatal("aapcs64 does not implement arch.CallABIIntrospector")
+	}
 	for i := 0; i < 8; i++ {
-		r, ok := c.ArgReg(i)
+		r, ok := intro.ArgReg(i)
 		if !ok || r != X0+emu.Reg(i) {
 			t.Fatalf("ArgReg(%d) = %v, %v, want X%d, true", i, r, ok, i)
 		}
 	}
 	for _, i := range []int{-1, 8, 100} {
-		if r, ok := c.ArgReg(i); ok {
+		if r, ok := intro.ArgReg(i); ok {
 			t.Fatalf("ArgReg(%d) = %v, true, want ok=false (no register for stack args)", i, r)
+		}
+	}
+}
+
+// TestResultReg pins the introspection result registers: 0 → X0, and no
+// second integer result register (AAPCS64 uses only X0 today).
+func TestResultReg(t *testing.T) {
+	c := resolveCallABI(t)
+	intro, ok := c.(arch.CallABIIntrospector)
+	if !ok {
+		t.Fatal("aapcs64 does not implement arch.CallABIIntrospector")
+	}
+	if r, ok := intro.ResultReg(0); !ok || r != X0 {
+		t.Fatalf("ResultReg(0) = %v, %v, want X0, true", r, ok)
+	}
+	for _, i := range []int{-1, 1, 2} {
+		if r, ok := intro.ResultReg(i); ok {
+			t.Fatalf("ResultReg(%d) = %v, true, want ok=false", i, r)
 		}
 	}
 }
