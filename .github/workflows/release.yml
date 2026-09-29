@@ -131,9 +131,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: unicorn-dll-${{ matrix.arch }}
-          path: |
-            stage/unicorn.dll
-            PROVENANCE-${{ matrix.arch }}.txt
+          path: stage/
           if-no-files-found: error
 
   # ------------------------------------------------------------------
@@ -188,11 +186,10 @@ jobs:
       - name: Stage release files
         run: |
           mkdir -p release
-          # download-artifact with pattern creates artifacts/<name>/ per
-          # artifact; DLLs land as artifacts/<name>/unicorn.dll (amd64 and
-          # arm64 each in their own directory).
-          cp artifacts/unicorn-dll-amd64/unicorn.dll release/unicorn-amd64.dll
-          cp artifacts/unicorn-dll-arm64/unicorn.dll release/unicorn-arm64.dll
+          # download-artifact with `path:` creates artifacts/<artifact-name>/
+          # dirs, each containing the uploaded stage/unicorn.dll.
+          cp artifacts/unicorn-dll-amd64/unicorn.dll release/
+          cp artifacts/unicorn-dll-arm64/unicorn.dll release/
           ls -la release/
       - name: Create release with auto-generated notes
         uses: softprops/action-gh-release@v2
