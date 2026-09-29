@@ -9,6 +9,7 @@ import (
 	"github.com/isesword/golem/internal/kernel"
 	"github.com/isesword/golem/internal/loader"
 	"github.com/isesword/golem/internal/memory"
+	"github.com/isesword/golem/internal/platform"
 	"github.com/isesword/golem/internal/platform/android"
 	"github.com/isesword/golem/internal/vfs"
 )
@@ -26,7 +27,16 @@ func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mem := memory.NewSpace()
+	// The layout comes from the platform's LayoutPolicy exactly as New wires
+	// it (P4c) — no test-local copy of the address geometry.
+	layout, err := android.LayoutPolicy{}.Resolve(
+		platform.TargetInfo{Platform: platform.Android, Caps: cpuArch.Caps()},
+		platform.LayoutOverrides{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mem := memory.NewSpaceAt(layout.MmapRegion.Addr)
 	fs := vfs.New(t.TempDir(), defaultPid, "testproc")
 	e := &Emulator{
 		be:          be,
@@ -34,8 +44,8 @@ func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 		callABI:     callABI,
 		mem:         mem,
 		fs:          fs,
-		layout:      legacyARM64Layout,
-		as:          memory.NewAddressSpace(legacyARM64Layout),
+		layout:      layout,
+		as:          memory.NewAddressSpace(layout),
 		dl:          loader.NewDynamicLinker(),
 		jniDispatch: map[uint64]int{},
 		kctx: &kernel.Context{

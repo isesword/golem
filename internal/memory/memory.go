@@ -36,7 +36,12 @@ type Space struct {
 	mmapTop uint64
 }
 
-func NewSpace() *Space { return &Space{mmapTop: MmapBase} }
+func NewSpace() *Space { return NewSpaceAt(MmapBase) }
+
+// NewSpaceAt is NewSpace with an explicit mmap-arena base — the composition
+// root feeds it from memory.Layout.MmapRegion so the Layout (decided by the
+// platform's LayoutPolicy) is the single source of address geometry.
+func NewSpaceAt(mmapBase uint64) *Space { return &Space{mmapTop: mmapBase} }
 
 func pageUp(x uint64) uint64 { return (x + PageSize - 1) &^ (PageSize - 1) }
 

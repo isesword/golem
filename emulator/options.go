@@ -8,6 +8,7 @@ import (
 	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/interpose"
 	"github.com/isesword/golem/internal/loader"
+	"github.com/isesword/golem/internal/memory"
 	"github.com/isesword/golem/internal/platform"
 	"github.com/isesword/golem/internal/platform/android"
 	"github.com/isesword/golem/internal/target"
@@ -139,4 +140,21 @@ func resolveTarget(cfg Config) (*target.Target, error) {
 		Platform: platform.Android,
 		Variant:  variant,
 	}, nil
+}
+
+// resolveLayout is the LayoutPolicy step of the boot sequence (DESIGN.md §4,
+// P4c): the target's platform personality plans the initial guest address
+// space from the arch's address-space capabilities plus user overrides. The
+// result is pure data — backend mappings and AddressSpace state are built
+// from it later, never inside the policy. Android is the only platform until
+// P5b, so the policy is bound here at the composition root (same shape as
+// the Transport/Table/Codecs injection in New).
+func resolveLayout(tgt *target.Target, overrides platform.LayoutOverrides) (memory.Layout, error) {
+	info := platform.TargetInfo{Platform: tgt.Platform, Caps: tgt.Arch.Caps()}
+	switch tgt.Platform {
+	case platform.Android:
+		return android.LayoutPolicy{}.Resolve(info, overrides)
+	default:
+		return memory.Layout{}, fmt.Errorf("emulator: no LayoutPolicy for platform %s", tgt.Platform)
+	}
 }

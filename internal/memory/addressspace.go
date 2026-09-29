@@ -86,13 +86,14 @@ type AddressSpace struct {
 }
 
 // NewAddressSpace builds the allocation state from a Layout: one bump area
-// per Layout region (module/stub/stack/tls). Purposes without a Layout region
-// (mmap/guard/heap) own no bump area — their ranges enter via Reserve.
+// per Layout region (module/stub/stack/tls). Purposes without a bump area
+// (mmap/guard/heap) own no cursor — their Layout ranges (HeapRegion,
+// MmapRegion) enter via Reserve, registered by the composition root.
 func NewAddressSpace(l Layout) *AddressSpace {
 	return &AddressSpace{
 		layout: l,
 		areas: map[Purpose]*area{
-			PurposeModule: {base: l.ModuleBase, size: l.ModuleSize},
+			PurposeModule: {base: l.ModuleRegion.Addr, size: l.ModuleRegion.Size},
 			PurposeStub:   {base: l.StubBase, size: l.StubSize},
 			PurposeStack:  {base: l.StackBase, size: l.StackSize},
 			PurposeTLS:    {base: l.TLSBase, size: l.TLSSize},

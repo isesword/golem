@@ -24,6 +24,19 @@ func (cpuArch) SP() emu.Reg { return SP }
 
 func (cpuArch) PtrSize() int { return 8 }
 
+// Caps reports the AArch64 address-space limits golem assumes: 64-bit
+// pointers, the 39-bit user VA of the standard ARM64 Linux 4 KiB-page
+// configuration. The platform LayoutPolicy validates against these before
+// planning a memory.Layout (P4c).
+func (cpuArch) Caps() arch.AddressSpaceCaps {
+	return arch.AddressSpaceCaps{
+		PointerBits: 64,
+		VABits:      39,
+		PageSize:    0x1000,
+		MaxUserVA:   1 << 39,
+	}
+}
+
 func (cpuArch) ByteOrder() binary.ByteOrder { return binary.LittleEndian }
 
 // SetTLSBase writes the thread-pointer register TPIDR_EL0.

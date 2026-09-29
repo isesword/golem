@@ -6,18 +6,20 @@ import (
 	"github.com/isesword/golem/internal/emu"
 )
 
-// testLayout mirrors the emulator's legacyARM64Layout numerically so these
-// tests also pin the real region arithmetic (module arena abutting the stub
-// region, heap/mmap sub-arenas carved out of the module arena).
+// testLayout mirrors the Android/AArch64 LayoutPolicy output numerically
+// (P4c) so these tests also pin the real region arithmetic: the module
+// window, brk heap and mmap arena tile [0x12000000, 0x60000000) contiguously
+// and abut the stub region.
 var testLayout = Layout{
-	ModuleBase: 0x12000000,
-	ModuleSize: 0x4E000000,
-	StubBase:   0x60000000,
-	StubSize:   0x00100000,
-	StackBase:  0xC0000000,
-	StackSize:  0x00800000,
-	TLSBase:    0xD0000000,
-	TLSSize:    0x00010000,
+	ModuleRegion: Region{Addr: 0x12000000, Size: 0x1E000000},
+	HeapRegion:   Region{Addr: 0x30000000, Size: 0x10000000},
+	MmapRegion:   Region{Addr: 0x40000000, Size: 0x20000000},
+	StubBase:     0x60000000,
+	StubSize:     0x00100000,
+	StackBase:    0xC0000000,
+	StackSize:    0x00800000,
+	TLSBase:      0xD0000000,
+	TLSSize:      0x00010000,
 }
 
 func TestAddressSpaceBumpAlloc(t *testing.T) {
@@ -27,15 +29,15 @@ func TestAddressSpaceBumpAlloc(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if uint64(m1) != testLayout.ModuleBase {
-		t.Fatalf("first module base = %#x, want %#x", uint64(m1), testLayout.ModuleBase)
+	if uint64(m1) != testLayout.ModuleRegion.Addr {
+		t.Fatalf("first module base = %#x, want %#x", uint64(m1), testLayout.ModuleRegion.Addr)
 	}
 	m2, err := as.Alloc(PurposeModule, 0x100000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if uint64(m2) != testLayout.ModuleBase+0x300000 {
-		t.Fatalf("second module base = %#x, want %#x", uint64(m2), testLayout.ModuleBase+0x300000)
+	if uint64(m2) != testLayout.ModuleRegion.Addr+0x300000 {
+		t.Fatalf("second module base = %#x, want %#x", uint64(m2), testLayout.ModuleRegion.Addr+0x300000)
 	}
 
 	s1, err := as.Alloc(PurposeStub, 8)
@@ -63,16 +65,18 @@ func TestAddressSpaceBumpAlloc(t *testing.T) {
 
 func TestAddressSpaceAllocExhaustion(t *testing.T) {
 	as := NewAddressSpace(testLayout)
-	// The module arena ends exactly at the stub region: a module allocation
-	// that would cross ModuleBase+ModuleSize must fail, not spill into stubs.
-	if _, err := as.Alloc(PurposeModule, testLayout.ModuleSize+1); err == nil {
-		t.Fatal("module alloc past the arena bound must fail")
+	// The module window ends exactly at the heap region (P4c ModuleRegion
+	// semantics): an allocation that would cross ModuleRegion.End must fail,
+	// not spill into the heap — even before anything is reserved.
+	mw := testLayout.ModuleRegion
+	if _, err := as.Alloc(PurposeModule, mw.Size+1); err == nil {
+		t.Fatal("module alloc past the window bound must fail")
 	}
-	if _, err := as.Alloc(PurposeModule, testLayout.ModuleSize); err != nil {
-		t.Fatalf("module alloc filling the arena exactly must succeed: %v", err)
+	if _, err := as.Alloc(PurposeModule, mw.Size); err != nil {
+		t.Fatalf("module alloc filling the window exactly must succeed: %v", err)
 	}
 	if _, err := as.Alloc(PurposeModule, 1); err == nil {
-		t.Fatal("module alloc past a full arena must fail")
+		t.Fatal("module alloc past a full window must fail")
 	}
 	// Stub region exhaustion.
 	if _, err := as.Alloc(PurposeStub, testLayout.StubSize); err != nil {
@@ -80,6 +84,30 @@ func TestAddressSpaceAllocExhaustion(t *testing.T) {
 	}
 	if _, err := as.Alloc(PurposeStub, 8); err == nil {
 		t.Fatal("stub alloc past region end must fail")
+	}
+}
+
+// TestAddressSpaceModuleWindowIsTight pins the P4c ModuleRegion semantics:
+// the module bump window ends at the heap base, so the exhaustion check
+// fires at exactly the address where the pre-P4c arena would have collided
+// with the heap reservation — same boundary, now explicit region data.
+func TestAddressSpaceModuleWindowIsTight(t *testing.T) {
+	as := NewAddressSpace(testLayout)
+	mw := testLayout.ModuleRegion
+	if mw.End() != testLayout.HeapRegion.Addr {
+		t.Fatalf("module window end %#x must abut the heap region at %#x", mw.End(), testLayout.HeapRegion.Addr)
+	}
+	if _, err := as.Alloc(PurposeModule, mw.Size-0x1000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := as.Alloc(PurposeModule, 0x2000); err == nil {
+		t.Fatal("module alloc crossing the window end must fail (exhaustion, not collision)")
+	}
+	if _, err := as.Alloc(PurposeModule, 0x1000); err != nil {
+		t.Fatalf("module alloc ending exactly at the window end must succeed: %v", err)
+	}
+	if got := as.Used(PurposeModule); got != mw.Size {
+		t.Fatalf("module used = %#x, want full window %#x", got, mw.Size)
 	}
 }
 
@@ -92,7 +120,7 @@ func TestAddressSpaceRegionIsolation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if uint64(a) < testLayout.ModuleBase || uint64(a) >= testLayout.ModuleBase+testLayout.ModuleSize {
+		if uint64(a) < testLayout.ModuleRegion.Addr || uint64(a) >= testLayout.ModuleRegion.End() {
 			t.Fatalf("module alloc %#x escaped its region", uint64(a))
 		}
 		if uint64(a) >= testLayout.StubBase && uint64(a) < testLayout.StubBase+testLayout.StubSize {
@@ -141,23 +169,24 @@ func TestAddressSpaceReserveConflicts(t *testing.T) {
 
 func TestAddressSpaceReservedSubArenasBlockBump(t *testing.T) {
 	as := NewAddressSpace(testLayout)
-	// Register the brk heap and mmap arena inside the module arena, exactly as
-	// the emulator does at boot: [BrkBase, MmapBase) and [MmapBase, arena top).
-	const brkBase = 0x30000000
-	if err := as.Reserve(brkBase, MmapBase-brkBase, PurposeHeap); err != nil {
+	// Register the brk heap and mmap arena from the Layout's region data,
+	// exactly as the emulator does at boot (P4c: no boundary arithmetic at
+	// the call site).
+	if err := as.Reserve(emu.GuestAddr(testLayout.HeapRegion.Addr), testLayout.HeapRegion.Size, PurposeHeap); err != nil {
 		t.Fatal(err)
 	}
-	if err := as.Reserve(MmapBase, testLayout.ModuleBase+testLayout.ModuleSize-MmapBase, PurposeMmap); err != nil {
+	if err := as.Reserve(emu.GuestAddr(testLayout.MmapRegion.Addr), testLayout.MmapRegion.Size, PurposeMmap); err != nil {
 		t.Fatal(err)
 	}
 	// The module bump must refuse to plow into the registered heap range
-	// instead of silently overlapping it.
-	a, err := as.Alloc(PurposeModule, brkBase-testLayout.ModuleBase+0x1000)
+	// instead of silently overlapping it. The module window already ends at
+	// the heap base, so this is the exhaustion boundary wearing a second hat.
+	a, err := as.Alloc(PurposeModule, testLayout.HeapRegion.Addr-testLayout.ModuleRegion.Addr+0x1000)
 	if err == nil {
 		t.Fatalf("module alloc crossing the heap reservation must fail, got %#x", uint64(a))
 	}
 	// An allocation that stops just short of the reservation is fine.
-	if _, err := as.Alloc(PurposeModule, brkBase-testLayout.ModuleBase); err != nil {
+	if _, err := as.Alloc(PurposeModule, testLayout.HeapRegion.Addr-testLayout.ModuleRegion.Addr); err != nil {
 		t.Fatalf("module alloc up to the heap reservation must succeed: %v", err)
 	}
 	// The next bump now sits exactly at the heap boundary and must fail.
@@ -171,6 +200,10 @@ func TestAddressSpaceAreas(t *testing.T) {
 	base, size, ok := as.Area(PurposeStack)
 	if !ok || base != testLayout.StackBase || size != testLayout.StackSize {
 		t.Fatalf("stack area = %#x+%#x ok=%v", base, size, ok)
+	}
+	base, size, ok = as.Area(PurposeModule)
+	if !ok || base != testLayout.ModuleRegion.Addr || size != testLayout.ModuleRegion.Size {
+		t.Fatalf("module area = %#x+%#x ok=%v", base, size, ok)
 	}
 	if _, _, ok := as.Area(PurposeHeap); ok {
 		t.Fatal("heap must have no bump area")

@@ -145,6 +145,9 @@ func (fakeArch) SP() emu.Reg                                 { return 0 }
 func (fakeArch) PtrSize() int                                { return 8 }
 func (fakeArch) ByteOrder() binary.ByteOrder                 { return binary.LittleEndian }
 func (fakeArch) SetTLSBase(emu.Backend, emu.GuestAddr) error { return nil }
+func (fakeArch) Caps() arch.AddressSpaceCaps {
+	return arch.AddressSpaceCaps{PointerBits: 64, VABits: 39, PageSize: 0x1000, MaxUserVA: 1 << 39}
+}
 func (fakeArch) NormalizeCodeAddr(a emu.GuestAddr) emu.GuestAddr {
 	return a
 }

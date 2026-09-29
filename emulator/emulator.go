@@ -27,6 +27,7 @@ import (
 	"github.com/isesword/golem/internal/kernel"
 	"github.com/isesword/golem/internal/loader"
 	"github.com/isesword/golem/internal/memory"
+	"github.com/isesword/golem/internal/platform"
 	"github.com/isesword/golem/internal/platform/android"
 	"github.com/isesword/golem/internal/profile"
 	"github.com/isesword/golem/internal/target"
@@ -93,6 +94,13 @@ type Config struct {
 	// this field and WithPlatformConfig is an error.
 	Android AndroidConfig
 
+	// LayoutOverrides optionally overrides the platform's default guest
+	// address-space layout (P4c). Platform-agnostic by design, so it sits at
+	// the Config top level rather than inside a platform personality. The
+	// zero value means "platform defaults" and is currently the only
+	// supported value (reserved for P5+).
+	LayoutOverrides platform.LayoutOverrides
+
 	// acfg is the normalized Android platform config, set by
 	// WithPlatformConfig and resolved by the legacy shim in New. Never set
 	// it directly; it is unexported so positional Config literals outside
@@ -141,22 +149,6 @@ type AndroidConfig struct {
 }
 
 const defaultPid = 28859
-
-// legacyARM64Layout is the guest memory layout, made explicit as data in P1
-// (memory.Layout). The numbers are exactly the pre-P1 package constants, kept
-// clear of each other and of the mmap arena. Layout POLICY (who picks these
-// numbers — platform.LayoutPolicy over arch caps + user overrides) arrives in
-// P4/P5; this is the Android/ARM64 legacy default until then.
-var legacyARM64Layout = memory.Layout{
-	ModuleBase: 0x12000000, // modules loaded from here, upward
-	ModuleSize: 0x4E000000, // arena up to the stub region
-	StubBase:   0x60000000, // svc trampolines for unresolved imports
-	StubSize:   0x00100000,
-	StackBase:  0xC0000000, // 8 MiB stack
-	StackSize:  0x00800000,
-	TLSBase:    0xD0000000, // thread-local storage block
-	TLSSize:    0x00010000,
-}
 
 const sentinel = 0xFFFFFF00 // LR for top-level calls; emu stops when PC hits it
 
@@ -331,6 +323,13 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// §4 step 5: the platform's LayoutPolicy plans the initial guest address
+	// space (pure geometry — no Map/Alloc/Reserve here, P4c). This precedes
+	// backend creation so a layout failure never leaves an engine behind.
+	layout, err := resolveLayout(tgt, cfg.LayoutOverrides)
+	if err != nil {
+		return nil, err
+	}
 	engine, err := emu.Resolve(cfg.Engine)
 	if err != nil {
 		return nil, fmt.Errorf("backend: %w", err)
@@ -365,10 +364,10 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 		arch:        tgt.Arch,
 		callABI:     tgt.CallABI,
 		target:      tgt,
-		layout:      legacyARM64Layout,
-		as:          memory.NewAddressSpace(legacyARM64Layout),
+		layout:      layout,
+		as:          memory.NewAddressSpace(layout),
 		dl:          loader.NewDynamicLinker(),
-		mem:         memory.NewSpace(),
+		mem:         memory.NewSpaceAt(layout.MmapRegion.Addr),
 		vm:          dvm.NewVM(),
 		fs:          vfs.New(cfg.AssetRoot, pid, cfg.ProcessName),
 		jniDispatch: map[uint64]int{},
@@ -476,12 +475,12 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	// The mmap arena (memory.Space) and the brk heap (kernel brk cursor) keep
 	// their existing internal management this stage; only their region
 	// OWNERSHIP moves into the AddressSpace, so the module bump allocator can
-	// never drift into them. Both live inside the Layout's module arena:
-	// heap = [BrkBase, MmapBase), mmap = [MmapBase, module arena top).
-	if err := e.as.Reserve(emu.GuestAddr(kernel.BrkBase), memory.MmapBase-kernel.BrkBase, memory.PurposeHeap); err != nil {
+	// never drift into them. Both windows come from the Layout the platform's
+	// LayoutPolicy planned (P4c) — no boundary arithmetic here.
+	if err := e.as.Reserve(emu.GuestAddr(l.HeapRegion.Addr), l.HeapRegion.Size, memory.PurposeHeap); err != nil {
 		return nil, fmt.Errorf("reserve heap: %w", err)
 	}
-	if err := e.as.Reserve(emu.GuestAddr(memory.MmapBase), l.ModuleBase+l.ModuleSize-memory.MmapBase, memory.PurposeMmap); err != nil {
+	if err := e.as.Reserve(emu.GuestAddr(l.MmapRegion.Addr), l.MmapRegion.Size, memory.PurposeMmap); err != nil {
 		return nil, fmt.Errorf("reserve mmap arena: %w", err)
 	}
 	if err := be.MemMap(emu.GuestAddr(l.StubBase), l.StubSize, emu.ProtAll); err != nil {

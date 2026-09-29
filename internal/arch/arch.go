@@ -46,12 +46,21 @@ const (
 	VariantARM64E
 )
 
+// AddressSpaceCaps are the CPU's address-space limits (DESIGN.md §3.2): the
+// raw material a platform LayoutPolicy composes with its own conventions and
+// user overrides to produce a memory.Layout. Pure data, no policy.
+type AddressSpaceCaps struct {
+	PointerBits int    // guest pointer width in bits (arm64: 64)
+	VABits      int    // usable virtual-address bits (arm64 Linux 4K pages: 39)
+	PageSize    uint64 // guest page granularity in bytes (0x1000)
+	MaxUserVA   uint64 // first address above the user space (1 << VABits)
+}
+
 // Arch is the pure CPU property set of one (ID, Variant): which registers are
 // PC/SP, the pointer size and byte order, how to set the TLS base, and simple
 // architectural address canonicalization. It does NOT know how functions are
 // called — arguments, results and the return flow belong to CallABI
-// (DESIGN.md invariant 13). Address-space capabilities (Caps) arrive with the
-// AddressSpace phase; not pre-built here (YAGNI).
+// (DESIGN.md invariant 13).
 type Arch interface {
 	// EngineArch reports the emu.Arch a backend must be created with.
 	EngineArch() emu.Arch
@@ -64,6 +73,10 @@ type Arch interface {
 	// ByteOrder is the guest byte order. All current targets are
 	// little-endian; kept for codec completeness only.
 	ByteOrder() binary.ByteOrder
+
+	// Caps reports the address-space capabilities a platform LayoutPolicy
+	// plans against (P4c).
+	Caps() AddressSpaceCaps
 
 	// SetTLSBase points the thread-pointer register (TPIDR_EL0 on arm64) at
 	// the TLS slot array.

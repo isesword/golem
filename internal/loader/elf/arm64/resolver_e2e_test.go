@@ -22,8 +22,8 @@ import (
 
 // synthLayout mirrors the emulator layout with tiny regions.
 var synthLayout = memory.Layout{
-	ModuleBase: 0x12000000, ModuleSize: 0x1000000,
-	StubBase: 0x60000000, StubSize: 0x10000,
+	ModuleRegion: memory.Region{Addr: 0x12000000, Size: 0x1000000},
+	StubBase:     0x60000000, StubSize: 0x10000,
 	StackBase: 0xC0000000, StackSize: 0x1000,
 	TLSBase: 0xD0000000, TLSSize: 0x1000,
 }

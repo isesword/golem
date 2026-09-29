@@ -61,7 +61,7 @@ func TestHostCallStubSkipsKernelDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := uint64(svc64)
-	if svc != legacyARM64Layout.StubBase { // inside the stub region
+	if svc != e.layout.StubBase { // inside the stub region
 		t.Fatalf("first stub at %#x, want stub region base", svc)
 	}
 	be.pc = svc + 4 // the engine has advanced PC past the svc
