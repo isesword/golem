@@ -34,21 +34,23 @@ func registerHostFns(e *Emulator) error {
 
 	// __system_property_get: only override (for the loaded .so) when the host app
 	// supplies a provider; otherwise leave it to the bundled /dev/__properties__.
-	if e.cfg.Android.PropertyProvider != nil {
+	// P4a: the provider is read from the normalized platform config
+	// (cfg.acfg), never from the deprecated Config.Android.
+	if e.cfg.acfg != nil && e.cfg.acfg.PropertyProvider != nil {
 		e.bindHostFn("__system_property_get", hostSystemPropertyGet)
 	}
 	return nil
 }
 
 // hostSystemPropertyGet implements __system_property_get(name, value) via
-// Config.Android.PropertyProvider: write the value (NUL-terminated,
+// the platform config's PropertyProvider: write the value (NUL-terminated,
 // PROP_VALUE_MAX-1) and return its length, or 0 when the provider doesn't
 // supply the key.
 func hostSystemPropertyGet(e *Emulator, b emu.Backend) {
 	namePtr, _ := b.RegRead(e.argRegs[0])
 	buf, _ := b.RegRead(e.argRegs[1])
 	name, _ := e.ReadCStr(namePtr)
-	v, ok := e.cfg.Android.PropertyProvider(name)
+	v, ok := e.cfg.acfg.PropertyProvider(name)
 	if !ok {
 		if buf != 0 {
 			_ = e.be.MemWrite(emu.GuestAddr(buf), []byte{0})

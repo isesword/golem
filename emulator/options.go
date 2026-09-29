@@ -1,0 +1,142 @@
+package emulator
+
+import (
+	"errors"
+	"fmt"
+	"os"
+
+	"github.com/isesword/golem/internal/arch"
+	"github.com/isesword/golem/internal/interpose"
+	"github.com/isesword/golem/internal/loader"
+	"github.com/isesword/golem/internal/platform"
+	"github.com/isesword/golem/internal/platform/android"
+	"github.com/isesword/golem/internal/target"
+)
+
+// Option mutates the boot Config at New time (functional options, P4a —
+// DESIGN.md §3.6 invariant 4: platform personality config must not inflate
+// the platform-agnostic Config struct). Options apply in order, before the
+// legacy shim runs.
+type Option func(*Config) error
+
+// WithPlatformConfig supplies the platform personality's typed configuration
+// (e.g. android.NewConfig(android.WithJNI(...), android.WithDexPath(...))).
+// It is mutually exclusive with the deprecated Config.Android field: setting
+// both fails New with an error instead of silently picking one.
+//
+// Until P5 the only supported platform is Android, so the config must be an
+// *android.Config (checked once here, at the option boundary — the core
+// never dispatches platform configs via any + type-switch).
+func WithPlatformConfig(c platform.Config) Option {
+	return func(cfg *Config) error {
+		if c == nil {
+			return errors.New("emulator: WithPlatformConfig(nil)")
+		}
+		ac, ok := c.(*android.Config)
+		if !ok {
+			return fmt.Errorf("emulator: unsupported platform config %T (platform %s); only android.Config exists until P5", c, c.PlatformID())
+		}
+		cfg.acfg = ac
+		return nil
+	}
+}
+
+// normalizeAndroidConfig is the options-normalization step of the boot
+// sequence (DESIGN.md §4, step 1) and the ONE place the deprecated
+// Config.Android field is read (the legacy shim): it converts the legacy
+// struct into an android.Config exactly once, stores the result back into
+// cfg.acfg so runtime code has a single read site, and no internal code
+// touches Config.Android afterwards.
+//
+// Precedence: an explicit WithPlatformConfig wins; Config.Android is then
+// required to be zero (setting both is an ambiguity error, not a silent
+// override). With neither, the Android defaults (all-zero Config) apply.
+func normalizeAndroidConfig(cfg *Config) (*android.Config, error) {
+	if cfg.acfg != nil {
+		if legacy := legacyAndroidUsed(cfg.Android); legacy {
+			return nil, errors.New("emulator: Config.Android (deprecated) and WithPlatformConfig are mutually exclusive; move the AndroidConfig fields to android.NewConfig options")
+		}
+		return cfg.acfg, nil
+	}
+	cfg.acfg = android.NewConfig(
+		android.WithJNI(cfg.Android.JNI),
+		android.WithDexPath(cfg.Android.DexPath),
+		android.WithReplaceFns(legacyReplaceFns(cfg.Android.ReplaceFns)),
+		android.WithPropertyProvider(cfg.Android.PropertyProvider),
+		android.WithProfile(cfg.Android.Profile),
+	)
+	return cfg.acfg, nil
+}
+
+// legacyAndroidUsed reports whether any field of the deprecated AndroidConfig
+// was set.
+func legacyAndroidUsed(a AndroidConfig) bool {
+	return a.JNI != nil || a.DexPath != "" || len(a.ReplaceFns) > 0 ||
+		a.PropertyProvider != nil || a.Profile != nil
+}
+
+// legacyReplaceFns adapts the legacy ReplaceFns callbacks (keyed on the
+// emulator's *Hook) to interpose.HostFunc, the type android.Config carries.
+// *Hook satisfies interpose.CallContext, so the adaptation is a plain
+// closure — the same one ReplaceE has always applied.
+func legacyReplaceFns(fns map[string]func(h *Hook) uint64) map[string]interpose.HostFunc {
+	if len(fns) == 0 {
+		return nil
+	}
+	out := make(map[string]interpose.HostFunc, len(fns))
+	for name, fn := range fns {
+		fn := fn
+		out[name] = func(ctx interpose.CallContext) uint64 {
+			return fn(ctx.(*Hook))
+		}
+	}
+	return out
+}
+
+// resolveTarget is steps 2–4 of the boot sequence (DESIGN.md §4): a
+// lightweight probe (loader.Sniff reads the SO header only — no mapping, no
+// relocation, no backend) → arch.Resolve → the immutable Target that is the
+// single source of truth for arch/format/platform from here on.
+//
+// Arch precedence: an explicit Config.Arch wins over the probed header;
+// without either, everything is ARM64 (the pre-P4 default). Platform is
+// always Android and the format ELF unless the probe says otherwise — those
+// constants are the P5 extension points (darwin/Mach-O), not new semantics.
+func resolveTarget(cfg Config) (*target.Target, error) {
+	id := cfg.Arch
+	variant := arch.VariantGeneric
+	format := loader.FormatELF // P5: Mach-O arrives via the probe below
+	if cfg.SOPath != "" {
+		fh, err := os.Open(cfg.SOPath)
+		if err != nil {
+			return nil, fmt.Errorf("probe %s: %w", cfg.SOPath, err)
+		}
+		f, probedID, probedVariant, err := loader.Sniff(fh)
+		_ = fh.Close()
+		if err != nil {
+			return nil, fmt.Errorf("probe %s: %w", cfg.SOPath, err)
+		}
+		format = f
+		variant = probedVariant
+		if id == 0 {
+			id = probedID
+		}
+	}
+	if id == 0 {
+		id = arch.IDARM64 // pre-P4 semantics: everything is ARM64
+	}
+	cpuArch, callABI, stubEnc, err := arch.Resolve(id, variant)
+	if err != nil {
+		return nil, err
+	}
+	// Platform is hard-coded Android today (P5b adds Darwin); it is carried
+	// in the Target so no lower layer ever re-derives it.
+	return &target.Target{
+		Arch:     cpuArch,
+		CallABI:  callABI,
+		Stubs:    stubEnc,
+		Format:   format,
+		Platform: platform.Android,
+		Variant:  variant,
+	}, nil
+}

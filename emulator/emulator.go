@@ -29,6 +29,7 @@ import (
 	"github.com/isesword/golem/internal/memory"
 	"github.com/isesword/golem/internal/platform/android"
 	"github.com/isesword/golem/internal/profile"
+	"github.com/isesword/golem/internal/target"
 	"github.com/isesword/golem/internal/vfs"
 )
 
@@ -67,6 +68,10 @@ type Config struct {
 	// fixed Unix time (seconds) instead of the host clock — for deterministic,
 	// reproducible runs (e.g. reverse-engineering a time-dependent signature).
 	Epoch int64
+	// Arch explicitly selects the guest CPU architecture (P4a). 0 = probe
+	// SOPath's header (loader.Sniff) when set, else default to ARM64 — the
+	// pre-P4 behavior. An explicit value wins over the probe.
+	Arch arch.ID
 	// TCGBufferMiB caps the CPU engine's translation (JIT) buffer, in MiB,
 	// applied during construction — BEFORE boot runs any guest code, because
 	// unicorn's UC_CTL_TCG_BUFFER_SIZE only takes effect ahead of the first
@@ -78,16 +83,32 @@ type Config struct {
 	// ignoring the value.
 	TCGBufferMiB int
 	// Android is the Android personality of the emulated process (JNI
-	// handler, dex metadata, symbol replacements, system properties). A
-	// future iOS personality would be a sibling of this field and mutually
-	// exclusive with it.
+	// handler, dex metadata, symbol replacements, system properties).
+	//
+	// Deprecated: P4a moved this personality to the typed platform config —
+	// use android.NewConfig(android.WithJNI(...), ...) with the
+	// WithPlatformConfig option instead. This field is read exactly once, by
+	// the options normalization (legacy shim), which converts it to an
+	// android.Config; no internal code touches it afterwards. Setting both
+	// this field and WithPlatformConfig is an error.
 	Android AndroidConfig
+
+	// acfg is the normalized Android platform config, set by
+	// WithPlatformConfig and resolved by the legacy shim in New. Never set
+	// it directly; it is unexported so positional Config literals outside
+	// this package already fail to compile.
+	acfg *android.Config
 }
 
 // AndroidConfig is the Android personality of an emulated process: the pieces
 // that only make sense for an Android-flavoured guest, grouped so that a
 // future iOS personality can sit next to them without polluting the
 // platform-agnostic top-level Config.
+//
+// Deprecated: P4a re-homed this personality as android.Config — build it with
+// android.NewConfig(android.WithJNI(...), ...) and pass it via
+// emulator.WithPlatformConfig. This struct remains as the legacy shim input
+// and is converted exactly once during options normalization.
 type AndroidConfig struct {
 	// JNI is the Java callback handler the guest's JNIEnv calls dispatch to.
 	// nil = dvm.AbstractJni{} (everything returns null/0). Implement dvm.Jni (or
@@ -157,8 +178,9 @@ type Emulator struct {
 	fs     *vfs.VFS
 	kctx   *kernel.Context
 
-	arch    arch.Arch            // CPU properties, resolved once in New (P2.5b; always ARM64 until P4)
+	arch    arch.Arch            // CPU properties, from e.target (P2.5b; always ARM64 until P5)
 	callABI arch.CallABI         // function calling convention (AAPCS64) — args/results/return flow
+	target  *target.Target       // immutable single source of truth for arch/format/platform (P4a, DESIGN.md §4)
 	layout  memory.Layout        // guest address-space layout in use
 	as      *memory.AddressSpace // single guest VA allocation entry (P2.5c, invariant 12)
 
@@ -281,17 +303,39 @@ func (e *Emulator) MemStats() (regions int, mmapTop uint64) {
 
 // New boots an emulator: prepares the address space, maps bionic, and (if
 // Config.SOPath is set) loads + initializes the main library.
-func New(cfg Config) (e *Emulator, err error) {
+//
+// Boot follows the DESIGN.md §4 sequence: options (incl. the legacy shim for
+// Config.Android) are normalized first, then the main SO's header is probed
+// (loader.Sniff — lightweight, header only) and the immutable Target is
+// resolved; only then is the CPU backend created, so the engine never
+// outlives an arch/platform re-guess. opts are P4a functional options
+// (WithPlatformConfig, ...); existing callers passing just a Config are
+// unaffected.
+func New(cfg Config, opts ...Option) (e *Emulator, err error) {
+	// §4 step 1: normalize options. The legacy shim inside reads
+	// Config.Android — its ONLY read site in the package.
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		if err := opt(&cfg); err != nil {
+			return nil, err
+		}
+	}
+	acfg, err := normalizeAndroidConfig(&cfg)
+	if err != nil {
+		return nil, err
+	}
+	// §4 steps 2–4: probe → resolve arch triple → immutable Target.
+	tgt, err := resolveTarget(cfg)
+	if err != nil {
+		return nil, err
+	}
 	engine, err := emu.Resolve(cfg.Engine)
 	if err != nil {
 		return nil, fmt.Errorf("backend: %w", err)
 	}
-	// TODO(P4): 由 Config.Arch/Sniff 决定 — until then everything is ARM64.
-	cpuArch, callABI, stubEnc, err := arch.Resolve(arch.IDARM64, arch.VariantGeneric)
-	if err != nil {
-		return nil, err
-	}
-	be, err := emu.NewNamed(engine, cpuArch.EngineArch())
+	be, err := emu.NewNamed(engine, tgt.Arch.EngineArch())
 	if err != nil {
 		return nil, fmt.Errorf("backend(%s): %w", engine, err)
 	}
@@ -318,8 +362,9 @@ func New(cfg Config) (e *Emulator, err error) {
 		cfg:         cfg,
 		engine:      engine,
 		be:          be,
-		arch:        cpuArch,
-		callABI:     callABI,
+		arch:        tgt.Arch,
+		callABI:     tgt.CallABI,
+		target:      tgt,
 		layout:      legacyARM64Layout,
 		as:          memory.NewAddressSpace(legacyARM64Layout),
 		dl:          loader.NewDynamicLinker(),
@@ -337,7 +382,7 @@ func New(cfg Config) (e *Emulator, err error) {
 	// P2.5d: trampolines and interposition state live in the interpose
 	// package (DESIGN.md §3.8); the stub manager draws slots from the
 	// AddressSpace's stub region and encodes them with the StubEncoder.
-	e.stubMgr = interpose.NewStubManager(e.as, stubEnc, be)
+	e.stubMgr = interpose.NewStubManager(e.as, tgt.Stubs, be)
 	e.itab = interpose.NewInterposeTable()
 	// P3.5: the boot symbol-resolution chain — host replacement symbols
 	// (InterposeTable via the HostResolver adapter) → global guest exports
@@ -368,26 +413,26 @@ func New(cfg Config) (e *Emulator, err error) {
 		e.fs.SetFallback(cfg.FileResolver)
 	}
 	e.classMeta = e.vm.ResolveClass("java/lang/Class")
-	jni := cfg.Android.JNI
+	jni := acfg.JNI
 	if jni == nil {
 		jni = dvm.AbstractJni{}
 	}
 	// The four JNI time getters are always modeled from the kernel clock (see
 	// clockJni) — returning 0 for currentTimeMillis is a louder emulator tell
 	// than answering them, and Epoch mode keeps them deterministic.
-	e.vm.SetJni(&clockJni{Jni: jni, e: e, prof: cfg.Android.Profile})
-	if cfg.Android.DexPath != "" {
-		nc, derr := e.vm.LoadDexFile(cfg.Android.DexPath)
+	e.vm.SetJni(&clockJni{Jni: jni, e: e, prof: acfg.Profile})
+	if acfg.DexPath != "" {
+		nc, derr := e.vm.LoadDexFile(acfg.DexPath)
 		if derr != nil {
 			return nil, fmt.Errorf("load dex: %w", derr)
 		}
 		if cfg.Verbose {
-			fmt.Printf("[dex] %s -> %d classes\n", cfg.Android.DexPath, nc)
+			fmt.Printf("[dex] %s -> %d classes\n", acfg.DexPath, nc)
 		}
 	}
 	registerHostFns(e)
-	for name, fn := range cfg.Android.ReplaceFns {
-		f := fn
+	for name, hf := range acfg.ReplaceFns {
+		hf := hf
 		// Import-override path (P3.5): bind by NAME in the InterposeTable —
 		// the HostResolver then binds every unresolved import of that name to
 		// a host stub at link time. (The pre-boot e.syms branch of the old
@@ -395,7 +440,7 @@ func New(cfg Config) (e *Emulator, err error) {
 		// exist. Exported-symbol replacement happens in the post-boot second
 		// pass below, via ReplaceE.)
 		e.bindHostFn(name, e.guardHostFn(func(em *Emulator, b emu.Backend) {
-			ret := f(&Hook{em})
+			ret := hf(&Hook{em})
 			_ = b.RegWrite(em.retReg, ret)
 		}))
 	} // libc functions we implement in Go (need no libc init)
@@ -412,9 +457,9 @@ func New(cfg Config) (e *Emulator, err error) {
 	// A device profile anchors the monotonic clock at the persona's boot time
 	// and serves live battery sysfs. Epoch keeps winning (kernel.clock checks
 	// it first), so deterministic signing runs are unaffected.
-	if cfg.Android.Profile != nil {
-		e.kctx.Clock = profileClock{prof: cfg.Android.Profile}
-		prof := cfg.Android.Profile
+	if acfg.Profile != nil {
+		e.kctx.Clock = profileClock{prof: acfg.Profile}
+		prof := acfg.Profile
 		e.fs.MountBattery(func() (int, bool) { return prof.Battery(time.Now()) })
 	}
 
@@ -460,7 +505,7 @@ func New(cfg Config) (e *Emulator, err error) {
 		tlsSlotThreadID = 1 // -> pthread_internal_t*
 	)
 	pthreadStruct := l.TLSBase + 0x1000
-	if err := cpuArch.SetTLSBase(be, emu.GuestAddr(l.TLSBase)); err != nil {
+	if err := tgt.Arch.SetTLSBase(be, emu.GuestAddr(l.TLSBase)); err != nil {
 		return nil, fmt.Errorf("set TLS base: %w", err)
 	}
 	_ = putU64(be, l.TLSBase+tlsSlotSelf*8, l.TLSBase)
@@ -503,9 +548,9 @@ func New(cfg Config) (e *Emulator, err error) {
 	// during linking are not in the scope (they resolved to stubs) and are
 	// naturally skipped; exported symbols get an interposition entry hook
 	// (P2.5d).
-	for name, fn := range cfg.Android.ReplaceFns {
+	for name, hf := range acfg.ReplaceFns {
 		if addr, ok := e.dl.LookupGlobal(name); ok {
-			if err := e.ReplaceE(uint64(addr), fn); err != nil {
+			if err := e.interposeE(uint64(addr), hf); err != nil {
 				return nil, fmt.Errorf("ReplaceFns %s: %w", name, err)
 			}
 		}

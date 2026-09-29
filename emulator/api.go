@@ -277,6 +277,18 @@ type ReplaceFunc func(h *Hook) uint64
 // emu.ErrUnsupported. Replacing an already-replaced address is an error (an
 // interposed entry owns exactly one hook).
 func (e *Emulator) ReplaceE(addr uint64, fn ReplaceFunc) error {
+	// Adapt the ReplaceFunc to an interpose.HostFunc: the callback context is
+	// the Hook, which satisfies interpose.CallContext.
+	hf := interpose.HostFunc(func(ctx interpose.CallContext) uint64 {
+		return fn(ctx.(*Hook))
+	})
+	return e.interposeE(addr, hf)
+}
+
+// interposeE is ReplaceE for an already-adapted interpose.HostFunc — the
+// form platform configs (android.Config.ReplaceFns) carry, so New's
+// exported-symbol replacement pass does not round-trip through ReplaceFunc.
+func (e *Emulator) interposeE(addr uint64, hf interpose.HostFunc) error {
 	if e.poisonErr != nil {
 		return fmt.Errorf("emulator poisoned: %w", e.poisonErr)
 	}
@@ -284,11 +296,6 @@ func (e *Emulator) ReplaceE(addr uint64, fn ReplaceFunc) error {
 	if !ok {
 		return e.capabilityUnavailable("Replace")
 	}
-	// Adapt the ReplaceFunc to an interpose.HostFunc: the callback context is
-	// the Hook, which satisfies interpose.CallContext.
-	hf := interpose.HostFunc(func(ctx interpose.CallContext) uint64 {
-		return fn(ctx.(*Hook))
-	})
 	// Duplicate pre-check: an interposed entry owns exactly one hook — a
 	// second Replace on the same address would stack hooks that both fire.
 	if _, dup := e.itab.LookupAddress(emu.GuestAddr(addr)); dup {
