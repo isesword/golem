@@ -195,7 +195,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v0.1.0-dev.{0}', github.run_number) }}
-          name: ${{ github.ref_type == 'tag' && github.ref_name || format('dev snapshot {0}', github.run_number) }}
+          name: golem Release ${{ github.ref_type == 'tag' && github.ref_name || format('v0.1.0-dev.{0}', github.run_number) }}
           prerelease: ${{ github.ref_type != 'tag' }}
           generate_release_notes: true
           files: release/*
