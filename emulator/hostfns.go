@@ -3,6 +3,7 @@ package emulator
 import (
 	"fmt"
 
+	"github.com/isesword/golem/internal/arch/arm64"
 	"github.com/isesword/golem/internal/emu"
 )
 
@@ -43,15 +44,15 @@ func registerHostFns(e *Emulator) error {
 // PROP_VALUE_MAX-1) and return its length, or 0 when the provider doesn't
 // supply the key.
 func hostSystemPropertyGet(e *Emulator, b emu.Backend) {
-	namePtr, _ := b.RegRead(emu.RegX0)
-	buf, _ := b.RegRead(emu.RegX1)
+	namePtr, _ := b.RegRead(arm64.X0)
+	buf, _ := b.RegRead(arm64.X1)
 	name, _ := e.ReadCStr(namePtr)
 	v, ok := e.cfg.Android.PropertyProvider(name)
 	if !ok {
 		if buf != 0 {
 			_ = e.be.MemWrite(buf, []byte{0})
 		}
-		_ = b.RegWrite(emu.RegX0, 0)
+		_ = b.RegWrite(arm64.X0, 0)
 		return
 	}
 	if len(v) > 91 { // PROP_VALUE_MAX (92) minus the NUL
@@ -60,7 +61,7 @@ func hostSystemPropertyGet(e *Emulator, b emu.Backend) {
 	if buf != 0 {
 		_ = e.be.MemWrite(buf, append([]byte(v), 0))
 	}
-	_ = b.RegWrite(emu.RegX0, uint64(len(v)))
+	_ = b.RegWrite(arm64.X0, uint64(len(v)))
 }
 
 // hostPthreadCreate(thread*, attr, start, arg) registers the start routine as a
@@ -68,9 +69,9 @@ func hostSystemPropertyGet(e *Emulator, b emu.Backend) {
 // tid. We can't run guest threads concurrently, so the fiber runs cooperatively
 // later, when RunThreads drives the scheduler (see scheduler.go).
 func hostPthreadCreate(e *Emulator, b emu.Backend) {
-	thr, _ := b.RegRead(emu.RegX0)
-	routine, _ := b.RegRead(emu.RegX2)
-	arg, _ := b.RegRead(emu.RegX3)
+	thr, _ := b.RegRead(arm64.X0)
+	routine, _ := b.RegRead(arm64.X2)
+	arg, _ := b.RegRead(arm64.X3)
 	f := e.newFiber(routine, arg)
 	if e.cfg.Verbose {
 		fmt.Printf("[pthread_create] fiber %d routine=0x%x (%s) arg=0x%x\n", f.id, routine, e.NearestSym(routine), arg)
@@ -78,14 +79,14 @@ func hostPthreadCreate(e *Emulator, b emu.Backend) {
 	if thr != 0 {
 		_ = putU64(b, thr, uint64(0x7300|f.id)) // fake pthread_t (distinct per fiber)
 	}
-	_ = b.RegWrite(emu.RegX0, 0)
+	_ = b.RegWrite(arm64.X0, 0)
 }
 
-func hostRet0(e *Emulator, b emu.Backend) { _ = b.RegWrite(emu.RegX0, 0) }
+func hostRet0(e *Emulator, b emu.Backend) { _ = b.RegWrite(arm64.X0, 0) }
 
 // hostGetauxval implements getauxval(type) without bionic's __libc_auxv.
 func hostGetauxval(e *Emulator, b emu.Backend) {
-	t, _ := b.RegRead(emu.RegX0)
+	t, _ := b.RegRead(arm64.X0)
 	var v uint64
 	switch t {
 	case 6: // AT_PAGESZ
@@ -101,5 +102,5 @@ func hostGetauxval(e *Emulator, b emu.Backend) {
 	default:
 		v = 0
 	}
-	_ = b.RegWrite(emu.RegX0, v)
+	_ = b.RegWrite(arm64.X0, v)
 }

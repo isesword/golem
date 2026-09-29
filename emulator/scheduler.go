@@ -3,6 +3,7 @@ package emulator
 import (
 	"fmt"
 
+	"github.com/isesword/golem/internal/arch/arm64"
 	"github.com/isesword/golem/internal/emu"
 )
 
@@ -169,11 +170,11 @@ func (e *Emulator) runFiberSlice(f *fiber) error {
 
 	startPC := f.routine
 	if !f.started {
-		if err := e.be.RegWrite(emu.RegSP, f.sp); err != nil {
+		if err := e.be.RegWrite(arm64.SP, f.sp); err != nil {
 			return err
 		}
-		_ = e.be.RegWrite(emu.RegX0, f.arg)
-		_ = e.be.RegWrite(emu.RegLR, sentinel)
+		_ = e.be.RegWrite(arm64.X0, f.arg)
+		_ = e.be.RegWrite(arm64.LR, sentinel)
 		f.started = true
 	} else {
 		if err := e.be.RestoreContext(f.ctx); err != nil { // can't resume -> drop it
@@ -184,7 +185,7 @@ func (e *Emulator) runFiberSlice(f *fiber) error {
 		}
 		_ = f.ctx.Free()
 		f.ctx = nil
-		startPC, _ = e.be.RegRead(emu.RegPC)
+		startPC, _ = e.be.RegRead(arm64.PC)
 	}
 
 	if err := e.be.Start(startPC, sentinel); err != nil {
@@ -204,7 +205,7 @@ func (e *Emulator) runFiberSlice(f *fiber) error {
 		return fmt.Errorf("guest exit_group(%d) in fiber %d", code, f.id)
 	}
 
-	if pc, _ := e.be.RegRead(emu.RegPC); pc == sentinel {
+	if pc, _ := e.be.RegRead(arm64.PC); pc == sentinel {
 		f.state = fsDone
 		return nil
 	}
@@ -243,23 +244,23 @@ func (e *Emulator) wakeFutex(uaddr uint64) int {
 func (e *Emulator) handleSchedSyscall(b emu.Backend, num uint64) bool {
 	switch num {
 	case sysNRfutex:
-		uaddr, _ := b.RegRead(emu.RegX0)
-		op, _ := b.RegRead(emu.RegX1)
+		uaddr, _ := b.RegRead(arm64.X0)
+		op, _ := b.RegRead(arm64.X1)
 		switch op & 0x7f {
 		case futexOpWake:
-			_ = b.RegWrite(emu.RegX0, uint64(e.wakeFutex(uaddr)))
+			_ = b.RegWrite(arm64.X0, uint64(e.wakeFutex(uaddr)))
 		case futexOpWait:
-			_ = b.RegWrite(emu.RegX0, 0) // resume as if woken
+			_ = b.RegWrite(arm64.X0, 0) // resume as if woken
 			if e.curFiber != nil {
 				e.yieldReason, e.yieldAddr = yieldFutexWait, uaddr
 				_ = b.Stop()
 			}
 		default:
-			_ = b.RegWrite(emu.RegX0, 0)
+			_ = b.RegWrite(arm64.X0, 0)
 		}
 		return true
 	case sysNRnanosleep, sysNRclockNanosleep:
-		_ = b.RegWrite(emu.RegX0, 0)
+		_ = b.RegWrite(arm64.X0, 0)
 		if e.curFiber != nil {
 			e.yieldReason = yieldSleep
 			_ = b.Stop()

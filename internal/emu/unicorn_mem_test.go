@@ -72,7 +72,7 @@ func TestUnicornMemory(t *testing.T) {
 
 	// ---- phase 1: purego load (dlopen libunicorn + bindings + trampolines) --
 	s0 := take("P0 baseline")
-	be0, err := New()
+	be0, err := NewNamed("", ArchARM64)
 	if err != nil {
 		t.Skipf("no backend: %v", err)
 	}
@@ -108,12 +108,12 @@ func TestUnicornMemory(t *testing.T) {
 		if err := b.MemWrite(codeBase+0x104, []byte{0xC0, 0x03, 0x5F, 0xD6}); err != nil {
 			return err
 		}
-		if err := b.RegWrite(RegX0, 5); err != nil {
+		if err := b.RegWrite(regX0, 5); err != nil {
 			return err
 		}
 		// 3 starts × 3 adds (X0 reset per pass), firing the code hook each insn
 		for i := 0; i < 3; i++ {
-			if err := b.RegWrite(RegX0, 5); err != nil {
+			if err := b.RegWrite(regX0, 5); err != nil {
 				return err
 			}
 			if err := b.Start(codeBase, codeBase+12); err != nil {
@@ -131,17 +131,17 @@ func TestUnicornMemory(t *testing.T) {
 			return err
 		}
 		defer mh.Remove()
-		if err := b.RegWrite(RegX2, dataPage); err != nil {
+		if err := b.RegWrite(regX2, dataPage); err != nil {
 			return err
 		}
 		if err := b.Start(codeBase+0x100, codeBase+0x104); err != nil {
 			return err
 		}
 		if verify {
-			if got, _ := b.RegRead(RegX0); got != 8 {
+			if got, _ := b.RegRead(regX0); got != 8 {
 				return fmt.Errorf("X0=%d, want 8", got)
 			}
-			if got, _ := b.RegRead(RegX1); got != 0xDEADC0DEDEADBEEF {
+			if got, _ := b.RegRead(regX1); got != 0xDEADC0DEDEADBEEF {
 				return fmt.Errorf("X1=%#x, want demand-mapped value", got)
 			}
 		}
@@ -160,7 +160,7 @@ func TestUnicornMemory(t *testing.T) {
 	// ---- P3a: single engine, 100k× [rewrite instruction + execute] ----------
 	// Persistent code hook → 3 callback crossings per Start. This is the
 	// realistic hot-path shape (sign service reusing one engine).
-	be, err := New()
+	be, err := NewNamed("", ArchARM64)
 	if err != nil {
 		t.Skipf("no backend: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestUnicornMemory(t *testing.T) {
 		if err := be.MemWrite(codeBase, w[:]); err != nil {
 			t.Fatal(err)
 		}
-		if err := be.RegWrite(RegX0, uint64(i)); err != nil {
+		if err := be.RegWrite(regX0, uint64(i)); err != nil {
 			t.Fatal(err)
 		}
 		if err := be.Start(codeBase, codeBase+12); err != nil {
@@ -209,7 +209,7 @@ func TestUnicornMemory(t *testing.T) {
 		if err := be.MemWrite(codeBase, w[:]); err != nil {
 			t.Fatal(err)
 		}
-		if err := be.RegWrite(RegX0, uint64(i)); err != nil {
+		if err := be.RegWrite(regX0, uint64(i)); err != nil {
 			t.Fatal(err)
 		}
 		if err := be.Start(codeBase, codeBase+12); err != nil {
@@ -244,7 +244,7 @@ func TestUnicornMemory(t *testing.T) {
 	// ---- P4: engine churn — 100k× full [create → use → close] ---------------
 	var churn []snap
 	for i := 0; i < churnN; i++ {
-		b, err := New()
+		b, err := NewNamed("", ArchARM64)
 		if err != nil {
 			t.Fatal(err)
 		}

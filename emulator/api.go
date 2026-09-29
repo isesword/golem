@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/isesword/golem/internal/arch/arm64"
 	"github.com/isesword/golem/internal/emu"
 )
 
@@ -197,7 +198,7 @@ func (h *Hook) Arg(i int) uint64 {
 	if i < 0 || i > 7 {
 		return 0
 	}
-	v, _ := h.e.be.RegRead(emu.RegX0 + emu.Reg(i))
+	v, _ := h.e.be.RegRead(arm64.X0 + emu.Reg(i))
 	return v
 }
 
@@ -217,17 +218,17 @@ func (h *Hook) Reg(i int) uint64 {
 // SetArg sets register Xi (0..7) — e.g. to rewrite an argument from an inline hook.
 func (h *Hook) SetArg(i int, v uint64) {
 	if i >= 0 && i <= 7 {
-		_ = h.e.be.RegWrite(emu.RegX0+emu.Reg(i), v)
+		_ = h.e.be.RegWrite(arm64.X0+emu.Reg(i), v)
 	}
 }
 
 // PC / SP / LR read those registers (handy inside an inline hook).
-func (h *Hook) PC() uint64 { v, _ := h.e.be.RegRead(emu.RegPC); return v }
-func (h *Hook) SP() uint64 { v, _ := h.e.be.RegRead(emu.RegSP); return v }
-func (h *Hook) LR() uint64 { v, _ := h.e.be.RegRead(emu.RegLR); return v }
+func (h *Hook) PC() uint64 { v, _ := h.e.be.RegRead(arm64.PC); return v }
+func (h *Hook) SP() uint64 { v, _ := h.e.be.RegRead(arm64.SP); return v }
+func (h *Hook) LR() uint64 { v, _ := h.e.be.RegRead(arm64.LR); return v }
 
 // SetPC redirects execution (e.g. skip an instruction, jump elsewhere).
-func (h *Hook) SetPC(v uint64) { _ = h.e.be.RegWrite(emu.RegPC, v) }
+func (h *Hook) SetPC(v uint64) { _ = h.e.be.RegWrite(arm64.PC, v) }
 
 // ReplaceFunc is a Go stand-in for a native function; its return value is the
 // function's return (X0).
@@ -283,7 +284,7 @@ func (e *Emulator) ReplaceE(addr uint64, fn ReplaceFunc) error {
 	// 5. success: register the dispatch hook last.
 	e.replaced[addr] = e.guardHostFn(func(em *Emulator, b emu.Backend) {
 		ret := fn(&Hook{em})
-		_ = b.RegWrite(emu.RegX0, ret)
+		_ = b.RegWrite(arm64.X0, ret)
 	})
 	return nil
 }

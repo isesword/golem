@@ -96,6 +96,9 @@ func (m *memBE) HookCode(uint64, uint64, emu.CodeHookFunc) (emu.HookHandle, erro
 	return nil, nil
 }
 func (m *memBE) HookInterrupt(emu.InterruptHookFunc) (emu.HookHandle, error) { return nil, nil }
+func (m *memBE) InstallTrap(emu.TrapKind, emu.TrapHandler) (emu.HookHandle, error) {
+	return nil, nil
+}
 func (m *memBE) HookMemInvalid(func(emu.Backend, int, uint64, int, int64) bool) (emu.HookHandle, error) {
 	return nil, nil
 }

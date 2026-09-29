@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/isesword/golem/internal/arch/arm64"
 	"github.com/isesword/golem/internal/emu"
 )
 
@@ -115,12 +116,12 @@ func (d *Debugger) repl(pc uint64) {
 func (d *Debugger) printRegs() {
 	rd := func(r emu.Reg) uint64 { v, _ := d.e.be.RegRead(r); return v }
 	for i := 0; i <= 10; i++ {
-		fmt.Fprintf(d.Out, "X%-2d=0x%016x  ", i, rd(emu.RegX0+emu.Reg(i)))
+		fmt.Fprintf(d.Out, "X%-2d=0x%016x  ", i, rd(arm64.X0+emu.Reg(i)))
 		if i%4 == 3 {
 			fmt.Fprintln(d.Out)
 		}
 	}
-	fmt.Fprintf(d.Out, "\nSP =0x%016x  LR =0x%016x  PC =0x%016x\n", rd(emu.RegSP), rd(emu.RegLR), rd(emu.RegPC))
+	fmt.Fprintf(d.Out, "\nSP =0x%016x  LR =0x%016x  PC =0x%016x\n", rd(arm64.SP), rd(arm64.LR), rd(arm64.PC))
 }
 
 func (d *Debugger) printMem(f []string) {

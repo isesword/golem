@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/isesword/golem/internal/arch/arm64"
 	"github.com/isesword/golem/internal/emu"
 	"github.com/isesword/golem/internal/memory"
 	"github.com/isesword/golem/internal/vfs"
@@ -332,9 +333,9 @@ var Names = map[uint64]string{
 // Verbose. Every todo entry is a place the emulation may drift from a real
 // device — keep that list short.
 func (c *Context) Dispatch() {
-	num, _ := c.B.RegRead(emu.RegX8)
+	num, _ := c.B.RegRead(arm64.X8)
 	var args [6]uint64
-	for i, r := range []emu.Reg{emu.RegX0, emu.RegX1, emu.RegX2, emu.RegX3, emu.RegX4, emu.RegX5} {
+	for i, r := range []emu.Reg{arm64.X0, arm64.X1, arm64.X2, arm64.X3, arm64.X4, arm64.X5} {
 		args[i], _ = c.B.RegRead(r)
 	}
 	h, ok := table[num]
@@ -347,7 +348,7 @@ func (c *Context) Dispatch() {
 	} else {
 		ret = h(c, args)
 	}
-	c.B.RegWrite(emu.RegX0, uint64(ret))
+	c.B.RegWrite(arm64.X0, uint64(ret))
 }
 
 const mapFixed = 0x10

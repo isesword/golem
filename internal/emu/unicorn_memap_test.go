@@ -75,13 +75,13 @@ func TestMemMapPtrSharedHostBuffer(t *testing.T) {
 	}
 
 	// Execute code that lives in the caller-provided buffer: X1 = magic + 1.
-	if err := a.RegWrite(RegX1, aBase); err != nil {
+	if err := a.RegWrite(regX1, aBase); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.Start(aBase, aBase+8); err != nil {
 		t.Fatalf("exec from mapped host buffer: %v", err)
 	}
-	if got, err := a.RegRead(RegX1); err != nil || got != 0x1122334455667788+1 {
+	if got, err := a.RegRead(regX1); err != nil || got != 0x1122334455667788+1 {
 		t.Fatalf("X1 after exec = %#x, want %#x (err %v)", got, 0x1122334455667788+1, err)
 	}
 
@@ -153,10 +153,10 @@ func TestMemMapPtrReadOnlyRejectsGuestWrite(t *testing.T) {
 	}
 	defer h.Remove()
 
-	if err := c.RegWrite(RegX1, 0x1234567890ABCDEF); err != nil {
+	if err := c.RegWrite(regX1, 0x1234567890ABCDEF); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.RegWrite(RegX2, cBase+magicOff); err != nil {
+	if err := c.RegWrite(regX2, cBase+magicOff); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Start(cCode, cCode+4); err == nil {

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/isesword/golem/dvm"
+	"github.com/isesword/golem/internal/arch/arm64"
 	"github.com/isesword/golem/internal/emu"
 	"github.com/isesword/golem/internal/kernel"
 	"github.com/isesword/golem/internal/loader"
@@ -247,7 +248,8 @@ func New(cfg Config) (e *Emulator, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("backend: %w", err)
 	}
-	be, err := emu.NewNamed(engine)
+	// TODO(P4): arch 由 Config.Arch/Sniff 决定 — until then everything is ARM64.
+	be, err := emu.NewNamed(engine, emu.ArchARM64)
 	if err != nil {
 		return nil, fmt.Errorf("backend(%s): %w", engine, err)
 	}
@@ -338,7 +340,7 @@ func New(cfg Config) (e *Emulator, err error) {
 		} else {
 			e.hostByName[name] = e.guardHostFn(func(em *Emulator, b emu.Backend) {
 				ret := f(&Hook{em})
-				_ = b.RegWrite(emu.RegX0, ret)
+				_ = b.RegWrite(arm64.X0, ret)
 			})
 		}
 	} // libc functions we implement in Go (need no libc init)
@@ -363,7 +365,7 @@ func New(cfg Config) (e *Emulator, err error) {
 		return nil, fmt.Errorf("map tls: %w", err)
 	}
 	// SP near top of stack (16-aligned).
-	_ = be.RegWrite(emu.RegSP, stackBase+stackSize-0x200)
+	_ = be.RegWrite(arm64.SP, stackBase+stackSize-0x200)
 
 	// bionic TLS: TPIDR_EL0 -> slot array; slot[TLS_SLOT_THREAD_ID] -> a mapped
 	// pthread_internal_t (zeroed). Without this, libc reads a NULL thread ptr
@@ -374,7 +376,7 @@ func New(cfg Config) (e *Emulator, err error) {
 		tlsSlotThreadID = 1 // -> pthread_internal_t*
 		pthreadStruct   = tlsBase + 0x1000
 	)
-	_ = be.RegWrite(emu.RegTPIDR_EL0, tlsBase)
+	_ = be.RegWrite(arm64.TPIDR_EL0, tlsBase)
 	_ = putU64(be, tlsBase+tlsSlotSelf*8, tlsBase)
 	_ = putU64(be, tlsBase+tlsSlotThreadID*8, pthreadStruct)
 
@@ -386,7 +388,7 @@ func New(cfg Config) (e *Emulator, err error) {
 	}
 	// Diagnose unmapped/protected accesses during bring-up.
 	if _, err := be.HookMemInvalid(e.guardMemInvalid(func(b emu.Backend, typ int, addr uint64, size int, val int64) bool {
-		pc, _ := b.RegRead(emu.RegPC)
+		pc, _ := b.RegRead(arm64.PC)
 		if e.cfg.Verbose {
 			fmt.Printf("[mem] INVALID access type=%d addr=0x%x size=%d value=0x%x pc=0x%x (%s)\n",
 				typ, addr, size, uint64(val), pc, e.NearestSym(pc))
@@ -562,12 +564,12 @@ func (e *Emulator) Sym(name string) (uint64, bool) { a, ok := e.syms[name]; retu
 
 // onInterrupt handles SVC: a stub call (unresolved import) or a real syscall.
 func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
-	pc, _ := b.RegRead(emu.RegPC)
+	pc, _ := b.RegRead(arm64.PC)
 	svc := pc - 4            // unicorn advances PC past the svc
 	if svc == e.getEnvStub { // JavaVM->GetEnv(vm, void** env, version)
-		envpp, _ := b.RegRead(emu.RegX1)
+		envpp, _ := b.RegRead(arm64.X1)
 		_ = putU64(b, envpp, e.jniEnv)
-		_ = b.RegWrite(emu.RegX0, 0) // JNI_OK
+		_ = b.RegWrite(arm64.X0, 0) // JNI_OK
 		return
 	}
 	if fn, ok := e.replaced[svc]; ok { // user Replace()d function
@@ -587,12 +589,12 @@ func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
 		if e.cfg.Verbose {
 			fmt.Printf("[stub] %s() -> 0\n", name)
 		}
-		_ = b.RegWrite(emu.RegX0, 0) // optimistic default
+		_ = b.RegWrite(arm64.X0, 0) // optimistic default
 		return
 	}
 	// Scheduler hooks (futex / nanosleep) drive cooperative switching — futex
 	// WAKE wakes parked fibers regardless of caller; WAIT/sleep yield a fiber.
-	if num, _ := b.RegRead(emu.RegX8); e.handleSchedSyscall(b, num) {
+	if num, _ := b.RegRead(arm64.X8); e.handleSchedSyscall(b, num) {
 		return
 	}
 	e.scCount++
@@ -619,7 +621,7 @@ func (e *Emulator) CallFunc(addr uint64, args ...uint64) (uint64, error) {
 	if e.poisonErr != nil {
 		return 0, fmt.Errorf("emulator poisoned: %w", e.poisonErr)
 	}
-	regs := []emu.Reg{emu.RegX0, emu.RegX1, emu.RegX2, emu.RegX3, emu.RegX4, emu.RegX5, emu.RegX6, emu.RegX7}
+	regs := []emu.Reg{arm64.X0, arm64.X1, arm64.X2, arm64.X3, arm64.X4, arm64.X5, arm64.X6, arm64.X7}
 	if len(args) > len(regs) {
 		return 0, fmt.Errorf("CallFunc: >8 args not supported")
 	}
@@ -628,7 +630,7 @@ func (e *Emulator) CallFunc(addr uint64, args ...uint64) (uint64, error) {
 			return 0, err
 		}
 	}
-	if err := e.be.RegWrite(emu.RegLR, sentinel); err != nil {
+	if err := e.be.RegWrite(arm64.LR, sentinel); err != nil {
 		return 0, err
 	}
 	e.scCount = 0
@@ -640,7 +642,7 @@ func (e *Emulator) CallFunc(addr uint64, args ...uint64) (uint64, error) {
 	if err := e.checkGuestPanic(); err != nil {
 		return 0, err
 	}
-	return e.be.RegRead(emu.RegX0)
+	return e.be.RegRead(arm64.X0)
 }
 
 // CallSymbol calls an exported function by name with up to 8 integer args.

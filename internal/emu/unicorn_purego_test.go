@@ -8,7 +8,7 @@ import "testing"
 // nesting (RegRead/MemRead from INSIDE a code hook), demand mapping from a
 // mem-invalid hook, batch GP reads, and context save/restore.
 func TestUnicornPuregoSmoke(t *testing.T) {
-	be, err := New()
+	be, err := NewNamed("", ArchARM64)
 	if err != nil {
 		t.Skipf("no backend: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 		}
 	}
 
-	if err := be.RegWrite(RegX0, 5); err != nil {
+	if err := be.RegWrite(regX0, 5); err != nil {
 		t.Fatal(err)
 	}
 
@@ -47,7 +47,7 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 	sawX0 := []uint64{}
 	h, err := be.HookCode(base, base+uint64(adds*4-1), func(b Backend, addr uint64, size uint32) {
 		hookFires++
-		if v, err := b.RegRead(RegX0); err == nil {
+		if v, err := b.RegRead(regX0); err == nil {
 			sawX0 = append(sawX0, v)
 		}
 		if _, err := b.MemRead(base, 4); err != nil {
@@ -68,7 +68,7 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 	if hookFires != adds {
 		t.Errorf("code hook fired %d times, want %d", hookFires, adds)
 	}
-	if got, _ := be.RegRead(RegX0); got != 5+adds {
+	if got, _ := be.RegRead(regX0); got != 5+adds {
 		t.Errorf("final X0 = %d, want %d", got, 5+adds)
 	}
 
@@ -105,13 +105,13 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer mh.Remove()
-	if err := be.RegWrite(RegX2, dataPage); err != nil {
+	if err := be.RegWrite(regX2, dataPage); err != nil {
 		t.Fatal(err)
 	}
 	if err := be.Start(base+0x100, base+0x104); err != nil {
 		t.Fatalf("demand-map run failed: %v", err)
 	}
-	if got, _ := be.RegRead(RegX1); got != wantVal {
+	if got, _ := be.RegRead(regX1); got != wantVal {
 		t.Errorf("X1 after demand-mapped load = %#x, want %#x", got, wantVal)
 	}
 
@@ -120,7 +120,7 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := be.RegWrite(RegX0, 0x1234); err != nil {
+	if err := be.RegWrite(regX0, 0x1234); err != nil {
 		t.Fatal(err)
 	}
 	if err := be.RestoreContext(ctx); err != nil {
@@ -129,7 +129,7 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 	if err := ctx.Free(); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := be.RegRead(RegX0); got != 5+adds {
+	if got, _ := be.RegRead(regX0); got != 5+adds {
 		t.Errorf("X0 after restore = %#x, want %d", got, 5+adds)
 	}
 

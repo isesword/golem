@@ -40,30 +40,14 @@ const (
 	ProtAll   = ProtRead | ProtWrite | ProtExec
 )
 
-// Reg is an abstract ARM64 register id. Each backend translates it to its own
+// Reg is an abstract register id. Each backend translates it to its own
 // numbering (e.g. unicorn.ARM64_REG_*). Keeping it abstract avoids baking
 // engine-specific enum values into the rest of the code.
+//
+// The concrete ids live in per-architecture packages — internal/arch/arm64
+// for AArch64 (arm64.X0, arm64.SP, ...); emu itself defines none. That
+// package imports emu (for Reg), never the reverse.
 type Reg int
-
-const (
-	RegX0 Reg = iota
-	RegX1
-	RegX2
-	RegX3
-	RegX4
-	RegX5
-	RegX6
-	RegX7
-	RegX8
-	RegX9
-	RegX10
-	RegX23 // used by the crypto register-dump hook in the host app
-	RegSP
-	RegPC
-	RegLR // X30
-	RegNZCV
-	RegTPIDR_EL0
-)
 
 // CodeHookFunc fires for each hooked instruction/range. addr is the guest PC,
 // size the instruction size. Mirrors the host app's CodeHook.hook(...).
@@ -99,6 +83,14 @@ type Backend interface {
 	// Hooks
 	HookCode(start, end uint64, fn CodeHookFunc) (HookHandle, error)
 	HookInterrupt(fn InterruptHookFunc) (HookHandle, error)
+	// InstallTrap registers h for guest traps classified as kind (host calls,
+	// syscalls, ...). P0: the unicorn backend implements this as an adapter
+	// over its single interrupt hook with NO runtime kind discrimination —
+	// every SVC invokes every registered handler, each receiving the kind it
+	// was registered under (behavior identical to HookInterrupt today).
+	// FREEZE-BLOCKER: P1 EmitStub 落地后用 svc 立即数区分 TrapHostCall/TrapSyscall
+	// 做运行时判别。Callers migrate from HookInterrupt in P1/P2.
+	InstallTrap(kind TrapKind, h TrapHandler) (HookHandle, error)
 	HookMemInvalid(fn func(b Backend, typ int, addr uint64, size int, value int64) bool) (HookHandle, error)
 	// HookMemRead fires on every valid memory READ in [start,end] with (addr,size).
 	HookMemRead(start, end uint64, fn func(b Backend, addr uint64, size int)) (HookHandle, error)

@@ -9,7 +9,7 @@ import (
 // Measures the per-call cost of the emulator's snapshot Restore primitives, so
 // we can quantify the reuse overhead against a real sign (~360 ms).
 func openBE(tb testing.TB) Backend {
-	b, err := New()
+	b, err := NewNamed("", ArchARM64)
 	if err != nil {
 		tb.Skipf("no backend: %v", err)
 	}

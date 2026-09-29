@@ -23,11 +23,13 @@ import (
 //
 // So which engines exist in a binary is decided at build time (`-tags`), and
 // which one is used is decided at run time (arg / $GOLEM_ENGINE / default).
-// A pure-Go build registers nothing; New then returns ErrNoBackend, exactly as
-// the old stub backend did.
+// A pure-Go build registers nothing; NewNamed then returns ErrNoBackend,
+// exactly as the old stub backend did.
 
-// Factory builds a fresh backend instance.
-type Factory func() (Backend, error)
+// Factory builds a fresh backend instance for the guest architecture a.
+// A backend that does not implement a returns an error wrapping
+// ErrUnsupported.
+type Factory func(a Arch) (Backend, error)
 
 var (
 	registry = map[string]Factory{}
@@ -55,11 +57,8 @@ func Available() []string { return append([]string(nil), regOrder...) }
 // ready for future backends (first compiled-in preference wins).
 var defaultPreference = []string{"unicorn"}
 
-// New returns the default backend (NewNamed with an empty name).
-func New() (Backend, error) { return NewNamed("") }
-
-// Resolve reports which engine name NewNamed(name) would pick, without building
-// it — handy for logging the active engine. Selection order:
+// Resolve reports which engine name NewNamed(name, ...) would pick, without
+// building it — handy for logging the active engine. Selection order:
 //  1. the explicit name argument, if non-empty;
 //  2. else $GOLEM_ENGINE;
 //  3. else the first of defaultPreference that is compiled in;
@@ -90,11 +89,12 @@ func Resolve(name string) (string, error) {
 	return name, nil
 }
 
-// NewNamed builds the engine selected by Resolve(name).
-func NewNamed(name string) (Backend, error) {
+// NewNamed builds the engine selected by Resolve(name) for guest arch a.
+// The backend refuses (ErrUnsupported) an arch it does not implement.
+func NewNamed(name string, a Arch) (Backend, error) {
 	chosen, err := Resolve(name)
 	if err != nil {
 		return nil, err
 	}
-	return registry[chosen]()
+	return registry[chosen](a)
 }

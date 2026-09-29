@@ -6,6 +6,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/isesword/golem/dvm"
+	"github.com/isesword/golem/internal/arch/arm64"
 	"github.com/isesword/golem/internal/emu"
 )
 
@@ -133,7 +134,7 @@ func jniLabel(idx int) string {
 
 // arg reads JNIEnv-call argument n (n=1 is the first real arg; X0 is JNIEnv*).
 func (e *Emulator) jarg(b emu.Backend, n int) uint64 {
-	regs := []emu.Reg{emu.RegX0, emu.RegX1, emu.RegX2, emu.RegX3, emu.RegX4, emu.RegX5, emu.RegX6, emu.RegX7}
+	regs := []emu.Reg{arm64.X0, arm64.X1, arm64.X2, arm64.X3, arm64.X4, arm64.X5, arm64.X6, arm64.X7}
 	v, _ := b.RegRead(regs[n])
 	return v
 }
@@ -534,7 +535,7 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 			fmt.Printf("[JNI] %-24s -> 0x%x\n", jniLabel(idx), ret)
 		}
 	}
-	_ = b.RegWrite(emu.RegX0, ret)
+	_ = b.RegWrite(arm64.X0, ret)
 }
 
 // callStatic handles CallStaticObjectMethod[V] by dispatching to the Jni

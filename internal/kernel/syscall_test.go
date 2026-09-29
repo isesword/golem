@@ -8,6 +8,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/isesword/golem/internal/arch/arm64"
 	"github.com/isesword/golem/internal/emu"
 	"github.com/isesword/golem/internal/memory"
 	"github.com/isesword/golem/internal/vfs"
@@ -86,6 +87,9 @@ func (f *fakeBE) HookCode(_, _ uint64, _ emu.CodeHookFunc) (emu.HookHandle, erro
 func (f *fakeBE) HookInterrupt(_ emu.InterruptHookFunc) (emu.HookHandle, error) {
 	return nil, emu.ErrUnsupported
 }
+func (f *fakeBE) InstallTrap(_ emu.TrapKind, _ emu.TrapHandler) (emu.HookHandle, error) {
+	return nil, emu.ErrUnsupported
+}
 func (f *fakeBE) HookMemInvalid(_ func(b emu.Backend, typ int, addr uint64, size int, value int64) bool) (emu.HookHandle, error) {
 	return nil, emu.ErrUnsupported
 }
@@ -135,8 +139,8 @@ func newKernelCtxt(t testing.TB) *kernelCtxt {
 
 // call dispatches syscall num with the given x0..x5 args and returns x0 as int64.
 func (k *kernelCtxt) call(num uint64, args ...uint64) int64 {
-	k.be.regs[emu.RegX8] = num
-	regs := []emu.Reg{emu.RegX0, emu.RegX1, emu.RegX2, emu.RegX3, emu.RegX4, emu.RegX5}
+	k.be.regs[arm64.X8] = num
+	regs := []emu.Reg{arm64.X0, arm64.X1, arm64.X2, arm64.X3, arm64.X4, arm64.X5}
 	for i, r := range regs {
 		var v uint64
 		if i < len(args) {
@@ -145,7 +149,7 @@ func (k *kernelCtxt) call(num uint64, args ...uint64) int64 {
 		k.be.regs[r] = v
 	}
 	k.ctx.Dispatch()
-	return int64(k.be.regs[emu.RegX0])
+	return int64(k.be.regs[arm64.X0])
 }
 
 // putStr writes a NUL-terminated string into guest memory, returning its address.
@@ -193,13 +197,13 @@ func TestDispatchArgsAndResult(t *testing.T) {
 
 func TestDispatchUnimplementedSyscall(t *testing.T) {
 	k := newKernelCtxt(t)
-	k.be.regs[emu.RegX0] = 0xdeadbeef // must be overwritten by the result
+	k.be.regs[arm64.X0] = 0xdeadbeef // must be overwritten by the result
 	ret := k.call(9999)
 	if ret != -ENOSYS {
 		t.Fatalf("unimplemented syscall = %d, want %d", ret, -ENOSYS)
 	}
 	want := int64(-ENOSYS)
-	if got := k.be.regs[emu.RegX0]; got != uint64(want) {
+	if got := k.be.regs[arm64.X0]; got != uint64(want) {
 		t.Fatalf("x0 = %#x, want two's-complement of %d", got, -ENOSYS)
 	}
 }

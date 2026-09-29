@@ -114,21 +114,29 @@ var gpRegIDs = func() (ids [34]int32) {
 	return ids
 }()
 
+// regMap translates an abstract emu.Reg to its UC_ARM64_REG_* id.
+//
+// P0 known exception: the ARM64 register ids now live in internal/arch/arm64,
+// but emu cannot import that package — arm64 imports emu (for emu.Reg), so
+// importing it back would be an import cycle. The switch therefore keys on
+// the id NUMBERS arch/arm64 assigns (X0..X10=0..10, X23=11, SP=12, PC=13,
+// LR=14, NZCV=15, TPIDR_EL0=16); arch/arm64's TestFrozenRegIDs pins those
+// numbers, so any drift fails tests loudly instead of corrupting registers.
 func regMap(r Reg) int32 {
 	switch r {
-	case RegX0, RegX1, RegX2, RegX3, RegX4, RegX5, RegX6, RegX7, RegX8, RegX9, RegX10:
+	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10: // arm64.X0 .. arm64.X10
 		return ucRegX(int(r))
-	case RegX23:
+	case 11: // arm64.X23
 		return ucRegX(23)
-	case RegSP:
+	case 12: // arm64.SP
 		return ucRegSP
-	case RegPC:
+	case 13: // arm64.PC
 		return ucRegPC
-	case RegLR:
+	case 14: // arm64.LR
 		return ucRegLR
-	case RegNZCV:
+	case 15: // arm64.NZCV
 		return ucRegNZCV
-	case RegTPIDR_EL0:
+	case 16: // arm64.TPIDR_EL0
 		return ucRegTPIDR
 	default:
 		return ucRegInvalid
@@ -367,12 +375,20 @@ type unicornBackend struct {
 	uc       unsafe.Pointer
 	cbs      []uint64
 	pageSize uint64 // unicorn's guest page size (4 KiB on aarch64 — NOT the host page size)
+
+	traps    []*trapReg // InstallTrap registrations, dispatched from trapHook
+	trapHook HookHandle // lazily-installed UC_HOOK_INTR serving InstallTrap
 }
 
-func newUnicornBackend() (Backend, error) {
+func newUnicornBackend(a Arch) (Backend, error) {
+	if a != ArchARM64 {
+		return nil, fmt.Errorf("emu: unicorn backend: arch %s: %w", a, ErrUnsupported)
+	}
 	if err := ensureLoaded(); err != nil {
 		return nil, err
 	}
+	// ucOpen stays on UC_ARCH_ARM64: the engine only supports ARM64 for now;
+	// the per-arch ucOpen/const mapping table lands in P5a.
 	var uc unsafe.Pointer
 	if e := pOpen(ucArchARM64, ucModeARM, unsafe.Pointer(&uc)); e != ucOK {
 		return nil, ucErr("uc_open", e)
@@ -591,6 +607,56 @@ func (b *unicornBackend) HookCode(start, end uint64, fn CodeHookFunc) (HookHandl
 func (b *unicornBackend) HookInterrupt(fn InterruptHookFunc) (HookHandle, error) {
 	// begin=1,end=0 = whole address space (unicorn's begin>end convention).
 	return b.addHook(hkIntr, 1, 0, &hookReg{be: b, intr: fn})
+}
+
+// ---- InstallTrap: generic trap dispatch over the single interrupt hook ------
+
+// trapReg is one InstallTrap registration.
+type trapReg struct {
+	kind TrapKind
+	h    TrapHandler
+}
+
+// InstallTrap adapts the generic trap interface onto unicorn's single
+// interrupt hook (UC_HOOK_INTR), installed lazily on first use. There is NO
+// runtime kind discrimination yet: every SVC invokes every registered
+// handler, and each handler receives the kind it was REGISTERED under —
+// behavior identical to the equivalent HookInterrupt registrations today.
+//
+// FREEZE-BLOCKER: P1 EmitStub 落地后用 svc 立即数区分 TrapHostCall/TrapSyscall
+// 做运行时判别（intno 里取立即数），届时这里按运行时 kind 分发。
+func (b *unicornBackend) InstallTrap(kind TrapKind, h TrapHandler) (HookHandle, error) {
+	if b.trapHook == nil {
+		hh, err := b.HookInterrupt(func(bk Backend, _ uint32) {
+			for _, tr := range b.traps {
+				tr.h(bk, tr.kind)
+			}
+		})
+		if err != nil {
+			return nil, err
+		}
+		b.trapHook = hh
+	}
+	tr := &trapReg{kind: kind, h: h}
+	b.traps = append(b.traps, tr)
+	return &trapHandle{b: b, tr: tr}, nil
+}
+
+// trapHandle removes one InstallTrap registration. The underlying interrupt
+// hook stays (inert once traps is empty) — Close releases it via b.cbs.
+type trapHandle struct {
+	b  *unicornBackend
+	tr *trapReg
+}
+
+func (h *trapHandle) Remove() error {
+	for i, tr := range h.b.traps {
+		if tr == h.tr {
+			h.b.traps = append(h.b.traps[:i], h.b.traps[i+1:]...)
+			break
+		}
+	}
+	return nil
 }
 
 func (b *unicornBackend) HookMemInvalid(fn func(Backend, int, uint64, int, int64) bool) (HookHandle, error) {
