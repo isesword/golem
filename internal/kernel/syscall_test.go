@@ -168,6 +168,101 @@ func (c *captureCodec) DecodeIovec(src []byte) (Iovec, error) {
 	}, nil
 }
 
+// Synthetic dispatch numbers for the kernel's internal tests: arbitrary small
+// integers, deliberately NOT the Android/AArch64 assignments. The dispatch
+// mechanism and handler semantics are number-agnostic; the real number ->
+// handler binding is pinned by platform/android's table tests (P4b).
+const (
+	nrGetpid uint64 = iota + 1
+	nrGetppid
+	nrGettid
+	nrGetuid
+	nrGeteuid
+	nrSetTidAddress
+	nrSchedYield
+	nrSetRobustList
+	nrRtSigaction
+	nrRtSigprocmask
+	nrPrctl
+	nrMadvise
+	nrSchedGetaffinity
+	nrMmap
+	nrMunmap
+	nrMprotect
+	nrBrk
+	nrExit
+	nrExitGroup
+	nrOpenat
+	nrClose
+	nrRead
+	nrWrite
+	nrWritev
+	nrReadlinkat
+	nrNewfstatat
+	nrFstat
+	nrFaccessat
+	nrMkdirat
+	nrLseek
+	nrGetcwd
+	nrGetdents64
+	nrClockGettime
+	nrGettimeofday
+	nrUname
+	nrSysinfo
+	nrGetrandom
+	nrPrlimit64
+	nrFutex
+	nrIoctl
+	nrStatx
+)
+
+// syntheticTable binds the synthetic numbers above to the real semantic
+// handlers, taken field-by-field from DefaultHandlers() — the same handlers
+// the Android table binds, only the numbers differ.
+func syntheticTable() *Table {
+	h := DefaultHandlers()
+	return &Table{
+		Handlers: map[uint64]Handler{
+			nrGetpid: h.Getpid, nrGetppid: h.Getppid, nrGettid: h.Gettid,
+			nrGetuid: h.Getuid, nrGeteuid: h.Geteuid,
+			nrSetTidAddress: h.SetTidAddress, nrSchedYield: h.SchedYield,
+			nrSetRobustList: h.SetRobustList, nrRtSigaction: h.RtSigaction,
+			nrRtSigprocmask: h.RtSigprocmask, nrPrctl: h.Prctl,
+			nrMadvise: h.Madvise, nrSchedGetaffinity: h.SchedGetaffinity,
+			nrMmap: h.Mmap, nrMunmap: h.Munmap, nrMprotect: h.Mprotect,
+			nrBrk: h.Brk, nrExit: h.Exit, nrExitGroup: h.ExitGroup,
+			nrOpenat: h.Openat, nrClose: h.Close, nrRead: h.Read,
+			nrWrite: h.Write, nrWritev: h.Writev, nrReadlinkat: h.Readlinkat,
+			nrNewfstatat: h.Newfstatat, nrFstat: h.Fstat,
+			nrFaccessat: h.Faccessat, nrMkdirat: h.Mkdirat, nrLseek: h.Lseek,
+			nrGetcwd: h.Getcwd, nrGetdents64: h.Getdents64,
+			nrClockGettime: h.ClockGettime, nrGettimeofday: h.Gettimeofday,
+			nrUname: h.Uname, nrSysinfo: h.Sysinfo, nrGetrandom: h.Getrandom,
+			nrPrlimit64: h.Prlimit64, nrFutex: h.Futex, nrIoctl: h.Ioctl,
+			nrStatx: h.Statx,
+		},
+		Names: map[uint64]string{
+			nrGetpid: "getpid", nrGetppid: "getppid", nrGettid: "gettid",
+			nrGetuid: "getuid", nrGeteuid: "geteuid",
+			nrSetTidAddress: "set_tid_address", nrSchedYield: "sched_yield",
+			nrSetRobustList: "set_robust_list", nrRtSigaction: "rt_sigaction",
+			nrRtSigprocmask: "rt_sigprocmask", nrPrctl: "prctl",
+			nrMadvise: "madvise", nrSchedGetaffinity: "sched_getaffinity",
+			nrMmap: "mmap", nrMunmap: "munmap", nrMprotect: "mprotect",
+			nrBrk: "brk", nrExit: "exit", nrExitGroup: "exit_group",
+			nrOpenat: "openat", nrClose: "close", nrRead: "read",
+			nrWrite: "write", nrWritev: "writev", nrReadlinkat: "readlinkat",
+			nrNewfstatat: "newfstatat", nrFstat: "fstat",
+			nrFaccessat: "faccessat", nrMkdirat: "mkdirat", nrLseek: "lseek",
+			nrGetcwd: "getcwd", nrGetdents64: "getdents64",
+			nrClockGettime: "clock_gettime", nrGettimeofday: "gettimeofday",
+			nrUname: "uname", nrSysinfo: "sysinfo", nrGetrandom: "getrandom",
+			nrPrlimit64: "prlimit64", nrFutex: "futex", nrIoctl: "ioctl",
+			nrStatx: "statx",
+		},
+	}
+}
+
 // kernelCtxt bundles a Context with its fake backend for concise dispatching.
 type kernelCtxt struct {
 	be  *fakeBE
@@ -200,13 +295,14 @@ func newKernelCtxt(t testing.TB) *kernelCtxt {
 		cc: cc,
 		ctx: &Context{
 			B: be, Mem: memory.NewSpace(), VFS: v, Pid: testPid,
-			// P2: Dispatch requires the injected platform personality — the
-			// real Android table (constructor lives in kernel, re-exported by
-			// platform/android) plus test-double transport/codecs; the real
-			// LinuxARM64Transport / AsmGenericLP64Codecs are pinned by the
-			// platform/android test suite.
+			// P2: Dispatch requires the injected platform personality — a
+			// SYNTHETIC table (P4b: kernel tests no longer use the real
+			// Android number binding) plus test-double transport/codecs; the
+			// real LinuxARM64Transport / AsmGenericLP64Codecs /
+			// NewARM64SyscallTable binding are pinned by the platform/android
+			// test suite.
 			Transport: testTransport{},
-			Table:     NewAndroidARM64Table(),
+			Table:     syntheticTable(),
 			Codecs:    cc,
 		},
 	}
@@ -245,19 +341,19 @@ func (k *kernelCtxt) memAt(addr, n uint64) []byte {
 
 // openTestFile opens the VFS-backed test file read-only and returns its fd.
 func (k *kernelCtxt) openTestFile() int64 {
-	return k.call(SYS_openat, 0, k.putStr(scratch+0x800, testFile), 0)
+	return k.call(nrOpenat, 0, k.putStr(scratch+0x800, testFile), 0)
 }
 
 // --- Dispatch semantics ---
 
 func TestDispatchArgsAndResult(t *testing.T) {
 	k := newKernelCtxt(t)
-	if got := k.call(SYS_getpid); got != testPid {
+	if got := k.call(nrGetpid); got != testPid {
 		t.Fatalf("getpid = %d, want %d", got, testPid)
 	}
 	// getcwd proves x0/x1 args are read: it writes into the buffer arg and
 	// returns its length including the NUL.
-	ret := k.call(SYS_getcwd, scratch, 64)
+	ret := k.call(nrGetcwd, scratch, 64)
 	if ret != 2 {
 		t.Fatalf("getcwd = %d, want 2", ret)
 	}
@@ -265,7 +361,7 @@ func TestDispatchArgsAndResult(t *testing.T) {
 		t.Fatalf("getcwd buf = %q, want %q", got, "/\x00")
 	}
 	// buffer too small -> -int64(ERANGE)
-	if got := k.call(SYS_getcwd, scratch, 1); got != -int64(ERANGE) {
+	if got := k.call(nrGetcwd, scratch, 1); got != -int64(ERANGE) {
 		t.Fatalf("getcwd(tiny buf) = %d, want %d", got, -int64(ERANGE))
 	}
 }
@@ -283,13 +379,26 @@ func TestDispatchUnimplementedSyscall(t *testing.T) {
 	}
 }
 
-func TestTableNamesConsistency(t *testing.T) {
-	// Every implemented syscall should have a trace name.
-	tab := NewAndroidARM64Table()
-	for num := range tab.Handlers {
-		if tab.Name(num) == "" {
-			t.Errorf("table syscall #%d has no Names entry", num)
-		}
+// TestSyntheticTableDispatch proves the dispatch mechanism is number-agnostic:
+// a test-only handler bound at an arbitrary number is routed purely by table
+// lookup, and an unknown number falls through to ENOSYS. The real Android
+// number -> handler binding (and its Names consistency) is pinned by the
+// platform/android table tests.
+func TestSyntheticTableDispatch(t *testing.T) {
+	k := newKernelCtxt(t)
+	calls := 0
+	k.ctx.Table.Handlers[424242] = func(_ *Context, f *SyscallFrame) Result {
+		calls++
+		return Result{Value: f.Args[0] + 1}
+	}
+	if got := k.call(424242, 41); got != 42 {
+		t.Fatalf("synthetic handler = %d, want 42", got)
+	}
+	if calls != 1 {
+		t.Fatalf("synthetic handler called %d times, want 1", calls)
+	}
+	if got := k.call(424243); got != -int64(ENOSYS) {
+		t.Fatalf("unknown synthetic number = %d, want %d", got, -int64(ENOSYS))
 	}
 }
 
@@ -301,20 +410,20 @@ func TestTrivialSyscalls(t *testing.T) {
 		args [6]uint64
 		want int64
 	}{
-		{"getppid", SYS_getppid, [6]uint64{}, 1},
-		{"getuid", SYS_getuid, [6]uint64{}, 10000},
-		{"geteuid", SYS_geteuid, [6]uint64{}, 10000},
-		{"gettid", SYS_gettid, [6]uint64{}, testPid},
-		{"sched_yield", SYS_sched_yield, [6]uint64{}, 0},
-		{"set_tid_address", SYS_set_tid_address, [6]uint64{}, testPid},
-		{"set_robust_list", SYS_set_robust_list, [6]uint64{}, 0},
-		{"rt_sigaction", SYS_rt_sigaction, [6]uint64{}, 0},
-		{"rt_sigprocmask", SYS_rt_sigprocmask, [6]uint64{}, 0},
-		{"prctl", SYS_prctl, [6]uint64{}, 0},
-		{"madvise", SYS_madvise, [6]uint64{}, 0},
-		{"futex", SYS_futex, [6]uint64{0x1000, 1, 1}, 0},
-		{"ioctl", SYS_ioctl, [6]uint64{1, 0x5401, scratch}, 0},
-		{"getdents64", SYS_getdents64, [6]uint64{100, scratch, 0x1000}, 0},
+		{"getppid", nrGetppid, [6]uint64{}, 1},
+		{"getuid", nrGetuid, [6]uint64{}, 10000},
+		{"geteuid", nrGeteuid, [6]uint64{}, 10000},
+		{"gettid", nrGettid, [6]uint64{}, testPid},
+		{"sched_yield", nrSchedYield, [6]uint64{}, 0},
+		{"set_tid_address", nrSetTidAddress, [6]uint64{}, testPid},
+		{"set_robust_list", nrSetRobustList, [6]uint64{}, 0},
+		{"rt_sigaction", nrRtSigaction, [6]uint64{}, 0},
+		{"rt_sigprocmask", nrRtSigprocmask, [6]uint64{}, 0},
+		{"prctl", nrPrctl, [6]uint64{}, 0},
+		{"madvise", nrMadvise, [6]uint64{}, 0},
+		{"futex", nrFutex, [6]uint64{0x1000, 1, 1}, 0},
+		{"ioctl", nrIoctl, [6]uint64{1, 0x5401, scratch}, 0},
+		{"getdents64", nrGetdents64, [6]uint64{100, scratch, 0x1000}, 0},
 	}
 	for _, tc := range cases {
 		if got := k.call(tc.num, tc.args[:]...); got != tc.want {
@@ -328,7 +437,7 @@ func TestTrivialSyscalls(t *testing.T) {
 func TestOpenatReadClose(t *testing.T) {
 	k := newKernelCtxt(t)
 
-	if got := k.call(SYS_openat, 0, k.putStr(scratch+0x900, "/no/such/file"), 0); got != -int64(ENOENT) {
+	if got := k.call(nrOpenat, 0, k.putStr(scratch+0x900, "/no/such/file"), 0); got != -int64(ENOENT) {
 		t.Fatalf("openat(missing) = %d, want %d", got, -int64(ENOENT))
 	}
 
@@ -338,28 +447,28 @@ func TestOpenatReadClose(t *testing.T) {
 	}
 
 	// partial read
-	if got := k.call(SYS_read, uint64(fd), scratch, 5); got != 5 {
+	if got := k.call(nrRead, uint64(fd), scratch, 5); got != 5 {
 		t.Fatalf("read = %d, want 5", got)
 	}
 	if got := k.memAt(scratch, 5); string(got) != "hello" {
 		t.Fatalf("read buf = %q, want %q", got, "hello")
 	}
 	// oversized read truncates to the remaining bytes
-	if got := k.call(SYS_read, uint64(fd), scratch, 100); got != int64(len(testContent))-5 {
+	if got := k.call(nrRead, uint64(fd), scratch, 100); got != int64(len(testContent))-5 {
 		t.Fatalf("oversized read = %d, want %d", got, len(testContent)-5)
 	}
 	if got := k.memAt(scratch, 6); string(got) != " world" {
 		t.Fatalf("read buf = %q, want %q", got, " world")
 	}
 	// EOF
-	if got := k.call(SYS_read, uint64(fd), scratch, 10); got != 0 {
+	if got := k.call(nrRead, uint64(fd), scratch, 10); got != 0 {
 		t.Fatalf("read at EOF = %d, want 0", got)
 	}
 
-	if got := k.call(SYS_close, uint64(fd)); got != 0 {
+	if got := k.call(nrClose, uint64(fd)); got != 0 {
 		t.Fatalf("close = %d, want 0", got)
 	}
-	if got := k.call(SYS_read, uint64(fd), scratch, 1); got != -int64(EBADF) {
+	if got := k.call(nrRead, uint64(fd), scratch, 1); got != -int64(EBADF) {
 		t.Fatalf("read on closed fd = %d, want %d", got, -int64(EBADF))
 	}
 
@@ -384,7 +493,7 @@ func TestLseek(t *testing.T) {
 		{"SEEK_END", -5, 2, int64(len(testContent)) - 5},
 	}
 	for _, tc := range cases {
-		if got := k.call(SYS_lseek, uint64(fd), uint64(tc.off), tc.whence); got != tc.want {
+		if got := k.call(nrLseek, uint64(fd), uint64(tc.off), tc.whence); got != tc.want {
 			t.Errorf("%s: lseek = %d, want %d", tc.name, got, tc.want)
 		}
 	}
@@ -392,29 +501,29 @@ func TestLseek(t *testing.T) {
 	// position unchanged (real kernels reject the seek, not return a negative
 	// offset that reads as an errno).
 	seekBack := int64(-100)
-	if got := k.call(SYS_lseek, uint64(fd), uint64(seekBack), 2); got != -int64(EINVAL) {
+	if got := k.call(nrLseek, uint64(fd), uint64(seekBack), 2); got != -int64(EINVAL) {
 		t.Errorf("SEEK_END past start = %d, want -EINVAL", got)
 	}
 	if f := k.ctx.files[int32(fd)]; f == nil || f.pos != 0 {
 		t.Fatal("rejected lseek must leave the fd at position 0")
 	}
 	// unknown whence -> -int64(EINVAL)
-	if got := k.call(SYS_lseek, uint64(fd), 0, 9); got != -int64(EINVAL) {
+	if got := k.call(nrLseek, uint64(fd), 0, 9); got != -int64(EINVAL) {
 		t.Errorf("unknown whence = %d, want -EINVAL", got)
 	}
 
 	// seek back and read to prove the position took effect
-	if got := k.call(SYS_lseek, uint64(fd), 6, 0); got != 6 {
+	if got := k.call(nrLseek, uint64(fd), 6, 0); got != 6 {
 		t.Fatalf("lseek = %d, want 6", got)
 	}
-	if got := k.call(SYS_read, uint64(fd), scratch, 5); got != 5 {
+	if got := k.call(nrRead, uint64(fd), scratch, 5); got != 5 {
 		t.Fatalf("read after seek = %d, want 5", got)
 	}
 	if got := k.memAt(scratch, 5); string(got) != "world" {
 		t.Fatalf("read after seek = %q, want %q", got, "world")
 	}
 
-	if got := k.call(SYS_lseek, 999, 0, 0); got != -int64(EBADF) {
+	if got := k.call(nrLseek, 999, 0, 0); got != -int64(EBADF) {
 		t.Fatalf("lseek on unknown fd = %d, want %d", got, -int64(EBADF))
 	}
 }
@@ -423,26 +532,26 @@ func TestWritableOverlay(t *testing.T) {
 	k := newKernelCtxt(t)
 	const wpath = "/data/local/out.bin"
 
-	fd := k.call(SYS_openat, 0, k.putStr(scratch+0x800, wpath), oWRONLY|oCREAT)
+	fd := k.call(nrOpenat, 0, k.putStr(scratch+0x800, wpath), oWRONLY|oCREAT)
 	if fd != 100 {
 		t.Fatalf("writable openat fd = %d, want 100", fd)
 	}
 	k.be.MemWrite(emu.GuestAddr(scratch), []byte("AB"))
 	k.be.MemWrite(emu.GuestAddr(scratch+0x100), []byte("CD"))
-	if got := k.call(SYS_write, uint64(fd), scratch, 2); got != 2 {
+	if got := k.call(nrWrite, uint64(fd), scratch, 2); got != 2 {
 		t.Fatalf("write = %d, want 2", got)
 	}
-	if got := k.call(SYS_write, uint64(fd), scratch+0x100, 2); got != 2 {
+	if got := k.call(nrWrite, uint64(fd), scratch+0x100, 2); got != 2 {
 		t.Fatalf("write = %d, want 2", got)
 	}
-	k.call(SYS_close, uint64(fd))
+	k.call(nrClose, uint64(fd))
 
 	// read the overlay back through a fresh read-only fd
-	fd2 := k.call(SYS_openat, 0, k.putStr(scratch+0x800, wpath), 0)
+	fd2 := k.call(nrOpenat, 0, k.putStr(scratch+0x800, wpath), 0)
 	if fd2 < 0 {
 		t.Fatalf("reopen overlay = %d, want >= 0", fd2)
 	}
-	if got := k.call(SYS_read, uint64(fd2), scratch+0x200, 16); got != 4 {
+	if got := k.call(nrRead, uint64(fd2), scratch+0x200, 16); got != 4 {
 		t.Fatalf("read back = %d, want 4", got)
 	}
 	if got := k.memAt(scratch+0x200, 4); string(got) != "ABCD" {
@@ -450,11 +559,11 @@ func TestWritableOverlay(t *testing.T) {
 	}
 
 	// O_TRUNC resets the overlay
-	fd3 := k.call(SYS_openat, 0, k.putStr(scratch+0x800, wpath), oWRONLY|oCREAT|oTRUNC)
+	fd3 := k.call(nrOpenat, 0, k.putStr(scratch+0x800, wpath), oWRONLY|oCREAT|oTRUNC)
 	if fd3 < 0 {
 		t.Fatalf("O_TRUNC openat = %d", fd3)
 	}
-	if got := k.call(SYS_newfstatat, 0, k.putStr(scratch+0x800, wpath), scratch+0x400, 0); got != 0 {
+	if got := k.call(nrNewfstatat, 0, k.putStr(scratch+0x800, wpath), scratch+0x400, 0); got != 0 {
 		t.Fatalf("newfstatat truncated = %d, want 0", got)
 	}
 	if k.cc.stat.Size != 0 {
@@ -465,7 +574,7 @@ func TestWritableOverlay(t *testing.T) {
 func TestWritev(t *testing.T) {
 	k := newKernelCtxt(t)
 	const wpath = "/data/local/iov.bin"
-	fd := k.call(SYS_openat, 0, k.putStr(scratch+0x800, wpath), oWRONLY|oCREAT)
+	fd := k.call(nrOpenat, 0, k.putStr(scratch+0x800, wpath), oWRONLY|oCREAT)
 	if fd < 0 {
 		t.Fatalf("openat = %d", fd)
 	}
@@ -480,13 +589,13 @@ func TestWritev(t *testing.T) {
 	binary.LittleEndian.PutUint64(iov[24:], 3)
 	k.be.MemWrite(emu.GuestAddr(scratch+0x1200), iov[:])
 
-	if got := k.call(SYS_writev, uint64(fd), scratch+0x1200, 2); got != 6 {
+	if got := k.call(nrWritev, uint64(fd), scratch+0x1200, 2); got != 6 {
 		t.Fatalf("writev = %d, want 6", got)
 	}
-	k.call(SYS_close, uint64(fd))
+	k.call(nrClose, uint64(fd))
 
-	fd2 := k.call(SYS_openat, 0, k.putStr(scratch+0x800, wpath), 0)
-	if got := k.call(SYS_read, uint64(fd2), scratch+0x200, 16); got != 6 {
+	fd2 := k.call(nrOpenat, 0, k.putStr(scratch+0x800, wpath), 0)
+	if got := k.call(nrRead, uint64(fd2), scratch+0x200, 16); got != 6 {
 		t.Fatalf("read back = %d, want 6", got)
 	}
 	if got := k.memAt(scratch+0x200, 6); string(got) != "foobar" {
@@ -500,12 +609,12 @@ func TestBrk(t *testing.T) {
 	k := newKernelCtxt(t)
 
 	// query before any growth initializes the break at BrkBase
-	if got := k.call(SYS_brk, 0); got != BrkBase {
+	if got := k.call(nrBrk, 0); got != BrkBase {
 		t.Fatalf("brk(0) = %#x, want %#x", got, BrkBase)
 	}
 	// grow: new break returned, pages mapped on the backend
 	want := uint64(BrkBase + 0x2345) // deliberately unaligned
-	if got := k.call(SYS_brk, want); got != int64(want) {
+	if got := k.call(nrBrk, want); got != int64(want) {
 		t.Fatalf("brk(grow) = %#x, want %#x", uint64(got), want)
 	}
 	if k.ctx.BrkTop() != pageUp(want) {
@@ -516,15 +625,15 @@ func TestBrk(t *testing.T) {
 		t.Fatalf("brk heap not writable on backend, got %q", got)
 	}
 	// shrink
-	if got := k.call(SYS_brk, BrkBase+0x1000); got != BrkBase+0x1000 {
+	if got := k.call(nrBrk, BrkBase+0x1000); got != BrkBase+0x1000 {
 		t.Fatalf("brk(shrink) = %#x, want %#x", uint64(got), uint64(BrkBase+0x1000))
 	}
 	// query returns the current break
-	if got := k.call(SYS_brk, 0); got != BrkBase+0x1000 {
+	if got := k.call(nrBrk, 0); got != BrkBase+0x1000 {
 		t.Fatalf("brk(0) after shrink = %#x, want %#x", uint64(got), uint64(BrkBase+0x1000))
 	}
 	// below BrkBase is a query too
-	if got := k.call(SYS_brk, 0x1000); got != BrkBase+0x1000 {
+	if got := k.call(nrBrk, 0x1000); got != BrkBase+0x1000 {
 		t.Fatalf("brk(below base) = %#x, want %#x", uint64(got), uint64(BrkBase+0x1000))
 	}
 }
@@ -533,11 +642,11 @@ func TestMmap(t *testing.T) {
 	k := newKernelCtxt(t)
 	const protRW = emu.ProtRead | emu.ProtWrite
 
-	a := k.call(SYS_mmap, 0, 0x1000, protRW, 0x22, 0, 0) // MAP_PRIVATE|MAP_ANONYMOUS
+	a := k.call(nrMmap, 0, 0x1000, protRW, 0x22, 0, 0) // MAP_PRIVATE|MAP_ANONYMOUS
 	if a != memory.MmapBase {
 		t.Fatalf("first mmap = %#x, want %#x", uint64(a), uint64(memory.MmapBase))
 	}
-	b := k.call(SYS_mmap, 0, 0x2000, protRW, 0x22, 0, 0)
+	b := k.call(nrMmap, 0, 0x2000, protRW, 0x22, 0, 0)
 	if b != a+0x1000 {
 		t.Fatalf("second mmap = %#x, want monotonic %#x", uint64(b), uint64(a+0x1000))
 	}
@@ -553,13 +662,13 @@ func TestMmap(t *testing.T) {
 
 	// MAP_FIXED maps exactly at the (page-rounded) hint
 	const fixed = 0x50001000
-	c := k.call(SYS_mmap, fixed+0x123, 0x1000, protRW, 0x22|mapFixed, 0, 0)
+	c := k.call(nrMmap, fixed+0x123, 0x1000, protRW, 0x22|mapFixed, 0, 0)
 	if c != fixed {
 		t.Fatalf("MAP_FIXED mmap = %#x, want %#x", uint64(c), uint64(fixed))
 	}
 
 	// munmap drops the region from the space bookkeeping
-	if got := k.call(SYS_munmap, uint64(b), 0x2000); got != 0 {
+	if got := k.call(nrMunmap, uint64(b), 0x2000); got != 0 {
 		t.Fatalf("munmap = %d, want 0", got)
 	}
 	if _, ok := k.ctx.Mem.Find(uint64(b)); ok {
@@ -568,18 +677,18 @@ func TestMmap(t *testing.T) {
 
 	// backend map failure surfaces as -int64(ENOSYS)
 	k.be.mapErr = errors.New("map refused")
-	if got := k.call(SYS_mmap, 0, 0x1000, protRW, 0x22, 0, 0); got != -int64(ENOSYS) {
+	if got := k.call(nrMmap, 0, 0x1000, protRW, 0x22, 0, 0); got != -int64(ENOSYS) {
 		t.Fatalf("mmap with failing backend = %d, want %d", got, -int64(ENOSYS))
 	}
 }
 
 func TestMprotect(t *testing.T) {
 	k := newKernelCtxt(t)
-	a := k.call(SYS_mmap, 0, 0x1000, emu.ProtRead|emu.ProtWrite, 0x22, 0, 0)
+	a := k.call(nrMmap, 0, 0x1000, emu.ProtRead|emu.ProtWrite, 0x22, 0, 0)
 	if a < 0 {
 		t.Fatalf("mmap = %d", a)
 	}
-	if got := k.call(SYS_mprotect, uint64(a), 0x1000, emu.ProtRead); got != 0 {
+	if got := k.call(nrMprotect, uint64(a), 0x1000, emu.ProtRead); got != 0 {
 		t.Fatalf("mprotect = %d, want 0", got)
 	}
 }
@@ -592,7 +701,7 @@ func TestStatFamily(t *testing.T) {
 
 	// regular file via newfstatat — the codec capture pins the SEMANTIC struct
 	// content; byte offsets are the platform codec's contract (android tests).
-	if got := k.call(SYS_newfstatat, 0, k.putStr(scratch+0x800, testFile), buf, 0); got != 0 {
+	if got := k.call(nrNewfstatat, 0, k.putStr(scratch+0x800, testFile), buf, 0); got != 0 {
 		t.Fatalf("newfstatat = %d, want 0", got)
 	}
 	if k.cc.stat.Mode != 0x81a4 {
@@ -603,15 +712,15 @@ func TestStatFamily(t *testing.T) {
 	}
 
 	// missing path
-	if got := k.call(SYS_newfstatat, 0, k.putStr(scratch+0x800, "/nope"), buf, 0); got != -int64(ENOENT) {
+	if got := k.call(nrNewfstatat, 0, k.putStr(scratch+0x800, "/nope"), buf, 0); got != -int64(ENOENT) {
 		t.Fatalf("newfstatat(missing) = %d, want %d", got, -int64(ENOENT))
 	}
 
 	// directory created via mkdirat stats as a dir
-	if got := k.call(SYS_mkdirat, 0, k.putStr(scratch+0x800, "/data/local/dir"), 0755); got != 0 {
+	if got := k.call(nrMkdirat, 0, k.putStr(scratch+0x800, "/data/local/dir"), 0755); got != 0 {
 		t.Fatalf("mkdirat = %d, want 0", got)
 	}
-	if got := k.call(SYS_newfstatat, 0, k.putStr(scratch+0x800, "/data/local/dir"), buf, 0); got != 0 {
+	if got := k.call(nrNewfstatat, 0, k.putStr(scratch+0x800, "/data/local/dir"), buf, 0); got != 0 {
 		t.Fatalf("newfstatat(dir) = %d, want 0", got)
 	}
 	if k.cc.stat.Mode != 0x41ed {
@@ -620,18 +729,18 @@ func TestStatFamily(t *testing.T) {
 
 	// fstat on an open fd
 	fd := k.openTestFile()
-	if got := k.call(SYS_fstat, uint64(fd), buf); got != 0 {
+	if got := k.call(nrFstat, uint64(fd), buf); got != 0 {
 		t.Fatalf("fstat = %d, want 0", got)
 	}
 	if k.cc.stat.Size != uint64(len(testContent)) {
 		t.Errorf("fstat st_size = %d, want %d", k.cc.stat.Size, len(testContent))
 	}
-	if got := k.call(SYS_fstat, 999, buf); got != -int64(EBADF) {
+	if got := k.call(nrFstat, 999, buf); got != -int64(EBADF) {
 		t.Fatalf("fstat(bad fd) = %d, want %d", got, -int64(EBADF))
 	}
 
 	// statx ABI
-	if got := k.call(SYS_statx, 0, k.putStr(scratch+0x800, testFile), 0, 0, buf); got != 0 {
+	if got := k.call(nrStatx, 0, k.putStr(scratch+0x800, testFile), 0, 0, buf); got != 0 {
 		t.Fatalf("statx = %d, want 0", got)
 	}
 	if k.cc.statx.Mode != 0x81a4 {
@@ -640,34 +749,34 @@ func TestStatFamily(t *testing.T) {
 	if k.cc.statx.Size != uint64(len(testContent)) {
 		t.Errorf("stx_size = %d, want %d", k.cc.statx.Size, len(testContent))
 	}
-	if got := k.call(SYS_statx, 0, k.putStr(scratch+0x800, "/nope"), 0, 0, buf); got != -int64(ENOENT) {
+	if got := k.call(nrStatx, 0, k.putStr(scratch+0x800, "/nope"), 0, 0, buf); got != -int64(ENOENT) {
 		t.Fatalf("statx(missing) = %d, want %d", got, -int64(ENOENT))
 	}
 }
 
 func TestFaccessat(t *testing.T) {
 	k := newKernelCtxt(t)
-	if got := k.call(SYS_faccessat, 0, k.putStr(scratch+0x800, testFile), 0); got != 0 {
+	if got := k.call(nrFaccessat, 0, k.putStr(scratch+0x800, testFile), 0); got != 0 {
 		t.Errorf("faccessat(existing) = %d, want 0", got)
 	}
-	if got := k.call(SYS_faccessat, 0, k.putStr(scratch+0x900, "/nope"), 0); got != -int64(ENOENT) {
+	if got := k.call(nrFaccessat, 0, k.putStr(scratch+0x900, "/nope"), 0); got != -int64(ENOENT) {
 		t.Errorf("faccessat(missing) = %d, want %d", got, -int64(ENOENT))
 	}
 	// synthetic VFS file
-	if got := k.call(SYS_faccessat, 0, k.putStr(scratch+0xa00, "/proc/self/cmdline"), 0); got != 0 {
+	if got := k.call(nrFaccessat, 0, k.putStr(scratch+0xa00, "/proc/self/cmdline"), 0); got != 0 {
 		t.Errorf("faccessat(synthetic) = %d, want 0", got)
 	}
 	// mkdirat'd directory
-	k.call(SYS_mkdirat, 0, k.putStr(scratch+0xb00, "/data/local/dir"), 0755)
-	if got := k.call(SYS_faccessat, 0, k.putStr(scratch+0xb00, "/data/local/dir"), 0); got != 0 {
+	k.call(nrMkdirat, 0, k.putStr(scratch+0xb00, "/data/local/dir"), 0755)
+	if got := k.call(nrFaccessat, 0, k.putStr(scratch+0xb00, "/data/local/dir"), 0); got != 0 {
 		t.Errorf("faccessat(dir) = %d, want 0", got)
 	}
 	// writable-overlay file
-	fd := k.call(SYS_openat, 0, k.putStr(scratch+0xc00, "/data/local/w.bin"), oWRONLY|oCREAT)
+	fd := k.call(nrOpenat, 0, k.putStr(scratch+0xc00, "/data/local/w.bin"), oWRONLY|oCREAT)
 	if fd < 0 {
 		t.Fatalf("openat = %d", fd)
 	}
-	if got := k.call(SYS_faccessat, 0, k.putStr(scratch+0xc00, "/data/local/w.bin"), 0); got != 0 {
+	if got := k.call(nrFaccessat, 0, k.putStr(scratch+0xc00, "/data/local/w.bin"), 0); got != 0 {
 		t.Errorf("faccessat(overlay) = %d, want 0", got)
 	}
 }
@@ -678,7 +787,7 @@ func TestEpochPinnedTime(t *testing.T) {
 	k := newKernelCtxt(t)
 	k.ctx.Epoch = 1234567890
 
-	if got := k.call(SYS_clock_gettime, clockRealtime, scratch); got != 0 {
+	if got := k.call(nrClockGettime, clockRealtime, scratch); got != 0 {
 		t.Fatalf("clock_gettime = %d, want 0", got)
 	}
 	if k.cc.timespec.Sec != 1234567890 {
@@ -691,14 +800,14 @@ func TestEpochPinnedTime(t *testing.T) {
 	// Semantic fix: in Epoch mode the monotonic clocks are zero-based (boot
 	// time == epoch) instead of aliasing the wall clock — MONOTONIC measuring
 	// "seconds since 1970" was never right and made uptime checks inconsistent.
-	if got := k.call(SYS_clock_gettime, clockMonotonic, scratch); got != 0 {
+	if got := k.call(nrClockGettime, clockMonotonic, scratch); got != 0 {
 		t.Fatalf("clock_gettime(MONOTONIC) = %d, want 0", got)
 	}
 	if k.cc.timespec.Sec != 0 {
 		t.Errorf("MONOTONIC sec = %d, want 0 (pinned: boot == epoch)", k.cc.timespec.Sec)
 	}
 
-	if got := k.call(SYS_gettimeofday, scratch+0x100, 0); got != 0 {
+	if got := k.call(nrGettimeofday, scratch+0x100, 0); got != 0 {
 		t.Fatalf("gettimeofday = %d, want 0", got)
 	}
 	if k.cc.timeval.Sec != 1234567890 {
@@ -726,7 +835,7 @@ func TestClockIDDistribution(t *testing.T) {
 
 	// realtime family -> wall clock
 	for _, id := range []uint64{clockRealtime, clockRealtimeCoarse} {
-		if got := k.call(SYS_clock_gettime, id, scratch); got != 0 {
+		if got := k.call(nrClockGettime, id, scratch); got != 0 {
 			t.Fatalf("clock_gettime(%d) = %d, want 0", id, got)
 		}
 		if k.cc.timespec.Sec != wallSec {
@@ -735,7 +844,7 @@ func TestClockIDDistribution(t *testing.T) {
 	}
 	// monotonic family -> time since boot
 	for _, id := range []uint64{clockMonotonic, clockMonotonicRaw, clockMonotonicCoarse, clockBoottime} {
-		if got := k.call(SYS_clock_gettime, id, scratch); got != 0 {
+		if got := k.call(nrClockGettime, id, scratch); got != 0 {
 			t.Fatalf("clock_gettime(%d) = %d, want 0", id, got)
 		}
 		if k.cc.timespec.Sec != wantUptime {
@@ -743,14 +852,14 @@ func TestClockIDDistribution(t *testing.T) {
 		}
 	}
 	// sysinfo uptime agrees with CLOCK_BOOTTIME (cross-check consistency)
-	if got := k.call(SYS_sysinfo, scratch); got != 0 {
+	if got := k.call(nrSysinfo, scratch); got != 0 {
 		t.Fatalf("sysinfo = %d, want 0", got)
 	}
 	if k.cc.sysinfo.UptimeSec != uint64(wantUptime) {
 		t.Errorf("sysinfo uptime = %d, want %d", k.cc.sysinfo.UptimeSec, wantUptime)
 	}
 	// gettimeofday follows the wall clock
-	if got := k.call(SYS_gettimeofday, scratch, 0); got != 0 {
+	if got := k.call(nrGettimeofday, scratch, 0); got != 0 {
 		t.Fatalf("gettimeofday = %d, want 0", got)
 	}
 	if k.cc.timeval.Sec != wallSec || k.cc.timeval.Usec != 0 {
@@ -760,7 +869,7 @@ func TestClockIDDistribution(t *testing.T) {
 
 func TestEpochZeroUsesHostClock(t *testing.T) {
 	k := newKernelCtxt(t) // Epoch == 0
-	if got := k.call(SYS_clock_gettime, 0, scratch); got != 0 {
+	if got := k.call(nrClockGettime, 0, scratch); got != 0 {
 		t.Fatalf("clock_gettime = %d, want 0", got)
 	}
 	if k.cc.timespec.Sec == 0 {
@@ -772,7 +881,7 @@ func TestEpochZeroUsesHostClock(t *testing.T) {
 
 func TestExit(t *testing.T) {
 	k := newKernelCtxt(t)
-	if got := k.call(SYS_exit_group, 7); got != 0 {
+	if got := k.call(nrExitGroup, 7); got != 0 {
 		t.Fatalf("exit_group = %d, want 0", got)
 	}
 	if !k.ctx.Exited {
@@ -786,7 +895,7 @@ func TestExit(t *testing.T) {
 	}
 
 	k2 := newKernelCtxt(t)
-	k2.call(SYS_exit, 0)
+	k2.call(nrExit, 0)
 	if !k2.ctx.Exited || k2.ctx.ExitCode != 0 {
 		t.Errorf("exit(0): Exited=%v ExitCode=%d", k2.ctx.Exited, k2.ctx.ExitCode)
 	}
@@ -799,24 +908,24 @@ func TestSnapshotRestore(t *testing.T) {
 	const wpath = "/data/local/snap.bin"
 
 	// accumulate state: grow brk, open an fd, write an overlay file
-	if got := k.call(SYS_brk, BrkBase+0x2000); got != BrkBase+0x2000 {
+	if got := k.call(nrBrk, BrkBase+0x2000); got != BrkBase+0x2000 {
 		t.Fatalf("brk = %#x", uint64(got))
 	}
 	fd := k.openTestFile()
-	wfd := k.call(SYS_openat, 0, k.putStr(scratch+0x800, wpath), oWRONLY|oCREAT)
+	wfd := k.call(nrOpenat, 0, k.putStr(scratch+0x800, wpath), oWRONLY|oCREAT)
 	k.be.MemWrite(emu.GuestAddr(scratch), []byte("DATA"))
-	k.call(SYS_write, uint64(wfd), scratch, 4)
+	k.call(nrWrite, uint64(wfd), scratch, 4)
 
 	snap := k.ctx.Snapshot()
 
 	// mutate everything mutable
-	k.call(SYS_brk, BrkBase+0x5000)
+	k.call(nrBrk, BrkBase+0x5000)
 	k.openTestFile() // consumes another fd
-	k.call(SYS_read, uint64(fd), scratch+0x200, 5)
+	k.call(nrRead, uint64(fd), scratch+0x200, 5)
 	k.be.MemWrite(emu.GuestAddr(scratch), []byte("MORE"))
-	k.call(SYS_write, uint64(wfd), scratch, 4)
+	k.call(nrWrite, uint64(wfd), scratch, 4)
 	k.ctx.Exited, k.ctx.ExitCode = true, 3
-	k.call(SYS_mkdirat, 0, k.putStr(scratch+0x900, "/data/local/extra"), 0755)
+	k.call(nrMkdirat, 0, k.putStr(scratch+0x900, "/data/local/extra"), 0755)
 
 	k.ctx.Restore(snap)
 
@@ -859,7 +968,7 @@ func TestSnapshotRestore(t *testing.T) {
 
 func TestGetrandom(t *testing.T) {
 	k := newKernelCtxt(t)
-	if got := k.call(SYS_getrandom, scratch, 32, 0); got != 32 {
+	if got := k.call(nrGetrandom, scratch, 32, 0); got != 32 {
 		t.Fatalf("getrandom = %d, want 32", got)
 	}
 	first := k.memAt(scratch, 32)
@@ -870,7 +979,7 @@ func TestGetrandom(t *testing.T) {
 	// address participates, so calls at addresses sharing a low byte (e.g.
 	// page-strided buffers) produce identical streams. Flagged as a suspected
 	// weakness; this test uses addresses that differ in the low byte.
-	if got := k.call(SYS_getrandom, scratch+1, 32, 0); got != 32 {
+	if got := k.call(nrGetrandom, scratch+1, 32, 0); got != 32 {
 		t.Fatalf("getrandom #2 = %d, want 32", got)
 	}
 	if second := k.memAt(scratch+1, 32); bytes.Equal(first, second) {
@@ -884,7 +993,7 @@ func TestInfoSyscalls(t *testing.T) {
 	k := newKernelCtxt(t)
 
 	// uname: "Linux" at off 0, "aarch64" machine at off 4*65
-	if got := k.call(SYS_uname, scratch); got != 0 {
+	if got := k.call(nrUname, scratch); got != 0 {
 		t.Fatalf("uname = %d, want 0", got)
 	}
 	if got := k.memAt(scratch, 5); string(got) != "Linux" {
@@ -895,7 +1004,7 @@ func TestInfoSyscalls(t *testing.T) {
 	}
 
 	// sysinfo: totalram
-	if got := k.call(SYS_sysinfo, scratch); got != 0 {
+	if got := k.call(nrSysinfo, scratch); got != 0 {
 		t.Fatalf("sysinfo = %d, want 0", got)
 	}
 	if k.cc.sysinfo.TotalRAM != 4*1024*1024*1024 {
@@ -903,34 +1012,34 @@ func TestInfoSyscalls(t *testing.T) {
 	}
 
 	// readlinkat: known /proc symlink, truncation, unknown path
-	n := k.call(SYS_readlinkat, 0, k.putStr(scratch+0x800, "/proc/self/exe"), scratch+0x400, 256)
+	n := k.call(nrReadlinkat, 0, k.putStr(scratch+0x800, "/proc/self/exe"), scratch+0x400, 256)
 	if want := "/system/bin/app_process64"; n != int64(len(want)) || string(k.memAt(scratch+0x400, uint64(n))) != want {
 		t.Errorf("readlinkat(exe) = %d %q, want %d %q", n, k.memAt(scratch+0x400, uint64(n)), len(want), want)
 	}
-	if got := k.call(SYS_readlinkat, 0, k.putStr(scratch+0x800, "/proc/self/exe"), scratch+0x400, 4); got != 4 {
+	if got := k.call(nrReadlinkat, 0, k.putStr(scratch+0x800, "/proc/self/exe"), scratch+0x400, 4); got != 4 {
 		t.Errorf("readlinkat(truncated) = %d, want 4", got)
 	}
-	if got := k.call(SYS_readlinkat, 0, k.putStr(scratch+0x800, "/proc/self/unknown"), scratch+0x400, 256); got != -int64(ENOENT) {
+	if got := k.call(nrReadlinkat, 0, k.putStr(scratch+0x800, "/proc/self/unknown"), scratch+0x400, 256); got != -int64(ENOENT) {
 		t.Errorf("readlinkat(unknown) = %d, want %d", got, -int64(ENOENT))
 	}
 
 	// sched_getaffinity
-	if got := k.call(SYS_sched_getaffinity, 0, 0, scratch); got != -int64(EINVAL) {
+	if got := k.call(nrSchedGetaffinity, 0, 0, scratch); got != -int64(EINVAL) {
 		t.Errorf("sched_getaffinity(size 0) = %d, want %d", got, -int64(EINVAL))
 	}
-	if got := k.call(SYS_sched_getaffinity, 0, 8, scratch); got != 8 {
+	if got := k.call(nrSchedGetaffinity, 0, 8, scratch); got != 8 {
 		t.Errorf("sched_getaffinity(8) = %d, want 8", got)
 	}
 	if m := k.memAt(scratch, 8); m[0] != 0xFF {
 		t.Errorf("affinity mask[0] = %#x, want 0xFF", m[0])
 	}
 	// cpusetsize larger than 8 is clamped to 8
-	if got := k.call(SYS_sched_getaffinity, 0, 64, scratch); got != 8 {
+	if got := k.call(nrSchedGetaffinity, 0, 64, scratch); got != 8 {
 		t.Errorf("sched_getaffinity(64) = %d, want 8 (clamped)", got)
 	}
 
 	// prlimit64: RLIMIT_STACK -> 8 MiB / 8 MiB written to old rlim
-	if got := k.call(SYS_prlimit64, 0, 3, 0, scratch); got != 0 {
+	if got := k.call(nrPrlimit64, 0, 3, 0, scratch); got != 0 {
 		t.Fatalf("prlimit64 = %d, want 0", got)
 	}
 	if k.cc.rlimit.Cur != 8*1024*1024 {
@@ -940,7 +1049,7 @@ func TestInfoSyscalls(t *testing.T) {
 		t.Errorf("rlimit max = %d, want 8 MiB", k.cc.rlimit.Max)
 	}
 	// unknown resource -> infinity
-	k.call(SYS_prlimit64, 0, 99, 0, scratch)
+	k.call(nrPrlimit64, 0, 99, 0, scratch)
 	if k.cc.rlimit.Cur != ^uint64(0) {
 		t.Errorf("unknown rlimit cur = %#x, want RLIM_INFINITY", k.cc.rlimit.Cur)
 	}
@@ -952,16 +1061,16 @@ func TestInfoSyscalls(t *testing.T) {
 // returning 0 is a fingerprint anti-emulation probes check for.
 func TestCloseUnknownFdEBADF(t *testing.T) {
 	k := newKernelCtxt(t)
-	if got := k.call(SYS_close, 0xdead); got != -int64(EBADF) {
+	if got := k.call(nrClose, 0xdead); got != -int64(EBADF) {
 		t.Errorf("close(0xdead) = %d, want %d", got, -int64(EBADF))
 	}
 	// a real close still works afterwards
 	fd := k.openTestFile()
-	if got := k.call(SYS_close, uint64(fd)); got != 0 {
+	if got := k.call(nrClose, uint64(fd)); got != 0 {
 		t.Errorf("close(open fd) = %d, want 0", got)
 	}
 	// and the second close of the now-closed fd is EBADF again
-	if got := k.call(SYS_close, uint64(fd)); got != -int64(EBADF) {
+	if got := k.call(nrClose, uint64(fd)); got != -int64(EBADF) {
 		t.Errorf("double close = %d, want %d", got, -int64(EBADF))
 	}
 }
@@ -972,17 +1081,17 @@ func TestCloseUnknownFdEBADF(t *testing.T) {
 func TestWritevHonorsPosition(t *testing.T) {
 	k := newKernelCtxt(t)
 	const wpath = "/data/local/posiov.bin"
-	fd := k.call(SYS_openat, 0, k.putStr(scratch+0x800, wpath), oWRONLY|oCREAT)
+	fd := k.call(nrOpenat, 0, k.putStr(scratch+0x800, wpath), oWRONLY|oCREAT)
 	if fd < 0 {
 		t.Fatalf("openat = %d", fd)
 	}
 	// write "0123456789" (10 bytes) at pos 0
 	k.be.MemWrite(emu.GuestAddr(scratch+0x1000), []byte("0123456789"))
-	if got := k.call(SYS_write, uint64(fd), scratch+0x1000, 10); got != 10 {
+	if got := k.call(nrWrite, uint64(fd), scratch+0x1000, 10); got != 10 {
 		t.Fatalf("write = %d, want 10", got)
 	}
 	// seek to 3, then writev {"AB",2},{"CD",2} — must overwrite bytes 3..7
-	k.call(SYS_lseek, uint64(fd), 3, 0)
+	k.call(nrLseek, uint64(fd), 3, 0)
 	k.be.MemWrite(emu.GuestAddr(scratch+0x1000), []byte("AB"))
 	k.be.MemWrite(emu.GuestAddr(scratch+0x1100), []byte("CD"))
 	var iov [32]byte
@@ -991,12 +1100,12 @@ func TestWritevHonorsPosition(t *testing.T) {
 	binary.LittleEndian.PutUint64(iov[16:], scratch+0x1100)
 	binary.LittleEndian.PutUint64(iov[24:], 2)
 	k.be.MemWrite(emu.GuestAddr(scratch+0x1200), iov[:])
-	if got := k.call(SYS_writev, uint64(fd), scratch+0x1200, 2); got != 4 {
+	if got := k.call(nrWritev, uint64(fd), scratch+0x1200, 2); got != 4 {
 		t.Fatalf("writev = %d, want 4", got)
 	}
 	// read the whole file back: "012ABC789"
-	fd2 := k.call(SYS_openat, 0, k.putStr(scratch+0x1400, wpath), 0)
-	if got := k.call(SYS_read, uint64(fd2), scratch+0x200, 16); got != 10 {
+	fd2 := k.call(nrOpenat, 0, k.putStr(scratch+0x1400, wpath), 0)
+	if got := k.call(nrRead, uint64(fd2), scratch+0x200, 16); got != 10 {
 		t.Fatalf("read back = %d, want 10", got)
 	}
 	if got := string(k.memAt(scratch+0x200, 10)); got != "012ABCD789" {
@@ -1009,11 +1118,11 @@ func TestWritevHonorsPosition(t *testing.T) {
 func TestGetrandomDeterministicVaries(t *testing.T) {
 	k := newKernelCtxt(t)
 	const buf = scratch + 0x800
-	if got := k.call(SYS_getrandom, buf, 32, 0); got != 32 {
+	if got := k.call(nrGetrandom, buf, 32, 0); got != 32 {
 		t.Fatalf("getrandom = %d, want 32", got)
 	}
 	first := k.memAt(buf, 32)
-	if got := k.call(SYS_getrandom, buf, 32, 0); got != 32 {
+	if got := k.call(nrGetrandom, buf, 32, 0); got != 32 {
 		t.Fatalf("getrandom = %d, want 32", got)
 	}
 	second := k.memAt(buf, 32)
@@ -1068,7 +1177,7 @@ func TestHandlersReturnPureResults(t *testing.T) {
 	}
 
 	// SysWrite on a writable overlay fd: pure Value, no registers
-	wfd := k.call(SYS_openat, 0, k.putStr(scratch+0x800, "/data/local/pure.bin"), oWRONLY|oCREAT)
+	wfd := k.call(nrOpenat, 0, k.putStr(scratch+0x800, "/data/local/pure.bin"), oWRONLY|oCREAT)
 	k.be.MemWrite(emu.GuestAddr(scratch), []byte("XY"))
 	k.be.regReads, k.be.regWrites = 0, 0
 	res = SysWrite(k.ctx, frame(uint64(wfd), scratch, 2))

@@ -41,7 +41,7 @@ func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 		kctx: &kernel.Context{
 			B: be, Mem: mem, VFS: fs, Pid: defaultPid,
 			Transport: android.LinuxARM64Transport{},
-			Table:     android.NewSyscallTable(),
+			Table:     android.NewARM64SyscallTable(kernel.DefaultHandlers()),
 			Codecs:    android.AsmGenericLP64Codecs{},
 		},
 	}

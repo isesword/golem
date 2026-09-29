@@ -32,7 +32,7 @@ func (b *regBE) RegWrite(r emu.Reg, v uint64) error { b.regs[r] = v; b.writes[r]
 
 func TestTransportDecode(t *testing.T) {
 	be := newRegBE()
-	be.regs[arm64.X8] = kernel.SYS_mmap
+	be.regs[arm64.X8] = SYS_mmap
 	for i, r := range []emu.Reg{arm64.X0, arm64.X1, arm64.X2, arm64.X3, arm64.X4, arm64.X5} {
 		be.regs[r] = uint64(0x100 * (i + 1))
 	}
@@ -40,8 +40,8 @@ func TestTransportDecode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.Num != kernel.SYS_mmap {
-		t.Errorf("Num = %d, want %d (x8)", f.Num, kernel.SYS_mmap)
+	if f.Num != SYS_mmap {
+		t.Errorf("Num = %d, want %d (x8)", f.Num, SYS_mmap)
 	}
 	if f.NArg != 6 {
 		t.Errorf("NArg = %d, want 6", f.NArg)
@@ -107,7 +107,7 @@ func TestDispatchEndToEnd(t *testing.T) {
 	ctx := &kernel.Context{
 		B: be, Pid: 4242,
 		Transport: LinuxARM64Transport{},
-		Table:     NewSyscallTable(),
+		Table:     NewARM64SyscallTable(kernel.DefaultHandlers()),
 		Codecs:    AsmGenericLP64Codecs{},
 	}
 
@@ -117,7 +117,7 @@ func TestDispatchEndToEnd(t *testing.T) {
 		t.Fatalf("unimplemented syscall x0 = %#x, want %#x (-ENOSYS)", be.regs[arm64.X0], want)
 	}
 
-	be.regs[arm64.X8] = kernel.SYS_getpid
+	be.regs[arm64.X8] = SYS_getpid
 	ctx.Dispatch()
 	if be.regs[arm64.X0] != 4242 {
 		t.Fatalf("getpid x0 = %d, want 4242", be.regs[arm64.X0])

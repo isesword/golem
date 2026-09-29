@@ -451,7 +451,7 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 		// today), not hardcoded in the kernel. TODO(P4): resolve from
 		// Config.Platform once functional options land.
 		Transport: android.LinuxARM64Transport{},
-		Table:     android.NewSyscallTable(),
+		Table:     android.NewARM64SyscallTable(kernel.DefaultHandlers()),
 		Codecs:    android.AsmGenericLP64Codecs{},
 	}
 	// A device profile anchors the monotonic clock at the persona's boot time

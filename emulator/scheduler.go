@@ -5,6 +5,7 @@ import (
 
 	"github.com/isesword/golem/internal/emu"
 	"github.com/isesword/golem/internal/kernel"
+	"github.com/isesword/golem/internal/platform/android"
 )
 
 // This file is golem's cooperative thread scheduler — the green-thread runtime
@@ -46,9 +47,10 @@ const (
 	yieldSleep
 )
 
-// The syscall numbers the scheduler intercepts to drive switching are the
-// platform table's (kernel.SYS_futex / SYS_nanosleep / SYS_clock_nanosleep);
-// only the futex op bits stay local (they are scheduler policy, not table data).
+// The syscall numbers the scheduler intercepts to drive switching come from
+// the Android/AArch64 platform table (android.SYS_futex / SYS_nanosleep /
+// SYS_clock_nanosleep); only the futex op bits stay local (they are scheduler
+// policy, not table data).
 const (
 	futexOpWait = 0
 	futexOpWake = 1
@@ -271,7 +273,7 @@ func (e *Emulator) handleSchedSyscall(b emu.Backend, f *kernel.SyscallFrame) boo
 		_ = e.kctx.Transport.EncodeResult(b, res)
 	}
 	switch f.Num {
-	case kernel.SYS_futex:
+	case android.SYS_futex:
 		uaddr, op := f.Args[0], f.Args[1]
 		switch op & 0x7f {
 		case futexOpWake:
@@ -286,7 +288,7 @@ func (e *Emulator) handleSchedSyscall(b emu.Backend, f *kernel.SyscallFrame) boo
 			encode(kernel.Result{})
 		}
 		return true
-	case kernel.SYS_nanosleep, kernel.SYS_clock_nanosleep:
+	case android.SYS_nanosleep, android.SYS_clock_nanosleep:
 		encode(kernel.Result{})
 		if e.curFiber != nil {
 			e.yieldReason = yieldSleep
