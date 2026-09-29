@@ -51,10 +51,11 @@ long guest_getpid(void) {
 // An UNIMPLEMENTED Darwin syscall: number 0x7fff, table miss → ENOSYS. The
 // Darwin encoding carries failure as carry-set + errno in x0 (positive); the
 // guest observes both and packs them for the test: (carry << 32) | errno.
+// NOTE: the condition is hs (C set) — "lo" would be C CLEAR (the inverse).
 long guest_bogus_syscall(void) {
     register long x16 __asm__("x16") = 0x7fff;
     long ret, carry;
-    __asm__ volatile("svc #0x80\n\tcset %w1, lo"
+    __asm__ volatile("svc #0x80\n\tcset %w1, hs"
                      : "=r"(ret), "=r"(carry)
                      : "r"(x16)
                      : "memory");
