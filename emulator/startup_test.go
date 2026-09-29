@@ -6,7 +6,20 @@ import (
 	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/arch/arm64"
 	"github.com/isesword/golem/internal/emu"
+	"github.com/isesword/golem/internal/platform/android"
 )
+
+// androidStartup asserts the emulator's StartupABI is the Android one — these
+// tests exercise the bionic getauxval path, which only exists on Android
+// (P5b: Darwin's StartupABI has no auxv).
+func androidStartup(t *testing.T, e *Emulator) *android.StartupABI {
+	t.Helper()
+	as, ok := e.startup.(*android.StartupABI)
+	if !ok {
+		t.Fatalf("startup = %T, want *android.StartupABI", e.startup)
+	}
+	return as
+}
 
 // auxvBE is a minimal emu.Backend for hostGetauxval tests: programmable
 // argument registers, recorded register writes, and a byte-addressable guest
@@ -86,16 +99,16 @@ func TestGetauxvalServesStartupABIVector(t *testing.T) {
 		if got := getauxval(t, e, be, typ); got != want {
 			t.Fatalf("getauxval(%d) = %#x, want %#x", typ, got, want)
 		}
-		if got := getauxval(t, e, be, typ); got != e.startup.Lookup(typ) {
+		if got := getauxval(t, e, be, typ); got != androidStartup(t, e).Lookup(typ) {
 			t.Fatalf("getauxval(%d) = %#x, StartupABI vector carries %#x — same-source invariant broken",
-				typ, got, e.startup.Lookup(typ))
+				typ, got, androidStartup(t, e).Lookup(typ))
 		}
 	}
 
 	// AT_RANDOM: a pointer into the block, 16 written non-zero bytes.
 	rnd := getauxval(t, e, be, auxvRandom)
-	if rnd == 0 || rnd != uint64(e.startup.ATRandom()) {
-		t.Fatalf("getauxval(AT_RANDOM) = %#x, StartupABI ATRandom = %#x", rnd, e.startup.ATRandom())
+	if rnd == 0 || rnd != uint64(androidStartup(t, e).ATRandom()) {
+		t.Fatalf("getauxval(AT_RANDOM) = %#x, StartupABI ATRandom = %#x", rnd, androidStartup(t, e).ATRandom())
 	}
 	nonZero := false
 	for i := uint64(0); i < 16; i++ {

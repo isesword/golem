@@ -11,6 +11,7 @@ import (
 	"github.com/isesword/golem/internal/memory"
 	"github.com/isesword/golem/internal/platform"
 	"github.com/isesword/golem/internal/platform/android"
+	"github.com/isesword/golem/internal/platform/darwin"
 	"github.com/isesword/golem/internal/target"
 )
 
@@ -21,52 +22,74 @@ import (
 type Option func(*Config) error
 
 // WithPlatformConfig supplies the platform personality's typed configuration
-// (e.g. android.NewConfig(android.WithJNI(...), android.WithDexPath(...))).
-// It is mutually exclusive with the deprecated Config.Android field: setting
-// both fails New with an error instead of silently picking one.
+// (e.g. android.NewConfig(android.WithJNI(...), android.WithDexPath(...)) or
+// darwin.NewConfig(darwin.WithReplaceFns(...))). It is mutually exclusive
+// with the deprecated Config.Android field: setting both fails New with an
+// error instead of silently picking one.
 //
-// Until P5 the only supported platform is Android, so the config must be an
-// *android.Config (checked once here, at the option boundary — the core
-// never dispatches platform configs via any + type-switch).
+// Supported configs (checked once here, at the option boundary — the core
+// never dispatches platform configs via any + type-switch): *android.Config
+// and *darwin.Config (P5b). The config's platform must match the platform the
+// SOPath probe derives — a mismatch fails New in the normalization step.
 func WithPlatformConfig(c platform.Config) Option {
 	return func(cfg *Config) error {
 		if c == nil {
 			return errors.New("emulator: WithPlatformConfig(nil)")
 		}
-		ac, ok := c.(*android.Config)
-		if !ok {
-			return fmt.Errorf("emulator: unsupported platform config %T (platform %s); only android.Config exists until P5", c, c.PlatformID())
+		switch pc := c.(type) {
+		case *android.Config:
+			cfg.acfg = pc
+		case *darwin.Config:
+			cfg.dcfg = pc
+		default:
+			return fmt.Errorf("emulator: unsupported platform config %T (platform %s)", c, c.PlatformID())
 		}
-		cfg.acfg = ac
 		return nil
 	}
 }
 
-// normalizeAndroidConfig is the options-normalization step of the boot
+// normalizePlatformConfig is the options-normalization step of the boot
 // sequence (DESIGN.md §4, step 1) and the ONE place the deprecated
-// Config.Android field is read (the legacy shim): it converts the legacy
-// struct into an android.Config exactly once, stores the result back into
-// cfg.acfg so runtime code has a single read site, and no internal code
-// touches Config.Android afterwards.
+// Config.Android field is read (the legacy shim). It runs AFTER the probe
+// (resolveTarget), because the platform the config speaks for must match the
+// probed platform: an android.Config with a Mach-O target (or a
+// darwin.Config with an ELF target) is a boot-time error, not a silent
+// mis-wiring.
 //
-// Precedence: an explicit WithPlatformConfig wins; Config.Android is then
-// required to be zero (setting both is an ambiguity error, not a silent
-// override). With neither, the Android defaults (all-zero Config) apply.
-func normalizeAndroidConfig(cfg *Config) (*android.Config, error) {
-	if cfg.acfg != nil {
-		if legacy := legacyAndroidUsed(cfg.Android); legacy {
-			return nil, errors.New("emulator: Config.Android (deprecated) and WithPlatformConfig are mutually exclusive; move the AndroidConfig fields to android.NewConfig options")
+// Android precedence: an explicit WithPlatformConfig wins; Config.Android is
+// then required to be zero (setting both is an ambiguity error, not a silent
+// override). With neither, the platform defaults (all-zero Config) apply.
+func normalizePlatformConfig(cfg *Config, tgt *target.Target) (*android.Config, *darwin.Config, error) {
+	switch tgt.Platform {
+	case platform.Android:
+		if cfg.dcfg != nil {
+			return nil, nil, fmt.Errorf("emulator: WithPlatformConfig(darwin.Config) but %s probes as android (ELF); the platform config must match the guest platform", cfg.SOPath)
 		}
-		return cfg.acfg, nil
+		if cfg.acfg != nil {
+			if legacy := legacyAndroidUsed(cfg.Android); legacy {
+				return nil, nil, errors.New("emulator: Config.Android (deprecated) and WithPlatformConfig are mutually exclusive; move the AndroidConfig fields to android.NewConfig options")
+			}
+			return cfg.acfg, nil, nil
+		}
+		cfg.acfg = android.NewConfig(
+			android.WithJNI(cfg.Android.JNI),
+			android.WithDexPath(cfg.Android.DexPath),
+			android.WithReplaceFns(legacyReplaceFns(cfg.Android.ReplaceFns)),
+			android.WithPropertyProvider(cfg.Android.PropertyProvider),
+			android.WithProfile(cfg.Android.Profile),
+		)
+		return cfg.acfg, nil, nil
+	case platform.Darwin:
+		if cfg.acfg != nil || legacyAndroidUsed(cfg.Android) {
+			return nil, nil, fmt.Errorf("emulator: android platform config but %s probes as darwin (Mach-O); the platform config must match the guest platform", cfg.SOPath)
+		}
+		if cfg.dcfg == nil {
+			cfg.dcfg = darwin.NewConfig()
+		}
+		return nil, cfg.dcfg, nil
+	default:
+		return nil, nil, fmt.Errorf("emulator: no platform-config normalization for platform %s", tgt.Platform)
 	}
-	cfg.acfg = android.NewConfig(
-		android.WithJNI(cfg.Android.JNI),
-		android.WithDexPath(cfg.Android.DexPath),
-		android.WithReplaceFns(legacyReplaceFns(cfg.Android.ReplaceFns)),
-		android.WithPropertyProvider(cfg.Android.PropertyProvider),
-		android.WithProfile(cfg.Android.Profile),
-	)
-	return cfg.acfg, nil
 }
 
 // legacyAndroidUsed reports whether any field of the deprecated AndroidConfig
@@ -101,12 +124,14 @@ func legacyReplaceFns(fns map[string]func(h *Hook) uint64) map[string]interpose.
 //
 // Arch precedence: an explicit Config.Arch wins over the probed header;
 // without either, everything is ARM64 (the pre-P4 default). Platform is
-// always Android and the format ELF unless the probe says otherwise — those
-// constants are the P5 extension points (darwin/Mach-O), not new semantics.
+// DERIVED FROM THE PROBED FORMAT (P5b): Mach-O -> Darwin, ELF -> Android;
+// without an SOPath there is nothing to probe and the pre-P5 default
+// (Android) applies.
 func resolveTarget(cfg Config) (*target.Target, error) {
 	id := cfg.Arch
 	variant := arch.VariantGeneric
-	format := loader.FormatELF // P5: Mach-O arrives via the probe below
+	format := loader.FormatELF
+	plat := platform.Android // pre-P5 default; the probe may refine it
 	if cfg.SOPath != "" {
 		fh, err := os.Open(cfg.SOPath)
 		if err != nil {
@@ -119,6 +144,9 @@ func resolveTarget(cfg Config) (*target.Target, error) {
 		}
 		format = f
 		variant = probedVariant
+		if f == loader.FormatMachO {
+			plat = platform.Darwin
+		}
 		if id == 0 {
 			id = probedID
 		}
@@ -130,10 +158,10 @@ func resolveTarget(cfg Config) (*target.Target, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Platform is hard-coded Android today (P5b adds Darwin); it is carried
-	// in the Target so no lower layer ever re-derives it. Features (P4d) is
-	// the quad's CPUFeatures — the single HWCAP source of truth the platform
-	// StartupABI and the interposed getauxval both derive from.
+	// The platform is carried in the Target so no lower layer ever re-derives
+	// it. Features (P4d) is the quad's CPUFeatures — the single HWCAP source
+	// of truth the Android StartupABI and the interposed getauxval both
+	// derive from (the Darwin StartupABI deliberately never consults it).
 	return &target.Target{
 		ID:       id,
 		Arch:     cpuArch,
@@ -141,7 +169,7 @@ func resolveTarget(cfg Config) (*target.Target, error) {
 		Stubs:    stubEnc,
 		Features: feats,
 		Format:   format,
-		Platform: platform.Android,
+		Platform: plat,
 		Variant:  variant,
 	}, nil
 }
@@ -150,14 +178,16 @@ func resolveTarget(cfg Config) (*target.Target, error) {
 // P4c): the target's platform personality plans the initial guest address
 // space from the arch's address-space capabilities plus user overrides. The
 // result is pure data — backend mappings and AddressSpace state are built
-// from it later, never inside the policy. Android is the only platform until
-// P5b, so the policy is bound here at the composition root (same shape as
-// the Transport/Table/Codecs injection in New).
+// from it later, never inside the policy. The platform-keyed policy selection
+// is bound here at the composition root (same shape as the
+// Transport/Table/Codecs injection in New).
 func resolveLayout(tgt *target.Target, overrides platform.LayoutOverrides) (memory.Layout, error) {
 	info := platform.TargetInfo{Platform: tgt.Platform, Caps: tgt.Arch.Caps()}
 	switch tgt.Platform {
 	case platform.Android:
 		return android.LayoutPolicy{}.Resolve(info, overrides)
+	case platform.Darwin:
+		return darwin.LayoutPolicy{}.Resolve(info, overrides)
 	default:
 		return memory.Layout{}, fmt.Errorf("emulator: no LayoutPolicy for platform %s", tgt.Platform)
 	}

@@ -9,11 +9,13 @@ import (
 	_ "github.com/isesword/golem/internal/loader/elf/arm64" // (FormatELF, ArchARM64) relocator
 	_ "github.com/isesword/golem/internal/loader/elf/amd64" // (FormatELF, ArchAMD64) relocator (P5a)
 
+	// P5b: the Mach-O container — parser + (FormatMachO, ArchARM64)
+	// relocator. Darwin boots are proven end-to-end by the unicorn-tagged
+	// acceptance chain (boot_darwin_arm64_unicorn_test.go).
+	_ "github.com/isesword/golem/internal/loader/macho"
+	_ "github.com/isesword/golem/internal/loader/macho/arm64"
+
 	// P5a: register the AMD64 (Arch, CallABI, StubEncoder, CPUFeatures) quad.
-	// (The ARM64 quad arrives via debugger.go's functional import.) Note the
-	// emulator's own boot flow is still ARM64-shaped this stage (LR-sentinel
-	// call setup, svc trap handler) — the registration only makes
-	// arch.Resolve(IDAMD64) answer; AMD64 assembly is proven component-level
-	// in platform/android's acceptance-chain test.
+	// (The ARM64 quad arrives via debugger.go's functional import.)
 	_ "github.com/isesword/golem/internal/arch/amd64"
 )

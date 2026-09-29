@@ -13,7 +13,16 @@ import (
 	"github.com/isesword/golem/internal/loader"
 	"github.com/isesword/golem/internal/platform"
 	"github.com/isesword/golem/internal/platform/android"
+	"github.com/isesword/golem/internal/platform/darwin"
 	"github.com/isesword/golem/internal/profile"
+	"github.com/isesword/golem/internal/target"
+)
+
+// androidNormTarget / darwinNormTarget are the minimal probed targets the
+// platform-config normalization needs (only .Platform is consulted).
+var (
+	androidNormTarget = &target.Target{Platform: platform.Android}
+	darwinNormTarget  = &target.Target{Platform: platform.Darwin}
 )
 
 // ---- legacy shim ------------------------------------------------------------
@@ -36,7 +45,7 @@ func TestLegacyShimEquivalence(t *testing.T) {
 		PropertyProvider: provider,
 		Profile:          prof,
 	}}
-	shimmed, err := normalizeAndroidConfig(&cfg)
+	shimmed, _, err := normalizePlatformConfig(&cfg, androidNormTarget)
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
@@ -87,7 +96,7 @@ func TestLegacyShimEquivalence(t *testing.T) {
 // TestLegacyShimZeroConfig: neither legacy field nor option → zero android.Config.
 func TestLegacyShimZeroConfig(t *testing.T) {
 	cfg := Config{}
-	acfg, err := normalizeAndroidConfig(&cfg)
+	acfg, _, err := normalizePlatformConfig(&cfg, androidNormTarget)
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
@@ -105,26 +114,69 @@ func TestLegacyShimConflict(t *testing.T) {
 	if err := opt(&cfg); err != nil {
 		t.Fatalf("apply option: %v", err)
 	}
-	if _, err := normalizeAndroidConfig(&cfg); err == nil {
+	if _, _, err := normalizePlatformConfig(&cfg, androidNormTarget); err == nil {
 		t.Fatal("legacy field + WithPlatformConfig must be an ambiguity error")
 	}
 }
 
-// TestWithPlatformConfigValidation: nil and non-Android platform configs are
-// rejected at the option boundary.
+// TestWithPlatformConfigValidation: nil and unknown platform configs are
+// rejected at the option boundary; android and darwin (P5b) configs are
+// accepted.
 func TestWithPlatformConfigValidation(t *testing.T) {
 	var cfg Config
 	if err := WithPlatformConfig(nil)(&cfg); err == nil {
 		t.Fatal("WithPlatformConfig(nil) must error")
 	}
 	if err := WithPlatformConfig(fakePlatformConfig{})(&cfg); err == nil {
-		t.Fatal("non-android platform config must error until P5")
+		t.Fatal("an unknown platform config implementation must error")
 	}
 	if err := WithPlatformConfig(android.NewConfig())(&cfg); err != nil {
 		t.Fatalf("android config must be accepted: %v", err)
 	}
 	if cfg.acfg == nil {
 		t.Fatal("accepted config must land in cfg.acfg")
+	}
+	cfg = Config{}
+	if err := WithPlatformConfig(darwin.NewConfig())(&cfg); err != nil {
+		t.Fatalf("darwin config must be accepted (P5b): %v", err)
+	}
+	if cfg.dcfg == nil {
+		t.Fatal("accepted config must land in cfg.dcfg")
+	}
+}
+
+// TestNormalizePlatformMismatch: the platform config must match the PROBED
+// target platform — a mismatch is a boot-time error, never a silent mis-wire.
+func TestNormalizePlatformMismatch(t *testing.T) {
+	// darwin config with an android (ELF) target.
+	cfg := Config{}
+	if err := WithPlatformConfig(darwin.NewConfig())(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := normalizePlatformConfig(&cfg, androidNormTarget); err == nil {
+		t.Fatal("darwin config + android target must error")
+	}
+	// explicit android config with a darwin (Mach-O) target.
+	cfg = Config{}
+	if err := WithPlatformConfig(android.NewConfig())(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := normalizePlatformConfig(&cfg, darwinNormTarget); err == nil {
+		t.Fatal("android config + darwin target must error")
+	}
+	// the legacy Config.Android field with a darwin target.
+	cfg = Config{Android: AndroidConfig{DexPath: "/x.dex"}}
+	if _, _, err := normalizePlatformConfig(&cfg, darwinNormTarget); err == nil {
+		t.Fatal("legacy Android field + darwin target must error")
+	}
+	// darwin target with no config at all: the platform defaults apply.
+	cfg = Config{}
+	_, dcfg, err := normalizePlatformConfig(&cfg, darwinNormTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dcfg == nil || cfg.dcfg != dcfg {
+		t.Fatal("darwin defaults must be built and stored into cfg.dcfg (single read site)")
 	}
 }
 
@@ -224,6 +276,37 @@ func TestResolveTargetSniffProbe(t *testing.T) {
 	}
 	if tgt.Format != loader.FormatELF {
 		t.Fatalf("probed format = %v, want elf", tgt.Format)
+	}
+}
+
+// writeMachOARM64Header writes just enough of a 64-bit little-endian Mach-O
+// header for loader.Sniff: MH_MAGIC_64, cputype=ARM64, cpusubtype=ARM64_ALL.
+func writeMachOARM64Header(t *testing.T) string {
+	t.Helper()
+	var hdr [12]byte
+	binary.LittleEndian.PutUint32(hdr[0:], 0xfeedfacf) // MH_MAGIC_64
+	binary.LittleEndian.PutUint32(hdr[4:], 0x0100000c) // CPU_TYPE_ARM64
+	// cpusubtype 0 = CPU_SUBTYPE_ARM64_ALL
+	p := filepath.Join(t.TempDir(), "libprobe.dylib")
+	if err := os.WriteFile(p, hdr[:], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// TestResolveTargetMachOProbeIsDarwin: the platform is DERIVED from the
+// probed format (P5b) — a Mach-O header flips the target to Darwin, and the
+// Mach-O cputype maps onto the SAME arch id the ELF probe reports.
+func TestResolveTargetMachOProbeIsDarwin(t *testing.T) {
+	tgt, err := resolveTarget(Config{SOPath: writeMachOARM64Header(t)})
+	if err != nil {
+		t.Fatalf("resolveTarget: %v", err)
+	}
+	if tgt.Format != loader.FormatMachO || tgt.Platform != platform.Darwin {
+		t.Fatalf("Mach-O target = (%v, %v), want (macho, darwin)", tgt.Format, tgt.Platform)
+	}
+	if tgt.ID != arch.IDARM64 {
+		t.Fatalf("Mach-O arm64 cputype must map to the same arch id as ELF, got %v", tgt.ID)
 	}
 }
 

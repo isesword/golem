@@ -5,6 +5,7 @@ import (
 
 	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/emu"
+	"github.com/isesword/golem/internal/platform/android"
 )
 
 // registerHostFns registers libc functions we implement in Go because bionic's
@@ -124,8 +125,11 @@ func hostGetauxval(e *Emulator, b emu.Backend) {
 		if e.cfg.Verbose {
 			fmt.Printf("[getauxval] startup build failed: %v\n", err)
 		}
-	} else {
-		v = e.startup.Lookup(t)
+	} else if as, ok := e.startup.(*android.StartupABI); ok {
+		v = as.Lookup(t)
 	}
+	// The assertion holds by construction: getauxval is a bionic host
+	// function, registered (registerHostFns) only on Android boots; Darwin's
+	// StartupABI has no auxv to look up (P5b).
 	e.hostResult(b, v)
 }
