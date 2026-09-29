@@ -132,14 +132,15 @@ func newSharedEmu(t *testing.T, be emu.Backend, plan *loader.Plan, content []byt
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Emulator{
-		be:       be,
-		replaced: map[uint64]hostFn{},
-		shared: []sharedRange{{
-			addr: 0x1000, size: uint64(len(content)),
-			plan: plan, mapIdx: 0, hostPtr: ptr, hostLen: sz,
-		}},
-	}
+	// Full personality injection via the shared test constructor; the
+	// privatize/Replace paths under test only touch be/shared/replaced, but
+	// a bare &Emulator{} would leave transport/table/codec nil (P2).
+	e := newTestEmulator(t, be)
+	e.shared = []sharedRange{{
+		addr: 0x1000, size: uint64(len(content)),
+		plan: plan, mapIdx: 0, hostPtr: ptr, hostLen: sz,
+	}}
+	return e
 }
 
 // --- privatize fault isolation: success / recoverable / tracked-as-shared ---

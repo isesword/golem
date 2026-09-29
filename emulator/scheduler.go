@@ -3,8 +3,8 @@ package emulator
 import (
 	"fmt"
 
-	"github.com/isesword/golem/internal/arch/arm64"
 	"github.com/isesword/golem/internal/emu"
+	"github.com/isesword/golem/internal/kernel"
 )
 
 // This file is golem's cooperative thread scheduler — the green-thread runtime
@@ -46,13 +46,12 @@ const (
 	yieldSleep
 )
 
-// AArch64 syscall numbers the scheduler intercepts to drive switching.
+// The syscall numbers the scheduler intercepts to drive switching are the
+// platform table's (kernel.SYS_futex / SYS_nanosleep / SYS_clock_nanosleep);
+// only the futex op bits stay local (they are scheduler policy, not table data).
 const (
-	sysNRfutex          = 98
-	sysNRnanosleep      = 101
-	sysNRclockNanosleep = 115
-	futexOpWait         = 0
-	futexOpWake         = 1
+	futexOpWait = 0
+	futexOpWake = 1
 )
 
 // fiber is one guest thread spawned via pthread_create.
@@ -244,30 +243,33 @@ func (e *Emulator) wakeFutex(uaddr uint64) int {
 // handled the syscall (so the kernel layer is skipped). futex WAKE is honored on
 // any thread; WAIT/sleep only suspend a fiber (the main thread never blocks).
 //
-// NOTE: the X0/X1 reads and X0 writes below are SYSCALL-TRANSPORT register
-// access (number in X8, args in X0.., result to X0), not the plain calling
-// convention — they stay hardcoded until P2 moves them into
-// platform.SyscallABI.
-func (e *Emulator) handleSchedSyscall(b emu.Backend, num uint64) bool {
-	switch num {
-	case sysNRfutex:
-		uaddr, _ := b.RegRead(arm64.X0)
-		op, _ := b.RegRead(arm64.X1)
+// P2: the frame arrives pre-decoded by the platform syscall transport
+// (onInterrupt decodes once per trap), and results are written back through
+// the same transport — no syscall-register identities (X8/X0/X1) appear here
+// anymore. The interception SEMANTICS are unchanged: the scheduler answers
+// these syscalls itself and the kernel table never sees them.
+func (e *Emulator) handleSchedSyscall(b emu.Backend, f *kernel.SyscallFrame) bool {
+	encode := func(res kernel.Result) {
+		_ = e.kctx.Transport.EncodeResult(b, res)
+	}
+	switch f.Num {
+	case kernel.SYS_futex:
+		uaddr, op := f.Args[0], f.Args[1]
 		switch op & 0x7f {
 		case futexOpWake:
-			_ = b.RegWrite(arm64.X0, uint64(e.wakeFutex(uaddr)))
+			encode(kernel.Result{Value: uint64(e.wakeFutex(uaddr))})
 		case futexOpWait:
-			_ = b.RegWrite(arm64.X0, 0) // resume as if woken
+			encode(kernel.Result{}) // resume as if woken
 			if e.curFiber != nil {
 				e.yieldReason, e.yieldAddr = yieldFutexWait, uaddr
 				_ = b.Stop()
 			}
 		default:
-			_ = b.RegWrite(arm64.X0, 0)
+			encode(kernel.Result{})
 		}
 		return true
-	case sysNRnanosleep, sysNRclockNanosleep:
-		_ = b.RegWrite(arm64.X0, 0)
+	case kernel.SYS_nanosleep, kernel.SYS_clock_nanosleep:
+		encode(kernel.Result{})
 		if e.curFiber != nil {
 			e.yieldReason = yieldSleep
 			_ = b.Stop()

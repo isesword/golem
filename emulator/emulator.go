@@ -21,11 +21,11 @@ import (
 
 	"github.com/isesword/golem/dvm"
 	"github.com/isesword/golem/internal/arch"
-	"github.com/isesword/golem/internal/arch/arm64"
 	"github.com/isesword/golem/internal/emu"
 	"github.com/isesword/golem/internal/kernel"
 	"github.com/isesword/golem/internal/loader"
 	"github.com/isesword/golem/internal/memory"
+	"github.com/isesword/golem/internal/platform/android"
 	"github.com/isesword/golem/internal/profile"
 	"github.com/isesword/golem/internal/vfs"
 )
@@ -377,7 +377,16 @@ func New(cfg Config) (e *Emulator, err error) {
 			})
 		}
 	} // libc functions we implement in Go (need no libc init)
-	e.kctx = &kernel.Context{B: be, Mem: e.mem, VFS: e.fs, Pid: pid, Verbose: cfg.Verbose, Epoch: cfg.Epoch}
+	e.kctx = &kernel.Context{
+		B: be, Mem: e.mem, VFS: e.fs, Pid: pid, Verbose: cfg.Verbose, Epoch: cfg.Epoch,
+		// P2: the syscall transport ABI, dispatch table and guest struct
+		// codecs are injected platform personality (Android / AArch64 Linux
+		// today), not hardcoded in the kernel. TODO(P4): resolve from
+		// Config.Platform once functional options land.
+		Transport: android.LinuxARM64Transport{},
+		Table:     android.NewSyscallTable(),
+		Codecs:    android.AsmGenericLP64Codecs{},
+	}
 	// A device profile anchors the monotonic clock at the persona's boot time
 	// and serves live battery sysfs. Epoch keeps winning (kernel.clock checks
 	// it first), so deterministic signing runs are unaffected.
@@ -650,9 +659,20 @@ func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
 		_ = b.RegWrite(e.retReg, 0) // optimistic default
 		return
 	}
+	// Real guest syscall: decode the frame ONCE via the injected platform
+	// transport (no register identities in the emulator), let the scheduler
+	// intercept futex/nanosleep to drive cooperative switching, then hand the
+	// frame to the kernel dispatcher.
+	frame, err := e.kctx.Transport.Decode(b)
+	if err != nil {
+		if e.cfg.Verbose {
+			fmt.Printf("[syscall] decode failed: %v\n", err)
+		}
+		return
+	}
 	// Scheduler hooks (futex / nanosleep) drive cooperative switching — futex
 	// WAKE wakes parked fibers regardless of caller; WAIT/sleep yield a fiber.
-	if num, _ := b.RegRead(arm64.X8); e.handleSchedSyscall(b, num) {
+	if e.handleSchedSyscall(b, &frame) {
 		return
 	}
 	e.scCount++
@@ -661,7 +681,7 @@ func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
 		_ = b.Stop()
 		return
 	}
-	e.kctx.Dispatch()
+	e.kctx.DispatchFrame(&frame)
 	// Preempt the running fiber after a serviced syscall (a clean instruction
 	// boundary, so its full context snapshots correctly) when its slice is spent.
 	if e.threadCap > 0 {

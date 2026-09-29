@@ -3,10 +3,8 @@ package emulator
 import (
 	"testing"
 
-	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/arch/arm64"
 	"github.com/isesword/golem/internal/emu"
-	"github.com/isesword/golem/internal/kernel"
 )
 
 // trapBE is a minimal emu.Backend for driving onInterrupt without a CPU
@@ -37,37 +35,25 @@ func (b *trapBE) RegWrite(r emu.Reg, v uint64) error {
 	return nil
 }
 
-// newTrapEmu builds an Emulator with just the interrupt-dispatch state
-// onInterrupt touches, with the ABI resolved through the real registry and
-// the role registers cached exactly like New does.
-func newTrapEmu(t *testing.T) *Emulator {
+// newTrapEmu builds an Emulator for interrupt-dispatch tests through the
+// shared test constructor (full ABI + role regs + transport/table/codecs
+// injected); tests that want a specific backend pass it in, and may still
+// nil out e.kctx to prove the stub path never reaches the kernel.
+func newTrapEmu(t *testing.T, be emu.Backend) *Emulator {
 	t.Helper()
-	abi, err := arch.Resolve(arch.IDARM64, arch.VariantGeneric)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := &Emulator{
-		abi:         abi,
-		stubs:       map[uint64]string{},
-		stubHits:    map[string]int{},
-		hostImpl:    map[uint64]hostFn{},
-		replaced:    map[uint64]hostFn{},
-		jniDispatch: map[uint64]int{},
-	}
-	e.cacheRoleRegs()
-	return e
+	return newTestEmulator(t, be)
 }
 
 // Negative test ①: a trap whose source address is a stub must be dispatched
 // to the stub table and must NOT fall through into the kernel syscall
 // dispatcher (scCount stays 0; kctx is nil, so any fall-through would panic).
 func TestHostCallStubSkipsKernelDispatch(t *testing.T) {
-	e := newTrapEmu(t)
 	svc := legacyARM64Layout.StubBase // inside the stub region
+	be := &trapBE{pc: svc + 4}        // the engine has advanced PC past the svc
+	e := newTrapEmu(t, be)
 	e.stubs[svc] = "unresolved_import"
-	e.kctx = nil // a fall-through into kctx.Dispatch would nil-panic
+	e.kctx = nil // a fall-through into kctx.DispatchFrame would nil-panic
 
-	be := &trapBE{pc: svc + 4} // the engine has advanced PC past the svc
 	e.onInterrupt(be, 0)
 
 	if e.stubHits["unresolved_import"] != 1 {
@@ -86,9 +72,8 @@ func TestHostCallStubSkipsKernelDispatch(t *testing.T) {
 // falls through to the kernel dispatcher (scCount advances, -ENOSYS written
 // back for the unimplemented number, stubHits untouched).
 func TestGuestSyscallNotClassifiedAsStub(t *testing.T) {
-	e := newTrapEmu(t)
 	be := &trapBE{pc: 0x12000004, x8: 99999} // module region; unimplemented nr
-	e.kctx = &kernel.Context{B: be}
+	e := newTrapEmu(t, be)                   // kctx injected with transport+table by newTestEmulator
 
 	e.onInterrupt(be, 0)
 

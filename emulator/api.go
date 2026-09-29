@@ -267,6 +267,10 @@ func (e *Emulator) ReplaceE(addr uint64, fn ReplaceFunc) error {
 		return fmt.Errorf("read original %#x: %w", addr, err)
 	}
 	// 3. write the patch. A partial write cannot be verified -> poison.
+	// ARCH-LEAK / P5a-BLOCKER: these bytes are guest machine-code generation
+	// (AArch64 `svc #0; ret`) hardcoded in the emulator — guest instruction
+	// encoding belongs to the arch layer (a StubEncoder-shaped capability).
+	// Not fixed in P2; must be resolved before the AMD64 bring-up in P5a.
 	if err := e.be.MemWrite(addr, []byte{0x01, 0x00, 0x00, 0xd4, 0xc0, 0x03, 0x5f, 0xd6}); err != nil {
 		return e.poison(fmt.Sprintf("patch write %#x", addr), err)
 	}
