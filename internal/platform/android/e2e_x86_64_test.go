@@ -65,7 +65,7 @@ func TestAndroidAMD64AcceptanceChain(t *testing.T) {
 	if img.Arch != emu.ArchAMD64 || img.Machine != arch.IDAMD64 {
 		t.Fatalf("image arch = (%v, %d), want (amd64, EM_X86_64)", img.Arch, img.Machine)
 	}
-	for _, want := range []string{"add", "sum6", "call_host", "call_host_twice", "guest_getpid", "via_fptr_table"} {
+	for _, want := range []string{"add", "sum6", "sum8", "sum8_observed_rsp", "sum8_observed_ret", "sum8_observed_align", "call_host", "call_host_twice", "guest_getpid", "via_fptr_table"} {
 		if _, ok := img.Exports[want]; !ok {
 			t.Fatalf("fixture must export %s", want)
 		}
@@ -117,11 +117,11 @@ func TestAndroidAMD64AcceptanceChain(t *testing.T) {
 	stubMgr := interpose.NewStubManager(as, stubEnc, be)
 	itab := interpose.NewInterposeTable()
 	itab.BindSymbol("host_magic", func(ctx interpose.CallContext) uint64 {
-		x, err := ctx.RegRead(callABI.Arg(0))
+		args, err := callABI.ReadArgs(be, 1)
 		if err != nil {
 			t.Errorf("host_magic: read arg0: %v", err)
 		}
-		return x * 2
+		return args[0] * 2
 	})
 	resolver := loader.ChainResolvers(
 		interpose.NewHostResolver(itab, stubMgr),
@@ -144,7 +144,7 @@ func TestAndroidAMD64AcceptanceChain(t *testing.T) {
 
 	// The host-interposed import must have landed in the GOT as a STUB
 	// GUEST ADDRESS inside the stub region (link-time interposition).
-	gotSlot, err := be.MemRead(emu.GuestAddr(base+0x27c0), 8) // JMP_SLOT offset from the fixture's .rela.plt
+	gotSlot, err := be.MemRead(emu.GuestAddr(base+0x29a0), 8) // JMP_SLOT offset from the fixture's .rela.plt
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,6 @@ func TestAndroidAMD64AcceptanceChain(t *testing.T) {
 	// the stack legitimately holds popped-frame residue, so a once-poisoned
 	// band cannot distinguish residue from misuse; within one call, the bytes
 	// below the trap-time RSP are provably below every active frame.
-	entryFrame := uint64(startup.blockAddr) - 8 // just below the auxv block
 	checkRedZone := func(b emu.Backend, where string) {
 		rsp, _ := b.RegRead(amd64.RSP)
 		rz, err := b.MemRead(emu.GuestAddr(rsp-128), 128)
@@ -252,17 +251,13 @@ func TestAndroidAMD64AcceptanceChain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// --- 8. SysV call driver: args in registers, return address on the ----
-	// stack, 16-byte alignment honored (entry RSP ≡ 8 mod 16, i.e. RSP was
-	// 16-aligned before the implicit `call`). The entry frame sits just below
-	// the auxv block the StartupABI materialized (see step 7).
-	entryRSP := entryFrame
-	var sent [8]byte
-	binary.LittleEndian.PutUint64(sent[:], sentinel)
-	if err := be.MemWrite(emu.GuestAddr(entryRSP), sent[:]); err != nil { // the pushed return address
-		t.Fatal(err)
-	}
-	if err := be.RegWrite(amd64.RSP, entryRSP); err != nil {
+	// --- 8. SysV call driver: CallABI.PrepareCall establishes each frame ---
+	// (register args, pushed return address, entry RSP ≡ 8 mod 16) on the
+	// current stack just below the auxv block the StartupABI materialized
+	// (see step 7); ReadResult reports the result. No register identities
+	// appear here — the whole call goes through the convention interface.
+	rsp0 := uint64(startup.blockAddr) &^ 15 // 16-aligned, at/below the auxv block
+	if err := be.RegWrite(amd64.RSP, rsp0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -282,35 +277,34 @@ func TestAndroidAMD64AcceptanceChain(t *testing.T) {
 		if err := be.MemWrite(emu.GuestAddr(rspBefore-0x800), poison); err != nil {
 			t.Fatal(err)
 		}
-		for i, a := range args {
-			if err := be.RegWrite(callABI.Arg(i), a); err != nil {
-				t.Fatalf("%s: write arg %d: %v", name, i, err)
-			}
+		entry := emu.GuestAddr(base + fn)
+		if err := callABI.PrepareCall(be, arch.CallRequest{Entry: entry, Return: sentinel, Args: args}); err != nil {
+			t.Fatalf("%s: PrepareCall: %v", name, err)
 		}
-		if err := be.Start(emu.GuestAddr(base+fn), emu.GuestAddr(sentinel)); err != nil {
+		if err := be.Start(entry, emu.GuestAddr(sentinel)); err != nil {
 			t.Fatalf("%s: run: %v", name, err)
 		}
-		ret, err := be.RegRead(callABI.Ret())
+		res, err := callABI.ReadResult(be)
 		if err != nil {
 			t.Fatalf("%s: read result: %v", name, err)
-		}
-		// Stack fully restored: every frame (guest + interposed host) popped
-		// exactly its own return address.
-		rspAfter, _ := be.RegRead(amd64.RSP)
-		if rspAfter != rspBefore+8 {
-			t.Fatalf("%s: RSP %#x -> %#x, want %#x (one frame popped, nothing leaked)",
-				name, rspBefore, rspAfter, rspBefore+8)
 		}
 		// The engine stops at the sentinel popped by the function's ret.
 		pc, _ := be.RegRead(amd64.RIP)
 		if pc != sentinel {
 			t.Fatalf("%s: RIP = %#x, want the sentinel %#x (normal return)", name, pc, sentinel)
 		}
-		// Restore RSP for the next call (the popped sentinel slot is dead).
+		// The frame PrepareCall built was left popped-but-present below
+		// rspBefore (the guest `ret` pops exactly the return address); restore
+		// RSP for the next call.
+		rspAfter, _ := be.RegRead(amd64.RSP)
+		if rspAfter >= rspBefore || rspBefore-rspAfter > 0x100 {
+			t.Fatalf("%s: RSP %#x -> %#x, want a small popped frame below %#x",
+				name, rspBefore, rspAfter, rspBefore)
+		}
 		if err := be.RegWrite(amd64.RSP, rspBefore); err != nil {
 			t.Fatal(err)
 		}
-		return ret
+		return res.Value
 	}
 
 	// --- 9. the actual calls ------------------------------------------------
@@ -337,6 +331,22 @@ func TestAndroidAMD64AcceptanceChain(t *testing.T) {
 	}
 	if scFired != 1 {
 		t.Fatalf("syscall trap fired %d times, want exactly 1", scFired)
+	}
+
+	// --- 10. PrepareCall with 8 args (6 registers + 2 stack slots) --------
+	// The naked guest probe records its exact entry state; verify both the
+	// arithmetic and the ABI contract it observed.
+	if got := call("sum8", 1, 2, 3, 4, 5, 6, 7, 8); got != 36 {
+		t.Fatalf("sum8(1..8) = %d, want 36 (6 register args + 2 stack args)", got)
+	}
+	if v := call("sum8_observed_align"); v != 8 {
+		t.Fatalf("sum8 entry RSP & 15 = %d, want 8 (the post-`call` SysV convention)", v)
+	}
+	if v := call("sum8_observed_ret"); v != sentinel {
+		t.Fatalf("sum8 [entry RSP] = %#x, want the pushed sentinel return address %#x", v, sentinel)
+	}
+	if v := call("sum8_observed_rsp"); v%16 != 8 {
+		t.Fatalf("sum8 entry RSP = %#x, want ≡ 8 (mod 16)", v)
 	}
 }
 

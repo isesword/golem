@@ -52,3 +52,42 @@ long guest_getpid(void) {
                      : "rcx", "r11", "memory");
     return ret;
 }
+
+// Eight-argument SysV stack-spill probe (P5a.5): a..f arrive in
+// RDI/RSI/RDX/RCX/R8/R9, g/h on the stack at [entry RSP+8] / [entry RSP+16]
+// above the pushed return address. Naked on purpose: the asm observes the
+// EXACT entry state — no prologue may move RSP first — and records it in
+// static globals (static = non-preemptible, so the RIP-relative stores need
+// no dynamic relocation; `used` forces emission — the inline-asm writes are
+// invisible to the optimizer, which would otherwise dead-strip them); the
+// exported accessors below report the recorded state to the test.
+static unsigned long seen_rsp __attribute__((used));   // entry RSP (want ≡ 8 mod 16)
+static unsigned long seen_ret __attribute__((used));   // [entry RSP] — the pushed return address
+static unsigned long seen_align __attribute__((used)); // entry RSP & 15 (want 8)
+
+__attribute__((naked))
+long sum8(long a, long b, long c, long d, long e, long f, long g, long h) {
+    __asm__ volatile(
+        "mov %rsp, seen_rsp(%rip)\n\t"
+        "mov %rsp, %rax\n\t"
+        "and $15, %rax\n\t"
+        "mov %rax, seen_align(%rip)\n\t"
+        "mov (%rsp), %rax\n\t"
+        "mov %rax, seen_ret(%rip)\n\t"
+        // Sum the eight args: six registers + two stack slots.
+        "mov %rdi, %rax\n\t"
+        "add %rsi, %rax\n\t"
+        "add %rdx, %rax\n\t"
+        "add %rcx, %rax\n\t"
+        "add %r8, %rax\n\t"
+        "add %r9, %rax\n\t"
+        "add 8(%rsp), %rax\n\t"
+        "add 16(%rsp), %rax\n\t"
+        "ret\n\t");
+}
+
+// Accessors for sum8's recorded entry state (the globals are static — see
+// above — so the test reads them through these exported calls).
+unsigned long sum8_observed_rsp(void)   { return seen_rsp; }
+unsigned long sum8_observed_ret(void)   { return seen_ret; }
+unsigned long sum8_observed_align(void) { return seen_align; }
