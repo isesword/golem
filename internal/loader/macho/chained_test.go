@@ -278,13 +278,44 @@ func TestChainedMalformedChains(t *testing.T) {
 	})
 }
 
-// TestChainedAuthEntriesLoudUntilPolicy: authenticated entries (auth bit
-// set) are a loud error until the PACPolicyStrip lands (P5c follow-up
-// commit) — never a silent strip.
-func TestChainedAuthEntriesLoudUntilPolicy(t *testing.T) {
+// TestChainedAuthEntriesPolicyStrip pins PACPolicyStrip on the real decode
+// path: authenticated rebase/bind entries are fully decoded (diversity,
+// addrDiv, key all read) and materialize BARE addresses — auth rebase emits
+// its 32-bit runtimeOffset as the rebase addend, auth bind resolves through
+// the imports table with no addend.
+func TestChainedAuthEntriesPolicyStrip(t *testing.T) {
+	raw, off, size, segs := (&chainedSynth{
+		pageStarts: []uint16{0},
+		imports:    []string{"host_magic"},
+		entries: map[uint64]uint64{
+			0x4000: chainedAuthRebaseEntry(0x39c, 0xBEEF, 0, 2, 1), // key=DA, salty diversity
+			0x4008: chainedAuthBindEntry(0, 0x1234, 0, 0, 0),       // key=IA
+		},
+	}).build()
+	rels, err := parseChainedFixups(raw, off, size, segs, synthImg())
+	if err != nil {
+		t.Fatalf("parseChainedFixups: %v", err)
+	}
+	if len(rels) != 2 {
+		t.Fatalf("relocs = %v, want exactly 2", rels)
+	}
+	wantRebase := loader.Reloc{Offset: 0x4000, Type: RelocRebasePointer, Addend: 0x39c}
+	if rels[0] != wantRebase {
+		t.Errorf("auth rebase = %+v, want %+v (bare runtimeOffset — PACPolicyStrip)", rels[0], wantRebase)
+	}
+	wantBind := loader.Reloc{Offset: 0x4008, Type: RelocBindPointer, Sym: 1, Addend: 0}
+	if rels[1] != wantBind {
+		t.Errorf("auth bind = %+v, want %+v (bare resolved address, no addend field)", rels[1], wantBind)
+	}
+}
+
+// TestChainedAuthAddrDivRejected: addrDiv=1 (address-divided diversity) is
+// a combination PACPolicyStrip makes no statement about — a loud error on
+// BOTH authenticated kinds, never a silent strip.
+func TestChainedAuthAddrDivRejected(t *testing.T) {
 	for name, entry := range map[string]uint64{
-		"auth rebase": chainedAuthRebaseEntry(0x39c, 0, 0, 0, 0),
-		"auth bind":   chainedAuthBindEntry(0, 0, 0, 0, 0),
+		"auth rebase": chainedAuthRebaseEntry(0x39c, 0, 1, 0, 0),
+		"auth bind":   chainedAuthBindEntry(0, 0, 1, 2, 0),
 	} {
 		t.Run(name, func(t *testing.T) {
 			raw, off, size, segs := (&chainedSynth{
@@ -292,8 +323,9 @@ func TestChainedAuthEntriesLoudUntilPolicy(t *testing.T) {
 				imports:    []string{"host_magic"},
 				entries:    map[uint64]uint64{0x4000: entry},
 			}).build()
-			if _, err := parseChainedFixups(raw, off, size, segs, synthImg()); err == nil || !contains(err.Error(), "authenticated") {
-				t.Fatalf("err = %v, want a loud authenticated-fixup error", err)
+			_, err := parseChainedFixups(raw, off, size, segs, synthImg())
+			if err == nil || !contains(err.Error(), "addrDiv=1") || !contains(err.Error(), "PACPolicyStrip") {
+				t.Fatalf("err = %v, want a loud addrDiv=1 / PACPolicyStrip error", err)
 			}
 		})
 	}

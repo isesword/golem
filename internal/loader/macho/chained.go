@@ -292,15 +292,71 @@ func decodeChainedEntryARM64E(v, slotVA uint64, imports []string, symIdx map[str
 			addend |= ^int64(0x7ffff) // 19-bit sign extension
 		}
 		return &loader.Reloc{Offset: slotVA, Type: RelocBindPointer, Sym: sym, Addend: addend}, next, nil
-	default:
-		// auth entries land with the PACPolicyStrip (P5c): a loud error
-		// until then, never a silent strip.
-		kind := "rebase"
-		if bind {
-			kind = "bind"
+	case !bind && auth:
+		// dyld_chained_ptr_arm64e_auth_rebase: target:32 is a RUNTIME
+		// OFFSET (image-relative), diversity:16, addrDiv:1, key:2. Under
+		// PACPolicyStrip the slot materializes the bare image-relative
+		// target — the relocator adds the load bias, producing the
+		// unsigned guest address a real dyld would have signed.
+		if err := pacStrip(uint16(v>>32&0xffff), uint8(v>>48&1), uint8(v>>49&3), "rebase", slotVA); err != nil {
+			return nil, 0, err
 		}
-		return nil, 0, fmt.Errorf("authenticated chained %s at %#x not yet supported (P5c PAC policy pending)", kind, slotVA)
+		return &loader.Reloc{Offset: slotVA, Type: RelocRebasePointer, Addend: int64(v & 0xffffffff)}, next, nil
+	default: // bind && auth
+		// dyld_chained_ptr_arm64e_auth_bind: ordinal:16, diversity:16,
+		// addrDiv:1, key:2 — NO addend field. Under PACPolicyStrip the slot
+		// binds to the SymbolResolver's bare guest address.
+		sym, err := chainedBindSym(uint16(v&0xffff), slotVA, imports, symIdx)
+		if err != nil {
+			return nil, 0, err
+		}
+		if err := pacStrip(uint16(v>>32&0xffff), uint8(v>>48&1), uint8(v>>49&3), "bind", slotVA); err != nil {
+			return nil, 0, err
+		}
+		return &loader.Reloc{Offset: slotVA, Type: RelocBindPointer, Sym: sym}, next, nil
 	}
+}
+
+// --- PACPolicyStrip: the P5c authenticated-pointer policy --------------------
+//
+// PACPolicyStrip is golem's materialization policy for authenticated chained
+// fixups: the value written to guest memory is the UNSIGNED, bare address —
+// an auth rebase materializes image-base + runtimeOffset (the relocator
+// adds the load bias, as for every rebase), an auth bind materializes the
+// SymbolResolver's guest address. This is a deliberate POLICY CHOICE, not
+// an omission:
+//
+//   - golem models no PAC signing keys, and Freeze invariant 9 forbids
+//     silently masking signature bits off a pointer via NormalizeCodeAddr —
+//     the strip therefore happens HERE, at fixup decode time, where the
+//     chain entry's authentication metadata (diversity/addrDiv/key) is
+//     still explicit and validated.
+//   - PAC INSTRUCTION semantics (braa/autia/...) are NOT emulated; fixture
+//     code never authenticates loader-materialized pointers (-mbranch-
+//     protection=none removes the auth indirect calls). The arm64e ABI's
+//     pac-ret pair is the CPU's own business and round-trips inside the
+//     backend.
+//
+// Combinations the policy does NOT cover are loud errors, never silent
+// strips: addrDiv=1 (the signature depends on address division — a
+// diversity the bare-address materialization makes no statement about) and
+// any key outside the architecturally assigned IA/IB/DA/DB set.
+
+// pacStrip validates one authenticated entry's diversity metadata against
+// PACPolicyStrip (see the policy block above). diversity and key are fully
+// decoded — recorded for the error surface and future policy — addrDiv is
+// the hard gate.
+func pacStrip(diversity uint16, addrDiv, key uint8, what string, slotVA uint64) error {
+	if addrDiv != 0 {
+		return fmt.Errorf("authenticated chained %s at %#x uses addrDiv=1 (address-divided diversity) — unsupported by PACPolicyStrip", what, slotVA)
+	}
+	if key > 3 { // IA/IB/DA/DB fill the 2-bit field today; a future widening must fail loudly
+		return fmt.Errorf("authenticated chained %s at %#x uses unknown PAC key %d — unsupported by PACPolicyStrip", what, slotVA, key)
+	}
+	// diversity is a salt only (addrDiv=0): the bare-address strip makes it
+	// irrelevant. It stays decoded — never dropped unread.
+	_ = diversity
+	return nil
 }
 
 // chainedBindSym maps a bind ordinal through the imports table to the
