@@ -120,8 +120,9 @@ var gpRegIDs = func() (ids [34]int32) {
 // but emu cannot import that package — arm64 imports emu (for emu.Reg), so
 // importing it back would be an import cycle. The switch therefore keys on
 // the id NUMBERS arch/arm64 assigns (X0..X10=0..10, X23=11, SP=12, PC=13,
-// LR=14, NZCV=15, TPIDR_EL0=16); arch/arm64's TestFrozenRegIDs pins those
-// numbers, so any drift fails tests loudly instead of corrupting registers.
+// LR=14, NZCV=15, TPIDR_EL0=16, X16=17); arch/arm64's TestFrozenRegIDs pins
+// those numbers, so any drift fails tests loudly instead of corrupting
+// registers.
 func regMap(r Reg) int32 {
 	switch r {
 	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10: // arm64.X0 .. arm64.X10
@@ -138,6 +139,8 @@ func regMap(r Reg) int32 {
 		return ucRegNZCV
 	case 16: // arm64.TPIDR_EL0
 		return ucRegTPIDR
+	case 17: // arm64.X16 (P5b: Darwin syscall-number register)
+		return ucRegX(16)
 	default:
 		return ucRegInvalid
 	}

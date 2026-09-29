@@ -32,6 +32,10 @@ const (
 	LR // X30
 	NZCV
 	TPIDR_EL0
+	// X16 is the Darwin syscall-number register (P5b: the BSD syscall ABI
+	// passes the number in x16, unlike Linux's x8). Appended AFTER the frozen
+	// P0 set — every id above keeps its number; X16 is id 17.
+	X16
 )
 
 // Compile-time type pin: the ids must stay emu.Reg so they can be passed to

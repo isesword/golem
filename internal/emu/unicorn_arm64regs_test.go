@@ -48,4 +48,5 @@ func TestBackendRegTranslationViaArm64Consts(t *testing.T) {
 	check(arm64.LR, 30, 0x1e1e1e1e)
 	check(arm64.NZCV, 33, 0x60000000)
 	check(arm64.TPIDR_EL0, -1, 0x715711DEADBEEF) // not in the GP batch
+	check(arm64.X16, 16, 0x1616161616161616)     // P5b: Darwin syscall-number reg
 }

@@ -34,6 +34,7 @@ func TestFrozenRegIDs(t *testing.T) {
 		{"LR", LR, 14},
 		{"NZCV", NZCV, 15},
 		{"TPIDR_EL0", TPIDR_EL0, 16},
+		{"X16", X16, 17}, // appended in P5b; the P0 ids above stay frozen
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {

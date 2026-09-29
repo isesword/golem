@@ -46,6 +46,7 @@ func TestRegMapFrozenIDs(t *testing.T) {
 		{"LR", 14, ucRegLR},
 		{"NZCV", 15, ucRegNZCV},
 		{"TPIDR_EL0", 16, ucRegTPIDR},
+		{"X16", 17, ucRegX(16)},
 		{"invalid", 99, ucRegInvalid},
 	}
 	for _, tc := range cases {
