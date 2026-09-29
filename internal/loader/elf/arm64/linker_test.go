@@ -1,13 +1,19 @@
-package loader
+// End-to-end linker test, moved from internal/loader in P3: parses a real
+// AArch64 ELF via the loader facade (parser registered by loader/elf) and
+// applies it through the (FormatELF, ArchARM64) Relocator registered by this
+// package. Assertions are unchanged from the pre-P3 test.
+package arm64_test
 
 import (
-	"debug/elf"
+	debugelf "debug/elf"
 	"encoding/binary"
 	"os"
 	"testing"
 	"unsafe"
 
 	"github.com/isesword/golem/internal/emu"
+	"github.com/isesword/golem/internal/loader"
+	_ "github.com/isesword/golem/internal/loader/elf" // FormatELF parser registration
 )
 
 // memBE is an in-memory emu.Backend (sparse pages) for testing the linker
@@ -64,7 +70,7 @@ type ptrRange struct {
 	buf        []byte
 }
 
-// MemMapPtr registers an ALIAS to the caller's host buffer, so Plan.ApplyShared
+// MemMapPtr registers an ALIAS to the caller's host buffer, so Plan.Apply
 // memory images are observable through this stub just like real unicorn.
 func (m *memBE) MemMapPtr(addr, size uint64, prot int, host unsafe.Pointer) error {
 	buf := unsafe.Slice((*byte)(host), size)
@@ -112,13 +118,13 @@ func (m *memBE) HookMemWrite(uint64, uint64, func(emu.Backend, uint64, int, int6
 // A real AArch64 shared object bundled with the repo (AOSP bionic), so the
 // linker is exercised against genuine RELATIVE/JUMP_SLOT/GLOB_DAT relocations
 // and libc imports — no proprietary target needed.
-const targetSO = "../../assets/android/sdk23/lib64/libz.so"
+const targetSO = "../../../../assets/android/sdk23/lib64/libz.so"
 
 func TestLinkerAppliesRealSo(t *testing.T) {
 	if _, err := os.Stat(targetSO); err != nil {
 		t.Skipf("bundled .so not present: %v", err)
 	}
-	img, err := Parse(targetSO)
+	img, err := loader.Parse(targetSO)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +145,7 @@ func TestLinkerAppliesRealSo(t *testing.T) {
 	// (b) a RELATIVE reloc resolved to base+addend.
 	checked := 0
 	for _, r := range img.Relocs {
-		if r.Type == elf.R_AARCH64_RELATIVE {
+		if debugelf.R_AARCH64(r.Type) == debugelf.R_AARCH64_RELATIVE {
 			got, _ := be.MemRead(base+r.Offset, 8)
 			want := base + uint64(r.Addend)
 			if binary.LittleEndian.Uint64(got) != want {
@@ -159,7 +165,7 @@ func TestLinkerAppliesRealSo(t *testing.T) {
 
 	// (c) a JUMP_SLOT import points at a resolver-provided stub (non-zero).
 	for _, r := range img.Relocs {
-		if r.Type == elf.R_AARCH64_JUMP_SLOT {
+		if debugelf.R_AARCH64(r.Type) == debugelf.R_AARCH64_JUMP_SLOT {
 			got, _ := be.MemRead(base+r.Offset, 8)
 			if binary.LittleEndian.Uint64(got) == 0 {
 				t.Fatalf("JUMP_SLOT @0x%x not resolved", r.Offset)

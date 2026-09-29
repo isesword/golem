@@ -42,10 +42,11 @@ type MapOp struct {
 	Content   []byte // file image placed at the map start (zero tail for .bss); nil = pure anon
 }
 
-// RelocOp is one relocation, kept symbolic until Apply.
+// RelocOp is one relocation, kept symbolic until Apply. Type is the raw
+// format-specific relocation code (see Reloc.Type).
 type RelocOp struct {
 	Target uint64 // image-relative address to patch
-	Type   elf.R_AARCH64
+	Type   uint32
 	SymIdx uint32
 	Addend int64
 }
@@ -83,24 +84,20 @@ func (p *Plan) apply(be emu.Backend, base uint64, resolve Resolver, share bool) 
 			}
 		}
 	}
-	for i := range p.Relocs {
-		r := &p.Relocs[i]
-		target := base + r.Target
-		switch r.Type {
-		case elf.R_AARCH64_RELATIVE:
-			if err := put64(be, target, base+uint64(r.Addend)); err != nil {
+	if len(p.Relocs) > 0 {
+		// Relocation SEMANTICS live in the (Format, Arch) Relocator
+		// (loader/elf/arm64, registered via init); the plan owns only the
+		// memory layout (maps, shareability, protections).
+		rc, err := p.relocator()
+		if err != nil {
+			return err
+		}
+		for i := range p.Relocs {
+			r := &p.Relocs[i]
+			rel := Reloc{Offset: r.Target, Type: r.Type, Sym: r.SymIdx, Addend: r.Addend}
+			if err := rc.Apply(be, p.img, rel, base, resolve); err != nil {
 				return err
 			}
-		case elf.R_AARCH64_GLOB_DAT, elf.R_AARCH64_JUMP_SLOT, elf.R_AARCH64_ABS64:
-			val, err := p.symValue(r.SymIdx, base, resolve)
-			if err != nil {
-				return err
-			}
-			if err := put64(be, target, val+uint64(r.Addend)); err != nil {
-				return err
-			}
-		default:
-			return fmt.Errorf("unhandled reloc type %s at 0x%x", r.Type, r.Target)
 		}
 	}
 	// Re-protect to declared permissions. Shareable maps created via
@@ -196,10 +193,14 @@ func (p *Plan) SharedBuffer(i int) (unsafe.Pointer, uint64, error) {
 	return nil, 0, fmt.Errorf("loader: map %d has no shared buffer or content", i)
 }
 
-// symValue resolves a relocation's symbol per engine: defined symbols =>
-// base+value, imported (undef) => via the resolver.
-func (p *Plan) symValue(sym uint32, base uint64, resolve Resolver) (uint64, error) {
-	return p.img.symValue(sym, base, resolve)
+// relocator resolves the (Format, Arch) Relocator for this plan's image.
+// Called only when the plan actually carries relocations; plans built by
+// hand in tests (no img, no relocs) never reach it.
+func (p *Plan) relocator() (Relocator, error) {
+	if p.img == nil {
+		return nil, fmt.Errorf("loader: plan has relocations but no image (relocator unavailable)")
+	}
+	return ResolveRelocator(p.img.Format, p.img.Arch)
 }
 
 // CompileOnce returns a cached, immutable Image for path (keyed by

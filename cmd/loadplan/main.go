@@ -5,11 +5,13 @@
 package main
 
 import (
+	debugelf "debug/elf"
 	"fmt"
 	"os"
 	"sort"
 
 	"github.com/isesword/golem/internal/loader"
+	_ "github.com/isesword/golem/internal/loader/elf" // FormatELF parser registration
 )
 
 func main() {
@@ -24,7 +26,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("== %s ==\nmachine=%s load span=0x%x (%d KiB)\n",
+	fmt.Printf("== %s ==\nmachine=%d load span=0x%x (%d KiB)\n",
 		img.Path, img.Machine, img.LoadSpan, img.LoadSpan/1024)
 
 	fmt.Printf("\n== PT_LOAD segments (%d) ==\n", len(img.Segments))
@@ -36,16 +38,16 @@ func main() {
 	fmt.Printf("\n== relocations: %d total ==\n", len(img.Relocs))
 	hist := img.RelocHistogram()
 	type kv struct {
-		t elf_R
+		t uint32
 		n int
 	}
 	var rows []kv
 	for t, n := range hist {
-		rows = append(rows, kv{elf_R(t), n})
+		rows = append(rows, kv{t, n})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].n > rows[j].n })
 	for _, r := range rows {
-		fmt.Printf("  %-28s %d\n", r.t, r.n)
+		fmt.Printf("  %-28s %d\n", debugelf.R_AARCH64(r.t), r.n)
 	}
 	fmt.Printf("  -> symbol-resolving relocs (bounded by imports): %d\n", img.SymbolRelocCount())
 
@@ -59,5 +61,3 @@ func main() {
 	}
 }
 
-// alias so we can print the elf.R_AARCH64 Stringer without importing twice.
-type elf_R = interface{ String() string }
