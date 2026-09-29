@@ -188,9 +188,11 @@ jobs:
       - name: Stage release files
         run: |
           mkdir -p release
-          cp artifacts/unicorn-dll-*/unicorn.dll release/
-          mv release/unicorn.dll release/unicorn-amd64.dll 2>/dev/null || true
-          cp artifacts/unicorn-dll-*/PROVENANCE-*.txt release/
+          # download-artifact with pattern creates artifacts/<name>/ per
+          # artifact; DLLs land as artifacts/<name>/unicorn.dll (amd64 and
+          # arm64 each in their own directory).
+          cp artifacts/unicorn-dll-amd64/unicorn.dll release/unicorn-amd64.dll
+          cp artifacts/unicorn-dll-arm64/unicorn.dll release/unicorn-arm64.dll
           ls -la release/
       - name: Create release with auto-generated notes
         uses: softprops/action-gh-release@v2
