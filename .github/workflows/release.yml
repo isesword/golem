@@ -188,11 +188,9 @@ jobs:
       - name: Stage release files
         run: |
           mkdir -p release
-          find artifacts -name "unicorn.dll" | while read f; do
-            dir=$(basename $(dirname $(dirname $f)))
-            cp "$f" "release/unicorn-$dir.dll"
-          done
-          find artifacts -name "PROVENANCE-*" -exec cp -t release/ {} +
+          cp artifacts/unicorn-dll-*/unicorn.dll release/
+          mv release/unicorn.dll release/unicorn-amd64.dll 2>/dev/null || true
+          cp artifacts/unicorn-dll-*/PROVENANCE-*.txt release/
           ls -la release/
       - name: Create release with auto-generated notes
         uses: softprops/action-gh-release@v2
