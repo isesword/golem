@@ -34,6 +34,8 @@ type ID uint16
 const (
 	// IDARM64 is ELF EM_AARCH64.
 	IDARM64 ID = 183
+	// IDAMD64 is ELF EM_X86_64.
+	IDAMD64 ID = 62
 )
 
 // Variant distinguishes ISA variants that share one engine architecture.
