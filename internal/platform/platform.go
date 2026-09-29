@@ -1,16 +1,20 @@
 // Package platform is the root of golem's OS-platform layer (DESIGN.md
 // §3.4): it owns the platform identity type, the platform-config contract,
-// the layout-policy contract and the startup-ABI contract (P4d), and nothing
-// else. Platform personalities (android today, darwin in P5b) live in
-// subpackages that import this package — never the reverse.
+// the layout-policy contract, the startup-ABI contract (P4d), and the
+// platform registry (P5b.5) — the Factory/BindContext/Runtime seam through
+// which the composition root binds a complete platform personality without
+// holding any per-platform selection logic itself. Platform personalities
+// (android, darwin) live in subpackages that import this package and
+// register their factories from init() — this package never imports them.
 //
-// Dependency direction: platform imports only arch, emu, loader and memory
-// (all sit below it per DESIGN.md §2), so any layer (arch, loader, emulator)
-// may reference platform.ID, platform.LayoutPolicy and platform.StartupABI
-// without creating a cycle. In particular platform must NOT import
-// internal/target: target aggregates platform (Target.Platform), so the
-// LayoutPolicy input is narrowed to the minimal TargetInfo below instead of
-// the full Target.
+// Dependency direction: platform imports only packages that sit below it per
+// DESIGN.md §2 (arch, emu, loader, memory, kernel, interpose, profile, and
+// the root dvm package — none of which imports platform back), so any layer (arch, loader, emulator) may reference platform.ID,
+// platform.LayoutPolicy, platform.StartupABI and platform.Runtime without
+// creating a cycle. In particular platform must NOT import internal/target:
+// target aggregates platform (Target.Platform), so the LayoutPolicy input
+// and the Factory's BindContext are narrowed to the minimal TargetInfo /
+// arch.ID shapes instead of the full Target.
 package platform
 
 import (
