@@ -296,7 +296,7 @@ func (c *Context) Restore(st State) {
 	// cleanly — sysBrk maps pages on growth, and re-mapping a still-mapped page
 	// fails, which would silently break the guest allocator on a reused instance.
 	if cur, tgt := c.BrkTop(), brkTopOf(st.brkCur); cur > tgt {
-		_ = c.B.MemUnmap(tgt, cur-tgt)
+		_ = c.B.MemUnmap(emu.GuestAddr(tgt), cur-tgt)
 	}
 	c.brkCur = st.brkCur
 	c.Exited = st.exited
@@ -396,11 +396,11 @@ func SysMmap(c *Context, f *SyscallFrame) Result {
 		addr = hint &^ 0xfff
 		c.Mem.Munmap(addr, length) // drop any prior mapping under MAP_FIXED
 		_ = c.Mem.Map(addr, length, prot, "mmap-fixed")
-		c.B.MemUnmap(addr, length)
+		c.B.MemUnmap(emu.GuestAddr(addr), length)
 	} else {
 		addr = c.Mem.Mmap(length, prot, "mmap")
 	}
-	if err := c.B.MemMap(addr, length, prot|emu.ProtRead); err != nil {
+	if err := c.B.MemMap(emu.GuestAddr(addr), length, prot|emu.ProtRead); err != nil {
 		return Result{Errno: ENOSYS}
 	}
 	return Result{Value: addr}
@@ -413,7 +413,7 @@ func SysWrite(c *Context, f *SyscallFrame) Result {
 	fd, buf, n := a[0], a[1], a[2]
 	// writable file fd -> store into the overlay
 	if f := c.fdTable()[int32(fd)]; f != nil && f.writable {
-		d, err := c.B.MemRead(buf, n)
+		d, err := c.B.MemRead(emu.GuestAddr(buf), n)
 		if err != nil {
 			return Result{Errno: EBADF}
 		}
@@ -421,7 +421,7 @@ func SysWrite(c *Context, f *SyscallFrame) Result {
 	}
 	// otherwise it's stdout/stderr/log -> surface it only when tracing
 	if c.Verbose && n > 0 && n < 0x10000 {
-		if d, err := c.B.MemRead(buf, n); err == nil {
+		if d, err := c.B.MemRead(emu.GuestAddr(buf), n); err == nil {
 			fmt.Printf("[write fd=%d] %s\n", fd, string(d))
 		}
 	}
@@ -453,7 +453,7 @@ func SysWritev(c *Context, f *SyscallFrame) Result {
 	stride := uint64(c.Codecs.IovecSize())
 	total := uint64(0)
 	for i := uint64(0); i < cnt && i < 64; i++ {
-		ent, err := c.B.MemRead(iov+i*stride, stride)
+		ent, err := c.B.MemRead(emu.GuestAddr(iov+i*stride), stride)
 		if err != nil {
 			break
 		}
@@ -464,7 +464,7 @@ func SysWritev(c *Context, f *SyscallFrame) Result {
 		if iv.Len == 0 || iv.Len >= 0x10000 {
 			continue
 		}
-		d, err := c.B.MemRead(iv.Base, iv.Len)
+		d, err := c.B.MemRead(emu.GuestAddr(iv.Base), iv.Len)
 		if err != nil {
 			continue
 		}
@@ -482,7 +482,7 @@ func SysWritev(c *Context, f *SyscallFrame) Result {
 func (c *Context) readCStr(addr uint64) string {
 	var out []byte
 	for i := 0; i < 4096; i++ {
-		b, err := c.B.MemRead(addr+uint64(len(out)), 1)
+		b, err := c.B.MemRead(emu.GuestAddr(addr+uint64(len(out))), 1)
 		if err != nil || b[0] == 0 {
 			break
 		}
@@ -571,7 +571,7 @@ func SysRead(c *Context, f *SyscallFrame) Result {
 	if n <= 0 {
 		return Result{}
 	}
-	c.B.MemWrite(a[1], data[fp.pos:fp.pos+n])
+	c.B.MemWrite(emu.GuestAddr(a[1]), data[fp.pos:fp.pos+n])
 	fp.pos += n
 	return Result{Value: uint64(n)}
 }
@@ -644,7 +644,7 @@ func (c *Context) writeStat(addr uint64, size uint64, isDir bool) {
 	if err := c.Codecs.EncodeStat(buf, Stat{Mode: mode, Size: size}); err != nil {
 		return
 	}
-	c.B.MemWrite(addr, buf)
+	c.B.MemWrite(emu.GuestAddr(addr), buf)
 }
 
 func SysFstat(c *Context, f *SyscallFrame) Result {
@@ -713,7 +713,7 @@ func SysBrk(c *Context, f *SyscallFrame) Result {
 		return Result{Value: c.brkCur}
 	}
 	if hi, lo := pageUp(want), pageUp(c.brkCur); hi > lo {
-		if err := c.B.MemMap(lo, hi-lo, emu.ProtRead|emu.ProtWrite); err != nil {
+		if err := c.B.MemMap(emu.GuestAddr(lo), hi-lo, emu.ProtRead|emu.ProtWrite); err != nil {
 			return Result{Value: c.brkCur}
 		}
 	}
@@ -795,7 +795,7 @@ func SysClockGettime(c *Context, f *SyscallFrame) Result {
 	if err := c.Codecs.EncodeTimespec(buf, Timespec{Sec: sec, Nsec: nsec}); err != nil {
 		return Result{Errno: EINVAL}
 	}
-	c.B.MemWrite(a[1], buf)
+	c.B.MemWrite(emu.GuestAddr(a[1]), buf)
 	return Result{}
 }
 
@@ -805,7 +805,7 @@ func SysGettimeofday(c *Context, f *SyscallFrame) Result {
 	if err := c.Codecs.EncodeTimeval(buf, Timeval{Sec: now.Unix(), Usec: int64(now.Nanosecond() / 1000)}); err != nil {
 		return Result{Errno: EINVAL}
 	}
-	c.B.MemWrite(f.Args[0], buf)
+	c.B.MemWrite(emu.GuestAddr(f.Args[0]), buf)
 	return Result{}
 }
 
@@ -826,7 +826,7 @@ func SysGetrandom(c *Context, f *SyscallFrame) Result {
 		if _, err := crand.Read(buf); err != nil {
 			return Result{Errno: EIO}
 		}
-		c.B.MemWrite(a[0], buf)
+		c.B.MemWrite(emu.GuestAddr(a[0]), buf)
 		return Result{Value: n}
 	}
 	seed := uint64(a[0]) ^ uint64(a[1])<<8 ^ uint64(a[2])<<16 ^ a[3]<<24 ^ a[4]<<32 ^ a[5]<<40 ^ c.getrandomCalls<<56
@@ -839,14 +839,14 @@ func SysGetrandom(c *Context, f *SyscallFrame) Result {
 		x ^= x >> 31
 		buf[i] = byte(x >> 56)
 	}
-	c.B.MemWrite(a[0], buf)
+	c.B.MemWrite(emu.GuestAddr(a[0]), buf)
 	return Result{Value: n}
 }
 
 func SysMunmap(c *Context, f *SyscallFrame) Result {
 	a := f.Args
 	c.Mem.Munmap(a[0], a[1])
-	c.B.MemUnmap(a[0], pageUp(a[1]))
+	c.B.MemUnmap(emu.GuestAddr(a[0]), pageUp(a[1]))
 	return Result{}
 }
 
@@ -855,7 +855,7 @@ func SysMprotect(c *Context, f *SyscallFrame) Result {
 	// Page-granular protect on the backend; mem.Space bookkeeping is best-effort
 	// (bionic protects sub-ranges of larger mappings, e.g. thread stack guards).
 	_ = c.Mem.Protect(a[0], a[1], int(a[2]))
-	if err := c.B.MemProtect(a[0]&^0xfff, pageUp(a[1]), int(a[2])); err != nil {
+	if err := c.B.MemProtect(emu.GuestAddr(a[0]&^0xfff), pageUp(a[1]), int(a[2])); err != nil {
 		return Result{Errno: EPERM}
 	}
 	return Result{}
@@ -877,7 +877,7 @@ func SysUname(c *Context, f *SyscallFrame) Result {
 	set(3, "#1 SMP PREEMPT")
 	set(4, "aarch64")
 	set(5, "localdomain")
-	c.B.MemWrite(f.Args[0], buf[:])
+	c.B.MemWrite(emu.GuestAddr(f.Args[0]), buf[:])
 	return Result{}
 }
 
@@ -896,7 +896,7 @@ func SysSysinfo(c *Context, f *SyscallFrame) Result {
 	if err != nil {
 		return Result{Errno: EINVAL}
 	}
-	c.B.MemWrite(f.Args[0], buf)
+	c.B.MemWrite(emu.GuestAddr(f.Args[0]), buf)
 	return Result{}
 }
 
@@ -920,7 +920,7 @@ func SysReadlinkat(c *Context, f *SyscallFrame) Result {
 	if n > a[3] {
 		n = a[3]
 	}
-	c.B.MemWrite(a[2], []byte(target)[:n])
+	c.B.MemWrite(emu.GuestAddr(a[2]), []byte(target)[:n])
 	return Result{Value: n}
 }
 
@@ -935,7 +935,7 @@ func SysGetcwd(c *Context, f *SyscallFrame) Result {
 	if uint64(len(cwd)) > a[1] {
 		return Result{Errno: ERANGE}
 	}
-	c.B.MemWrite(a[0], cwd)
+	c.B.MemWrite(emu.GuestAddr(a[0]), cwd)
 	return Result{Value: uint64(len(cwd))}
 }
 
@@ -954,7 +954,7 @@ func SysPrlimit64(c *Context, f *SyscallFrame) Result {
 		if err := c.Codecs.EncodeRlimit(buf, rl); err != nil {
 			return Result{Errno: EINVAL}
 		}
-		c.B.MemWrite(old, buf)
+		c.B.MemWrite(emu.GuestAddr(old), buf)
 	}
 	return Result{}
 }
@@ -982,7 +982,7 @@ func SysSchedGetaffinity(c *Context, f *SyscallFrame) Result {
 	}
 	mask := make([]byte, n)
 	mask[0] = 0xFF // CPUs 0..7 online
-	c.B.MemWrite(a[2], mask)
+	c.B.MemWrite(emu.GuestAddr(a[2]), mask)
 	return Result{Value: n}
 }
 
@@ -1024,6 +1024,6 @@ func SysStatx(c *Context, f *SyscallFrame) Result {
 	if err != nil {
 		return Result{Errno: EINVAL}
 	}
-	c.B.MemWrite(a[4], buf)
+	c.B.MemWrite(emu.GuestAddr(a[4]), buf)
 	return Result{}
 }

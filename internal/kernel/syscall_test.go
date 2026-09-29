@@ -16,7 +16,10 @@ import (
 
 // fakeBE is an emu.Backend test double for the syscall layer: a register file
 // plus a sparse page store, so MemRead/MemWrite round-trip like a real engine.
-// Operations the kernel never calls return emu.ErrUnsupported.
+// It implements ONLY the Backend core interface (P2.5a): the kernel never calls
+// hooks or context ops, so the fake carries no capability interfaces — any
+// stray capability use is caught by a failed type assertion, not a stub return.
+// Core operations the kernel never calls return emu.ErrUnsupported.
 type fakeBE struct {
 	regs  map[emu.Reg]uint64
 	pages map[uint64][]byte
@@ -47,67 +50,55 @@ func (f *fakeBE) RegRead(reg emu.Reg) (uint64, error)  { f.regReads++; return f.
 func (f *fakeBE) RegWrite(reg emu.Reg, v uint64) error { f.regWrites++; f.regs[reg] = v; return nil }
 func (f *fakeBE) ReadGPRegs() ([34]uint64, error)      { return [34]uint64{}, emu.ErrUnsupported }
 
-func (f *fakeBE) MemMap(addr, size uint64, _ int) error {
+func (f *fakeBE) MemMap(addr emu.GuestAddr, size uint64, _ int) error {
 	if f.mapErr != nil {
 		return f.mapErr
 	}
-	for a := addr &^ 0xfff; a < addr+size; a += 0x1000 {
+	a0 := uint64(addr) // GuestAddr→raw：fake 的页表算术用 uint64
+	for a := a0 &^ 0xfff; a < a0+size; a += 0x1000 {
 		f.page(a)
 	}
 	return nil
 }
-func (f *fakeBE) MemUnmap(addr, size uint64) error {
-	f.unmapped = append(f.unmapped, struct{ addr, size uint64 }{addr, size})
-	for pg := addr &^ 0xfff; pg < addr+size; pg += 0x1000 {
+func (f *fakeBE) MemUnmap(addr emu.GuestAddr, size uint64) error {
+	a0 := uint64(addr) // GuestAddr→raw
+	f.unmapped = append(f.unmapped, struct{ addr, size uint64 }{a0, size})
+	for pg := a0 &^ 0xfff; pg < a0+size; pg += 0x1000 {
 		delete(f.pages, pg)
 	}
 	return nil
 }
-func (f *fakeBE) MemProtect(_, _ uint64, _ int) error { return nil }
-func (f *fakeBE) MemWrite(addr uint64, data []byte) error {
+func (f *fakeBE) MemProtect(_ emu.GuestAddr, _ uint64, _ int) error { return nil }
+func (f *fakeBE) MemWrite(addr emu.GuestAddr, data []byte) error {
+	a0 := uint64(addr) // GuestAddr→raw
 	for i, b := range data {
-		a := addr + uint64(i)
+		a := a0 + uint64(i)
 		f.page(a)[a&0xfff] = b
 	}
 	return nil
 }
-func (f *fakeBE) MemRead(addr, size uint64) ([]byte, error) {
+func (f *fakeBE) MemRead(addr emu.GuestAddr, size uint64) ([]byte, error) {
+	a0 := uint64(addr) // GuestAddr→raw
 	out := make([]byte, size)
 	for i := range out {
-		a := addr + uint64(i)
+		a := a0 + uint64(i)
 		out[i] = f.page(a)[a&0xfff]
 	}
 	return out, nil
 }
 func (f *fakeBE) Stop() error { f.stopped = true; return nil }
 
-func (f *fakeBE) MemMapPtr(_, _ uint64, _ int, _ unsafe.Pointer) error {
+func (f *fakeBE) MemMapPtr(_ emu.GuestAddr, _ uint64, _ int, _ unsafe.Pointer) error {
 	return emu.ErrUnsupported
-}
-func (f *fakeBE) HookCode(_, _ uint64, _ emu.CodeHookFunc) (emu.HookHandle, error) {
-	return nil, emu.ErrUnsupported
-}
-func (f *fakeBE) HookInterrupt(_ emu.InterruptHookFunc) (emu.HookHandle, error) {
-	return nil, emu.ErrUnsupported
 }
 func (f *fakeBE) InstallTrap(_ emu.TrapKind, _ emu.TrapHandler) (emu.HookHandle, error) {
 	return nil, emu.ErrUnsupported
 }
-func (f *fakeBE) HookMemInvalid(_ func(b emu.Backend, typ int, addr uint64, size int, value int64) bool) (emu.HookHandle, error) {
-	return nil, emu.ErrUnsupported
+func (f *fakeBE) Start(_, _ emu.GuestAddr) error { return emu.ErrUnsupported }
+func (f *fakeBE) StartCount(_, _ emu.GuestAddr, _ uint64) error {
+	return emu.ErrUnsupported
 }
-func (f *fakeBE) HookMemRead(_, _ uint64, _ func(b emu.Backend, addr uint64, size int)) (emu.HookHandle, error) {
-	return nil, emu.ErrUnsupported
-}
-func (f *fakeBE) HookMemWrite(_, _ uint64, _ func(b emu.Backend, addr uint64, size int, value int64)) (emu.HookHandle, error) {
-	return nil, emu.ErrUnsupported
-}
-func (f *fakeBE) Start(_, _ uint64) error              { return emu.ErrUnsupported }
-func (f *fakeBE) StartCount(_, _, _ uint64) error      { return emu.ErrUnsupported }
-func (f *fakeBE) SaveContext() (emu.CPUContext, error) { return nil, emu.ErrUnsupported }
-func (f *fakeBE) RestoreContext(emu.CPUContext) error  { return emu.ErrUnsupported }
-func (f *fakeBE) FlushCache() error                    { return emu.ErrUnsupported }
-func (f *fakeBE) Close() error                         { return nil }
+func (f *fakeBE) Close() error { return nil }
 
 // testTransport is a test double for kernel.SyscallTransport mirroring the
 // Linux/AArch64 encoding (x8 number, x0..x5 args, x0 = value / -errno) so the
@@ -163,8 +154,8 @@ func (c *captureCodec) SysinfoSize() int  { return 128 }
 func (c *captureCodec) RlimitSize() int   { return 16 }
 func (c *captureCodec) IovecSize() int    { return 16 }
 
-func (c *captureCodec) EncodeStat(_ []byte, s Stat) error       { c.stat = s; return nil }
-func (c *captureCodec) EncodeStatx(_ []byte, s Statx) error     { c.statx = s; return nil }
+func (c *captureCodec) EncodeStat(_ []byte, s Stat) error         { c.stat = s; return nil }
+func (c *captureCodec) EncodeStatx(_ []byte, s Statx) error       { c.statx = s; return nil }
 func (c *captureCodec) EncodeTimespec(_ []byte, t Timespec) error { c.timespec = t; return nil }
 func (c *captureCodec) EncodeTimeval(_ []byte, t Timeval) error   { c.timeval = t; return nil }
 func (c *captureCodec) EncodeSysinfo(_ []byte, s Sysinfo) error   { c.sysinfo = s; return nil }
@@ -238,14 +229,14 @@ func (k *kernelCtxt) call(num uint64, args ...uint64) int64 {
 
 // putStr writes a NUL-terminated string into guest memory, returning its address.
 func (k *kernelCtxt) putStr(addr uint64, s string) uint64 {
-	if err := k.be.MemWrite(addr, append([]byte(s), 0)); err != nil {
+	if err := k.be.MemWrite(emu.GuestAddr(addr), append([]byte(s), 0)); err != nil {
 		panic(err)
 	}
 	return addr
 }
 
 func (k *kernelCtxt) memAt(addr, n uint64) []byte {
-	b, err := k.be.MemRead(addr, n)
+	b, err := k.be.MemRead(emu.GuestAddr(addr), n)
 	if err != nil {
 		panic(err)
 	}
@@ -436,8 +427,8 @@ func TestWritableOverlay(t *testing.T) {
 	if fd != 100 {
 		t.Fatalf("writable openat fd = %d, want 100", fd)
 	}
-	k.be.MemWrite(scratch, []byte("AB"))
-	k.be.MemWrite(scratch+0x100, []byte("CD"))
+	k.be.MemWrite(emu.GuestAddr(scratch), []byte("AB"))
+	k.be.MemWrite(emu.GuestAddr(scratch+0x100), []byte("CD"))
 	if got := k.call(SYS_write, uint64(fd), scratch, 2); got != 2 {
 		t.Fatalf("write = %d, want 2", got)
 	}
@@ -480,14 +471,14 @@ func TestWritev(t *testing.T) {
 	}
 
 	// two iovecs: {"foo",3},{"bar",3}
-	k.be.MemWrite(scratch+0x1000, []byte("foo"))
-	k.be.MemWrite(scratch+0x1100, []byte("bar"))
+	k.be.MemWrite(emu.GuestAddr(scratch+0x1000), []byte("foo"))
+	k.be.MemWrite(emu.GuestAddr(scratch+0x1100), []byte("bar"))
 	var iov [32]byte
 	binary.LittleEndian.PutUint64(iov[0:], scratch+0x1000)
 	binary.LittleEndian.PutUint64(iov[8:], 3)
 	binary.LittleEndian.PutUint64(iov[16:], scratch+0x1100)
 	binary.LittleEndian.PutUint64(iov[24:], 3)
-	k.be.MemWrite(scratch+0x1200, iov[:])
+	k.be.MemWrite(emu.GuestAddr(scratch+0x1200), iov[:])
 
 	if got := k.call(SYS_writev, uint64(fd), scratch+0x1200, 2); got != 6 {
 		t.Fatalf("writev = %d, want 6", got)
@@ -520,7 +511,7 @@ func TestBrk(t *testing.T) {
 	if k.ctx.BrkTop() != pageUp(want) {
 		t.Fatalf("BrkTop = %#x, want %#x", k.ctx.BrkTop(), pageUp(want))
 	}
-	k.be.MemWrite(BrkBase, []byte("heap!"))
+	k.be.MemWrite(emu.GuestAddr(BrkBase), []byte("heap!"))
 	if got := k.memAt(BrkBase, 5); string(got) != "heap!" {
 		t.Fatalf("brk heap not writable on backend, got %q", got)
 	}
@@ -552,7 +543,7 @@ func TestMmap(t *testing.T) {
 	}
 
 	// mapped memory round-trips through the backend
-	k.be.MemWrite(uint64(a), []byte("mmap-data"))
+	k.be.MemWrite(emu.GuestAddr(uint64(a)), []byte("mmap-data"))
 	if got := k.memAt(uint64(a), 9); string(got) != "mmap-data" {
 		t.Fatalf("mmap memory = %q, want %q", got, "mmap-data")
 	}
@@ -813,7 +804,7 @@ func TestSnapshotRestore(t *testing.T) {
 	}
 	fd := k.openTestFile()
 	wfd := k.call(SYS_openat, 0, k.putStr(scratch+0x800, wpath), oWRONLY|oCREAT)
-	k.be.MemWrite(scratch, []byte("DATA"))
+	k.be.MemWrite(emu.GuestAddr(scratch), []byte("DATA"))
 	k.call(SYS_write, uint64(wfd), scratch, 4)
 
 	snap := k.ctx.Snapshot()
@@ -822,7 +813,7 @@ func TestSnapshotRestore(t *testing.T) {
 	k.call(SYS_brk, BrkBase+0x5000)
 	k.openTestFile() // consumes another fd
 	k.call(SYS_read, uint64(fd), scratch+0x200, 5)
-	k.be.MemWrite(scratch, []byte("MORE"))
+	k.be.MemWrite(emu.GuestAddr(scratch), []byte("MORE"))
 	k.call(SYS_write, uint64(wfd), scratch, 4)
 	k.ctx.Exited, k.ctx.ExitCode = true, 3
 	k.call(SYS_mkdirat, 0, k.putStr(scratch+0x900, "/data/local/extra"), 0755)
@@ -986,20 +977,20 @@ func TestWritevHonorsPosition(t *testing.T) {
 		t.Fatalf("openat = %d", fd)
 	}
 	// write "0123456789" (10 bytes) at pos 0
-	k.be.MemWrite(scratch+0x1000, []byte("0123456789"))
+	k.be.MemWrite(emu.GuestAddr(scratch+0x1000), []byte("0123456789"))
 	if got := k.call(SYS_write, uint64(fd), scratch+0x1000, 10); got != 10 {
 		t.Fatalf("write = %d, want 10", got)
 	}
 	// seek to 3, then writev {"AB",2},{"CD",2} — must overwrite bytes 3..7
 	k.call(SYS_lseek, uint64(fd), 3, 0)
-	k.be.MemWrite(scratch+0x1000, []byte("AB"))
-	k.be.MemWrite(scratch+0x1100, []byte("CD"))
+	k.be.MemWrite(emu.GuestAddr(scratch+0x1000), []byte("AB"))
+	k.be.MemWrite(emu.GuestAddr(scratch+0x1100), []byte("CD"))
 	var iov [32]byte
 	binary.LittleEndian.PutUint64(iov[0:], scratch+0x1000)
 	binary.LittleEndian.PutUint64(iov[8:], 2)
 	binary.LittleEndian.PutUint64(iov[16:], scratch+0x1100)
 	binary.LittleEndian.PutUint64(iov[24:], 2)
-	k.be.MemWrite(scratch+0x1200, iov[:])
+	k.be.MemWrite(emu.GuestAddr(scratch+0x1200), iov[:])
 	if got := k.call(SYS_writev, uint64(fd), scratch+0x1200, 2); got != 4 {
 		t.Fatalf("writev = %d, want 4", got)
 	}
@@ -1078,7 +1069,7 @@ func TestHandlersReturnPureResults(t *testing.T) {
 
 	// SysWrite on a writable overlay fd: pure Value, no registers
 	wfd := k.call(SYS_openat, 0, k.putStr(scratch+0x800, "/data/local/pure.bin"), oWRONLY|oCREAT)
-	k.be.MemWrite(scratch, []byte("XY"))
+	k.be.MemWrite(emu.GuestAddr(scratch), []byte("XY"))
 	k.be.regReads, k.be.regWrites = 0, 0
 	res = SysWrite(k.ctx, frame(uint64(wfd), scratch, 2))
 	if res != (Result{Value: 2}) {

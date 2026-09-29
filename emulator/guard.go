@@ -49,10 +49,12 @@ func (e *Emulator) checkGuestPanic() error {
 }
 
 // guardInterrupt / guardCode / guardMemInvalid / guardMemRead / guardMemWrite
-// wrap the callback signatures emu.Backend accepts; guardHostFn wraps the
-// internal hostFn entries (Replace callbacks, Go libc implementations) that
-// fire from onInterrupt — already covered by the interrupt guard, but the
-// boundary belongs on every entry the backend can reach.
+// wrap the callback signatures the emu capability interfaces accept;
+// guardHostFn wraps the internal hostFn entries (Replace callbacks, Go libc
+// implementations) that fire from onInterrupt — already covered by the
+// interrupt guard, but the boundary belongs on every entry the backend can
+// reach. The emulator's own callbacks keep plain uint64 addresses; the
+// GuestAddr→uint64 conversion happens here, at the backend boundary.
 func (e *Emulator) guardInterrupt(fn emu.InterruptHookFunc) emu.InterruptHookFunc {
 	return func(b emu.Backend, intno uint32) {
 		defer e.recoverGuestPanic()
@@ -60,31 +62,31 @@ func (e *Emulator) guardInterrupt(fn emu.InterruptHookFunc) emu.InterruptHookFun
 	}
 }
 
-func (e *Emulator) guardCode(fn emu.CodeHookFunc) emu.CodeHookFunc {
-	return func(b emu.Backend, addr uint64, size uint32) {
+func (e *Emulator) guardCode(fn func(emu.Backend, uint64, uint32)) emu.CodeHookFunc {
+	return func(b emu.Backend, addr emu.GuestAddr, size uint32) {
 		defer e.recoverGuestPanic()
-		fn(b, addr, size)
+		fn(b, uint64(addr), size)
 	}
 }
 
-func (e *Emulator) guardMemInvalid(fn func(emu.Backend, int, uint64, int, int64) bool) func(emu.Backend, int, uint64, int, int64) bool {
-	return func(b emu.Backend, typ int, addr uint64, size int, val int64) bool {
+func (e *Emulator) guardMemInvalid(fn func(emu.Backend, int, uint64, int, int64) bool) emu.MemInvalidHookFunc {
+	return func(b emu.Backend, typ int, addr emu.GuestAddr, size int, val int64) bool {
 		defer e.recoverGuestPanic()
-		return fn(b, typ, addr, size, val)
+		return fn(b, typ, uint64(addr), size, val)
 	}
 }
 
-func (e *Emulator) guardMemRead(fn func(emu.Backend, uint64, int)) func(emu.Backend, uint64, int) {
-	return func(b emu.Backend, addr uint64, size int) {
+func (e *Emulator) guardMemRead(fn func(emu.Backend, uint64, int)) emu.MemReadHookFunc {
+	return func(b emu.Backend, addr emu.GuestAddr, size int) {
 		defer e.recoverGuestPanic()
-		fn(b, addr, size)
+		fn(b, uint64(addr), size)
 	}
 }
 
-func (e *Emulator) guardMemWrite(fn func(emu.Backend, uint64, int, int64)) func(emu.Backend, uint64, int, int64) {
-	return func(b emu.Backend, addr uint64, size int, val int64) {
+func (e *Emulator) guardMemWrite(fn func(emu.Backend, uint64, int, int64)) emu.MemWriteHookFunc {
+	return func(b emu.Backend, addr emu.GuestAddr, size int, val int64) {
 		defer e.recoverGuestPanic()
-		fn(b, addr, size, val)
+		fn(b, uint64(addr), size, val)
 	}
 }
 

@@ -108,12 +108,16 @@ func (e *Emulator) RunThreads() (int, error) {
 		return 0, nil
 	}
 	// Preserve the main thread's full register state across the fiber slices.
-	mainCtx, err := e.be.SaveContext()
+	cm, ok := e.be.(emu.ContextManager)
+	if !ok { // capability probe: engine cannot snapshot at all
+		return 0, fmt.Errorf("scheduler: save main context: %w (engine %q)", emu.ErrUnsupported, e.engine)
+	}
+	mainCtx, err := cm.SaveContext()
 	if err != nil {
 		return 0, fmt.Errorf("scheduler: save main context: %w", err)
 	}
 	defer func() {
-		_ = e.be.RestoreContext(mainCtx)
+		_ = cm.RestoreContext(mainCtx)
 		_ = mainCtx.Free()
 	}()
 
@@ -178,7 +182,16 @@ func (e *Emulator) runFiberSlice(f *fiber) error {
 		_ = e.be.RegWrite(e.lrReg, sentinel)
 		f.started = true
 	} else {
-		if err := e.be.RestoreContext(f.ctx); err != nil { // can't resume -> drop it
+		// Capability probe: an engine without ContextManager cannot resume —
+		// same degradation as a failed RestoreContext (drop the fiber).
+		cm, ok := e.be.(emu.ContextManager)
+		if !ok {
+			_ = f.ctx.Free()
+			f.ctx = nil
+			f.state = fsParked
+			return nil
+		}
+		if err := cm.RestoreContext(f.ctx); err != nil { // can't resume -> drop it
 			_ = f.ctx.Free()
 			f.ctx = nil
 			f.state = fsParked
@@ -189,7 +202,7 @@ func (e *Emulator) runFiberSlice(f *fiber) error {
 		startPC, _ = e.be.RegRead(e.pcReg)
 	}
 
-	if err := e.be.Start(startPC, sentinel); err != nil {
+	if err := e.be.Start(emu.GuestAddr(startPC), emu.GuestAddr(sentinel)); err != nil {
 		if e.cfg.Verbose {
 			fmt.Printf("[sched] fiber %d fault: %v\n", f.id, err)
 		}
@@ -211,7 +224,12 @@ func (e *Emulator) runFiberSlice(f *fiber) error {
 		return nil
 	}
 	// Yielded mid-execution — snapshot so we can resume from exactly here.
-	ctx, err := e.be.SaveContext()
+	cm, ok := e.be.(emu.ContextManager)
+	if !ok { // capability probe: backend can't snapshot -> single-slice only
+		f.state = fsParked
+		return nil
+	}
+	ctx, err := cm.SaveContext()
 	if err != nil {
 		f.state = fsParked // backend can't snapshot -> single-slice only
 		return nil

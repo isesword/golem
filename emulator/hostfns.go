@@ -17,7 +17,7 @@ func registerHostFns(e *Emulator) error {
 		return err
 	}
 	e.atRandom = at
-	if err := e.be.MemWrite(e.atRandom, []byte("golem-randseed")); err != nil {
+	if err := e.be.MemWrite(emu.GuestAddr(e.atRandom), []byte("golem-randseed")); err != nil {
 		return err
 	}
 
@@ -49,7 +49,7 @@ func hostSystemPropertyGet(e *Emulator, b emu.Backend) {
 	v, ok := e.cfg.Android.PropertyProvider(name)
 	if !ok {
 		if buf != 0 {
-			_ = e.be.MemWrite(buf, []byte{0})
+			_ = e.be.MemWrite(emu.GuestAddr(buf), []byte{0})
 		}
 		_ = b.RegWrite(e.retReg, 0)
 		return
@@ -58,7 +58,7 @@ func hostSystemPropertyGet(e *Emulator, b emu.Backend) {
 		v = v[:91]
 	}
 	if buf != 0 {
-		_ = e.be.MemWrite(buf, append([]byte(v), 0))
+		_ = e.be.MemWrite(emu.GuestAddr(buf), append([]byte(v), 0))
 	}
 	_ = b.RegWrite(e.retReg, uint64(len(v)))
 }

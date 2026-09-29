@@ -40,7 +40,7 @@ type fieldRef struct {
 // exhausted they come from __stack. (MS.b's args are all GP, so FP/__vr is
 // unused here.)
 func (e *Emulator) decodeVaList(vaPtr uint64, n int) []uint64 {
-	hdr, err := e.be.MemRead(vaPtr, 32)
+	hdr, err := e.be.MemRead(emu.GuestAddr(vaPtr), 32)
 	if err != nil {
 		return make([]uint64, n)
 	}
@@ -51,12 +51,12 @@ func (e *Emulator) decodeVaList(vaPtr uint64, n int) []uint64 {
 	stackPos := stack
 	for i := 0; i < n; i++ {
 		if grOffs < 0 {
-			if v, err := e.be.MemRead(uint64(int64(grTop)+grOffs), 8); err == nil {
+			if v, err := e.be.MemRead(emu.GuestAddr(uint64(int64(grTop)+grOffs)), 8); err == nil { // GuestAddr 转换：va_list 指针算术仍为 uint64
 				out[i] = le64(v)
 			}
 			grOffs += 8
 		} else {
-			if v, err := e.be.MemRead(stackPos, 8); err == nil {
+			if v, err := e.be.MemRead(emu.GuestAddr(stackPos), 8); err == nil {
 				out[i] = le64(v)
 			}
 			stackPos += 8
@@ -322,7 +322,7 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 			clsName = cls.Name
 		}
 		for i := uint64(0); i < count && i < 256; i++ {
-			ent, _ := b.MemRead(methods+i*24, 24)
+			ent, _ := b.MemRead(emu.GuestAddr(methods+i*24), 24)
 			namePtr := le64(ent[0:])
 			sigPtr := le64(ent[8:])
 			fnPtr := le64(ent[16:])
@@ -355,7 +355,7 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 		s := e.gstr(e.jarg(b, 1))
 		ret = e.WriteScratch(append([]byte(s), 0))
 		if cp := e.jarg(b, 2); cp != 0 {
-			_ = e.be.MemWrite(cp, []byte{1})
+			_ = e.be.MemWrite(emu.GuestAddr(cp), []byte{1})
 		}
 	case jniReleaseStringUTFChrs:
 		ret = 0
@@ -408,14 +408,14 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 		e.arrayPins[p] = pinEntry{ref: dvm.Ref(int32(e.jarg(b, 1))), gen: e.pinGen}
 		ret = p
 		if cp := e.jarg(b, 2); cp != 0 {
-			_ = e.be.MemWrite(cp, []byte{1})
+			_ = e.be.MemWrite(emu.GuestAddr(cp), []byte{1})
 		}
 	case jniRelByteArrayElements: // (jarray, jbyte* elems, jint mode) — copy back unless JNI_ABORT
 		arr, ptr, mode := e.jarg(b, 1), e.jarg(b, 2), e.jarg(b, 3)
 		if mode != 2 { // 2 = JNI_ABORT
 			if o := e.vm.Deref(dvm.Ref(int32(arr))); o != nil {
 				if bs, ok := o.Value.([]byte); ok {
-					if d, err := e.be.MemRead(ptr, uint64(len(bs))); err == nil {
+					if d, err := e.be.MemRead(emu.GuestAddr(ptr), uint64(len(bs))); err == nil {
 						copy(bs, d)
 					}
 				}
@@ -426,14 +426,14 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 		data := e.gbytes(e.jarg(b, 1))
 		start, ln, buf := e.jarg(b, 2), e.jarg(b, 3), e.jarg(b, 4)
 		if int(start+ln) <= len(data) {
-			_ = e.be.MemWrite(buf, data[start:start+ln])
+			_ = e.be.MemWrite(emu.GuestAddr(buf), data[start:start+ln])
 		}
 	case jniSetByteArrayRegion: // (jarray, start, len, buf)
 		o := e.vm.Deref(dvm.Ref(int32(e.jarg(b, 1))))
 		start, ln, buf := e.jarg(b, 2), e.jarg(b, 3), e.jarg(b, 4)
 		if o != nil {
 			if bs, ok := o.Value.([]byte); ok && int(start+ln) <= len(bs) {
-				if d, err := e.be.MemRead(buf, ln); err == nil {
+				if d, err := e.be.MemRead(emu.GuestAddr(buf), ln); err == nil {
 					copy(bs[start:], d)
 				}
 			}
@@ -490,7 +490,7 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 	case 165: // GetStringChars (jstring, isCopy*) -> jchar* (UTF-16LE)
 		ret = e.WriteScratch(append(utf16le(e.gstr(e.jarg(b, 1))), 0, 0))
 		if cp := e.jarg(b, 2); cp != 0 {
-			_ = e.be.MemWrite(cp, []byte{1})
+			_ = e.be.MemWrite(emu.GuestAddr(cp), []byte{1})
 		}
 	case 166: // ReleaseStringChars
 		ret = 0
@@ -498,13 +498,13 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 		r := []rune(e.gstr(e.jarg(b, 1)))
 		start, ln, buf := int(e.jarg(b, 2)), int(e.jarg(b, 3)), e.jarg(b, 4)
 		if start >= 0 && start+ln <= len(r) {
-			_ = e.be.MemWrite(buf, utf16le(string(r[start:start+ln])))
+			_ = e.be.MemWrite(emu.GuestAddr(buf), utf16le(string(r[start:start+ln])))
 		}
 	case 221: // GetStringUTFRegion(str, start, len, buf) -> UTF-8 into buf
 		r := []rune(e.gstr(e.jarg(b, 1)))
 		start, ln, buf := int(e.jarg(b, 2)), int(e.jarg(b, 3)), e.jarg(b, 4)
 		if start >= 0 && start+ln <= len(r) {
-			_ = e.be.MemWrite(buf, append([]byte(string(r[start:start+ln])), 0))
+			_ = e.be.MemWrite(emu.GuestAddr(buf), append([]byte(string(r[start:start+ln])), 0))
 		}
 
 	case jniGetJavaVM:
@@ -567,7 +567,7 @@ func (e *Emulator) callStaticInfo(b emu.Backend, isV bool) (*dvm.Class, string, 
 		p := e.jarg(b, 3)
 		if p != 0 {
 			for i := 0; i < 8; i++ {
-				w, err := e.be.MemRead(p+uint64(i)*8, 8)
+				w, err := e.be.MemRead(emu.GuestAddr(p+uint64(i)*8), 8)
 				if err != nil {
 					break
 				}
@@ -644,7 +644,7 @@ func (e *Emulator) callInstanceInfo(b emu.Backend, isV bool) (*dvm.Object, strin
 		p := e.jarg(b, 3)
 		if p != 0 {
 			for i := 0; i < 8; i++ {
-				w, err := e.be.MemRead(p+uint64(i)*8, 8)
+				w, err := e.be.MemRead(emu.GuestAddr(p+uint64(i)*8), 8)
 				if err != nil {
 					break
 				}

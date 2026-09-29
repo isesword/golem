@@ -47,7 +47,12 @@ func main() {
 	must(be.RegWrite(arm64.X0, 10), "set x0")
 
 	hookRan := false
-	_, err = be.HookInterrupt(func(b emu.Backend, intno uint32) {
+	ih, ok := be.(emu.InterruptHooker) // capability probe (P2.5a)
+	if !ok {
+		fmt.Println("FAIL engine lacks the InterruptHooker capability")
+		os.Exit(1)
+	}
+	_, err = ih.HookInterrupt(func(b emu.Backend, intno uint32) {
 		hookRan = true
 		// callback-time fresh mapping — the scenario that faults on an
 		// M-attached thread if the design were wrong.

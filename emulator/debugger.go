@@ -37,7 +37,11 @@ type Debugger struct {
 // NewDebugger attaches a debugger (installs the per-instruction hook).
 func (e *Emulator) NewDebugger() (*Debugger, error) {
 	d := &Debugger{e: e, bps: map[uint64]bool{}, In: os.Stdin, Out: os.Stdout}
-	h, err := e.be.HookCode(1, 0, e.guardCode(func(b emu.Backend, addr uint64, size uint32) { // begin>end => global
+	ih, ok := e.be.(emu.InstructionHooker)
+	if !ok {
+		return nil, e.capabilityUnavailable("NewDebugger")
+	}
+	h, err := ih.HookCode(1, 0, e.guardCode(func(b emu.Backend, addr uint64, size uint32) { // begin>end => global
 		if d.step || d.bps[addr] {
 			d.repl(addr)
 		}
@@ -140,7 +144,7 @@ func (d *Debugger) printMem(f []string) {
 			n = v
 		}
 	}
-	data, err := d.e.be.MemRead(addr, n)
+	data, err := d.e.be.MemRead(emu.GuestAddr(addr), n)
 	if err != nil {
 		fmt.Fprintf(d.Out, "read error: %v\n", err)
 		return

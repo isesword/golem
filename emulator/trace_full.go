@@ -63,7 +63,11 @@ type insnTracer struct {
 func (e *Emulator) TraceInsns(w io.Writer, start, end, base uint64) (func(), error) {
 	t := &insnTracer{e: e, w: bufio.NewWriterSize(w, 1<<20), base: base, buf: make([]byte, 0, 256)}
 	fmt.Fprintf(t.w, "# golem instruction trace  base=0x%x range=[0x%x,0x%x)\n", base, start, end)
-	h, err := e.be.HookCode(start, end, e.guardCode(func(b emu.Backend, addr uint64, size uint32) {
+	ih, ok := e.be.(emu.InstructionHooker)
+	if !ok {
+		return nil, e.capabilityUnavailable("TraceInsns")
+	}
+	h, err := ih.HookCode(emu.GuestAddr(start), emu.GuestAddr(end), e.guardCode(func(b emu.Backend, addr uint64, size uint32) {
 		t.onInsn(addr)
 	}))
 	if err != nil {
@@ -103,7 +107,7 @@ func (t *insnTracer) onInsn(pc uint64) {
 		return
 	}
 	var op uint32
-	if b, err := t.e.be.MemRead(pc, 4); err == nil && len(b) == 4 {
+	if b, err := t.e.be.MemRead(emu.GuestAddr(pc), 4); err == nil && len(b) == 4 {
 		op = uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
 	}
 

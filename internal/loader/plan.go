@@ -70,16 +70,16 @@ func (p *Plan) apply(be emu.Backend, base uint64, resolve Resolver, share bool) 
 		m := &p.Maps[i]
 		if m.Shareable && share {
 			buf := p.shared[i]
-			if err := be.MemMapPtr(base+m.Addr, m.Size, m.Prot, unsafe.Pointer(&buf[0])); err != nil {
+			if err := be.MemMapPtr(emu.GuestAddr(base+m.Addr), m.Size, m.Prot, unsafe.Pointer(&buf[0])); err != nil {
 				return fmt.Errorf("map shared seg @0x%x: %w", base+m.Addr, err)
 			}
 			continue
 		}
-		if err := be.MemMap(base+m.Addr, m.Size, emu.ProtRead|emu.ProtWrite|emu.ProtExec); err != nil {
+		if err := be.MemMap(emu.GuestAddr(base+m.Addr), m.Size, emu.ProtRead|emu.ProtWrite|emu.ProtExec); err != nil {
 			return fmt.Errorf("map seg @0x%x: %w", base+m.Addr, err)
 		}
 		if len(m.Content) > 0 {
-			if err := be.MemWrite(base+m.Addr, m.Content); err != nil {
+			if err := be.MemWrite(emu.GuestAddr(base+m.Addr), m.Content); err != nil {
 				return fmt.Errorf("write seg @0x%x: %w", base+m.Addr, err)
 			}
 		}
@@ -107,7 +107,7 @@ func (p *Plan) apply(be emu.Backend, base uint64, resolve Resolver, share bool) 
 		if m.Shareable && share {
 			continue
 		}
-		if err := be.MemProtect(base+m.Addr, m.Size, m.Prot); err != nil {
+		if err := be.MemProtect(emu.GuestAddr(base+m.Addr), m.Size, m.Prot); err != nil {
 			return fmt.Errorf("protect seg @0x%x: %w", base+m.Addr, err)
 		}
 	}

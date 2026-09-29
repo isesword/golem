@@ -24,6 +24,25 @@ func (e *Emulator) capabilityErr(op string, err error) error {
 	return err
 }
 
+// capabilityUnavailable is the probe half of capability gating (P2.5a,
+// DESIGN.md invariant 14): the engine does not implement the capability
+// interface backing op at all. The error wraps emu.ErrUnsupported so callers
+// keep ONE errors.Is degrade path whether the capability is absent (type
+// assertion failed) or present but refused (backend returned ErrUnsupported).
+func (e *Emulator) capabilityUnavailable(op string) error {
+	return fmt.Errorf("%s: %w (engine %q)", op, emu.ErrUnsupported, e.engine)
+}
+
+// flushCache invalidates the engine's translated code cache via the
+// CacheInvalidator capability; an engine without it reports ErrUnsupported,
+// exactly as a backend whose FlushCache fails.
+func (e *Emulator) flushCache() error {
+	if ci, ok := e.be.(emu.CacheInvalidator); ok {
+		return ci.FlushCache()
+	}
+	return e.capabilityUnavailable("FlushCache")
+}
+
 // Guest memory protection bits (mirror the CPU backend's UC_PROT_*).
 const (
 	ProtNone  = emu.ProtNone
@@ -83,7 +102,7 @@ func (e *Emulator) doAlloc(size uint64, prot int) (uint64, error) {
 				chunk = int((size + 0xfff) &^ 0xfff)
 			}
 			base := e.mem.Mmap(uint64(chunk), prot, "arena")
-			if err := e.be.MemMap(base, uint64(chunk), prot); err != nil {
+			if err := e.be.MemMap(emu.GuestAddr(base), uint64(chunk), prot); err != nil {
 				// transaction: the bookkeeping region must not outlive a
 				// failed backend map; if the rollback itself fails the
 				// emulator is poisoned (address space inconsistent).
@@ -99,7 +118,7 @@ func (e *Emulator) doAlloc(size uint64, prot int) (uint64, error) {
 		return addr, nil
 	}
 	a := e.mem.Mmap(size, prot, "alloc")
-	if err := e.be.MemMap(a, (size+0xfff)&^0xfff, prot); err != nil {
+	if err := e.be.MemMap(emu.GuestAddr(a), (size+0xfff)&^0xfff, prot); err != nil {
 		if rb := e.mem.RollbackLast(a, (size+0xfff)&^0xfff); rb != nil {
 			return 0, fmt.Errorf("map %#x: %w (rollback also failed: %v — emulator poisoned)", a, err, rb)
 		}
@@ -116,21 +135,25 @@ func (e *Emulator) Malloc(size uint64) (uint64, error) { return e.Alloc(size, Pr
 // where no error channel exists (use Alloc directly where errors propagate).
 func (e *Emulator) WriteScratch(data []byte) uint64 {
 	a := e.MustAlloc(uint64(len(data))+16, ProtRead|ProtWrite)
-	if err := e.be.MemWrite(a, data); err != nil {
+	if err := e.be.MemWrite(emu.GuestAddr(a), data); err != nil {
 		panic(fmt.Sprintf("emulator: WriteScratch: %v", err))
 	}
 	return a
 }
 
 // WriteBytes writes raw bytes to guest memory at addr.
-func (e *Emulator) WriteBytes(addr uint64, data []byte) error { return e.be.MemWrite(addr, data) }
+func (e *Emulator) WriteBytes(addr uint64, data []byte) error {
+	return e.be.MemWrite(emu.GuestAddr(addr), data)
+}
 
 // ReadBytes reads n bytes from guest memory at addr.
-func (e *Emulator) ReadBytes(addr, n uint64) ([]byte, error) { return e.be.MemRead(addr, n) }
+func (e *Emulator) ReadBytes(addr, n uint64) ([]byte, error) {
+	return e.be.MemRead(emu.GuestAddr(addr), n)
+}
 
 // WriteCString writes s followed by a NUL terminator at addr.
 func (e *Emulator) WriteCString(addr uint64, s string) error {
-	return e.be.MemWrite(addr, append([]byte(s), 0))
+	return e.be.MemWrite(emu.GuestAddr(addr), append([]byte(s), 0))
 }
 
 // WriteCStringAlloc allocates a region, writes s+NUL, and returns its address.
@@ -138,14 +161,14 @@ func (e *Emulator) WriteCStringAlloc(s string) uint64 { return e.WriteScratch(ap
 
 // ReadU32 / ReadU64 read a little-endian integer from guest memory.
 func (e *Emulator) ReadU32(addr uint64) (uint32, error) {
-	b, err := e.be.MemRead(addr, 4)
+	b, err := e.be.MemRead(emu.GuestAddr(addr), 4)
 	if err != nil {
 		return 0, err
 	}
 	return binary.LittleEndian.Uint32(b), nil
 }
 func (e *Emulator) ReadU64(addr uint64) (uint64, error) {
-	b, err := e.be.MemRead(addr, 8)
+	b, err := e.be.MemRead(emu.GuestAddr(addr), 8)
 	if err != nil {
 		return 0, err
 	}
@@ -156,7 +179,7 @@ func (e *Emulator) ReadU64(addr uint64) (uint64, error) {
 func (e *Emulator) WriteU32(addr uint64, v uint32) error {
 	var b [4]byte
 	binary.LittleEndian.PutUint32(b[:], v)
-	return e.be.MemWrite(addr, b[:])
+	return e.be.MemWrite(emu.GuestAddr(addr), b[:])
 }
 func (e *Emulator) WriteU64(addr uint64, v uint64) error { return putU64(e.be, addr, v) }
 
@@ -164,7 +187,7 @@ func (e *Emulator) WriteU64(addr uint64, v uint64) error { return putU64(e.be, a
 func (e *Emulator) ReadCStr(addr uint64) (string, error) {
 	var out []byte
 	for {
-		b, err := e.be.MemRead(addr+uint64(len(out)), 64)
+		b, err := e.be.MemRead(emu.GuestAddr(addr+uint64(len(out))), 64)
 		if err != nil {
 			return "", err
 		}
@@ -262,7 +285,7 @@ func (e *Emulator) ReplaceE(addr uint64, fn ReplaceFunc) error {
 		return fmt.Errorf("privatize %#x: %w", addr, err)
 	}
 	// 2. save the original instructions we are about to overwrite.
-	orig, err := e.be.MemRead(addr, 8)
+	orig, err := e.be.MemRead(emu.GuestAddr(addr), 8)
 	if err != nil {
 		return fmt.Errorf("read original %#x: %w", addr, err)
 	}
@@ -271,16 +294,16 @@ func (e *Emulator) ReplaceE(addr uint64, fn ReplaceFunc) error {
 	// (AArch64 `svc #0; ret`) hardcoded in the emulator — guest instruction
 	// encoding belongs to the arch layer (a StubEncoder-shaped capability).
 	// Not fixed in P2; must be resolved before the AMD64 bring-up in P5a.
-	if err := e.be.MemWrite(addr, []byte{0x01, 0x00, 0x00, 0xd4, 0xc0, 0x03, 0x5f, 0xd6}); err != nil {
+	if err := e.be.MemWrite(emu.GuestAddr(addr), []byte{0x01, 0x00, 0x00, 0xd4, 0xc0, 0x03, 0x5f, 0xd6}); err != nil {
 		return e.poison(fmt.Sprintf("patch write %#x", addr), err)
 	}
 	// 4. flush stale translations. If it fails, roll the original
 	// instructions back; if even the rollback cannot be verified -> poison.
-	if err := e.be.FlushCache(); err != nil {
-		if rerr := e.be.MemWrite(addr, orig); rerr != nil {
+	if err := e.flushCache(); err != nil {
+		if rerr := e.be.MemWrite(emu.GuestAddr(addr), orig); rerr != nil {
 			return e.poison(fmt.Sprintf("rollback write %#x", addr), rerr)
 		}
-		if rerr := e.be.FlushCache(); rerr != nil {
+		if rerr := e.flushCache(); rerr != nil {
 			return e.poison(fmt.Sprintf("rollback flush %#x", addr), rerr)
 		}
 		return fmt.Errorf("Replace %#x: flush failed (%v) — original instructions restored", addr, err)
@@ -317,11 +340,16 @@ func (e *Emulator) ReplaceSymbol(name string, fn ReplaceFunc) error {
 // registers via *Hook — rewrite an argument, capture a value, or SetPC to skip
 // or redirect. Returns a remover.
 //
-// Inline hooks need per-instruction code hooks; an engine without them
-// returns an error wrapping emu.ErrUnsupported (use Replace for entry
-// interception, which works on any engine — it is a trap, not an inline patch).
+// Inline hooks need per-instruction code hooks; an engine without the
+// InstructionHooker capability returns an error wrapping emu.ErrUnsupported
+// (use Replace for entry interception, which works on any engine — it is a
+// trap, not an inline patch).
 func (e *Emulator) HookAddr(addr uint64, fn func(h *Hook)) (func(), error) {
-	h, err := e.be.HookCode(addr, addr, e.guardCode(func(b emu.Backend, a uint64, size uint32) {
+	ih, ok := e.be.(emu.InstructionHooker)
+	if !ok {
+		return nil, e.capabilityUnavailable("HookAddr")
+	}
+	h, err := ih.HookCode(emu.GuestAddr(addr), emu.GuestAddr(addr), e.guardCode(func(b emu.Backend, a uint64, size uint32) {
 		fn(&Hook{e})
 	}))
 	if err != nil {
@@ -343,7 +371,11 @@ func (e *Emulator) HookSymbol(name string, fn func(h *Hook)) (func(), error) {
 // and the current PC. Like HookAddr but for a whole region (needs an engine
 // with per-instruction code hooks; see HookAddr).
 func (e *Emulator) HookRange(start, end uint64, fn func(h *Hook, addr uint64)) (func(), error) {
-	h, err := e.be.HookCode(start, end, e.guardCode(func(b emu.Backend, a uint64, size uint32) {
+	ih, ok := e.be.(emu.InstructionHooker)
+	if !ok {
+		return nil, e.capabilityUnavailable("HookRange")
+	}
+	h, err := ih.HookCode(emu.GuestAddr(start), emu.GuestAddr(end), e.guardCode(func(b emu.Backend, a uint64, size uint32) {
 		fn(&Hook{e}, a)
 	}))
 	if err != nil {
@@ -356,7 +388,11 @@ func (e *Emulator) HookRange(start, end uint64, fn func(h *Hook, addr uint64)) (
 // (h.PC() = the reading instruction) and the read (addr,size). Needs an engine
 // with memory-access hooks (errors wrap emu.ErrUnsupported otherwise).
 func (e *Emulator) HookMemRead(start, end uint64, fn func(h *Hook, addr uint64, size int)) (func(), error) {
-	h, err := e.be.HookMemRead(start, end, e.guardMemRead(func(b emu.Backend, addr uint64, size int) {
+	mh, ok := e.be.(emu.MemReadHooker)
+	if !ok {
+		return nil, e.capabilityUnavailable("HookMemRead")
+	}
+	h, err := mh.HookMemRead(emu.GuestAddr(start), emu.GuestAddr(end), e.guardMemRead(func(b emu.Backend, addr uint64, size int) {
 		fn(&Hook{e}, addr, size)
 	}))
 	if err != nil {
@@ -369,7 +405,11 @@ func (e *Emulator) HookMemRead(start, end uint64, fn func(h *Hook, addr uint64, 
 // (h.PC() = the writing instruction), the (addr,size), and the value being
 // written. Needs an engine with memory-access hooks (see HookMemRead).
 func (e *Emulator) HookMemWrite(start, end uint64, fn func(h *Hook, addr uint64, size int, value int64)) (func(), error) {
-	h, err := e.be.HookMemWrite(start, end, e.guardMemWrite(func(b emu.Backend, addr uint64, size int, value int64) {
+	mh, ok := e.be.(emu.MemWriteHooker)
+	if !ok {
+		return nil, e.capabilityUnavailable("HookMemWrite")
+	}
+	h, err := mh.HookMemWrite(emu.GuestAddr(start), emu.GuestAddr(end), e.guardMemWrite(func(b emu.Backend, addr uint64, size int, value int64) {
 		fn(&Hook{e}, addr, size, value)
 	}))
 	if err != nil {
@@ -385,7 +425,11 @@ func (e *Emulator) HookMemWrite(start, end uint64, fn func(h *Hook, addr uint64,
 // code hooks.
 
 func (e *Emulator) Trace(start, end uint64) (func(), error) {
-	h, err := e.be.HookCode(start, end, e.guardCode(func(b emu.Backend, addr uint64, size uint32) {
+	ih, ok := e.be.(emu.InstructionHooker)
+	if !ok {
+		return nil, e.capabilityUnavailable("Trace")
+	}
+	h, err := ih.HookCode(emu.GuestAddr(start), emu.GuestAddr(end), e.guardCode(func(b emu.Backend, addr uint64, size uint32) {
 		fmt.Printf("[trace] 0x%x  %s\n", addr, e.NearestSym(addr))
 	}))
 	if err != nil {

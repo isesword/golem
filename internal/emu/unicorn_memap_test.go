@@ -142,11 +142,15 @@ func TestMemMapPtrReadOnlyRejectsGuestWrite(t *testing.T) {
 
 	fired := 0
 	var typ, faultAddr uint64
-	h, err := c.HookMemInvalid(func(b Backend, t2 int, addr uint64, size int, value int64) bool {
+	inv, ok := c.(InvalidMemHooker) // capability probe (P2.5a)
+	if !ok {
+		t.Fatal("backend lacks the InvalidMemHooker capability")
+	}
+	h, err := inv.HookMemInvalid(func(b Backend, t2 int, addr GuestAddr, size int, value int64) bool {
 		fired++
 		typ = uint64(t2)
-		faultAddr = addr
-		return false // not handled: unicorn must abort the emulation
+		faultAddr = uint64(addr) // GuestAddr→raw for the test assertion
+		return false             // not handled: unicorn must abort the emulation
 	})
 	if err != nil {
 		t.Fatal(err)

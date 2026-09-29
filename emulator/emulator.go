@@ -398,13 +398,13 @@ func New(cfg Config) (e *Emulator, err error) {
 
 	// Reserve fixed regions.
 	l := e.layout
-	if err := be.MemMap(l.StubBase, l.StubSize, emu.ProtAll); err != nil {
+	if err := be.MemMap(emu.GuestAddr(l.StubBase), l.StubSize, emu.ProtAll); err != nil {
 		return nil, fmt.Errorf("map stubs: %w", err)
 	}
-	if err := be.MemMap(l.StackBase, l.StackSize, emu.ProtRead|emu.ProtWrite); err != nil {
+	if err := be.MemMap(emu.GuestAddr(l.StackBase), l.StackSize, emu.ProtRead|emu.ProtWrite); err != nil {
 		return nil, fmt.Errorf("map stack: %w", err)
 	}
-	if err := be.MemMap(l.TLSBase, l.TLSSize, emu.ProtRead|emu.ProtWrite); err != nil {
+	if err := be.MemMap(emu.GuestAddr(l.TLSBase), l.TLSSize, emu.ProtRead|emu.ProtWrite); err != nil {
 		return nil, fmt.Errorf("map tls: %w", err)
 	}
 	// SP near top of stack (16-aligned).
@@ -428,11 +428,22 @@ func New(cfg Config) (e *Emulator, err error) {
 	// Route SVC: distinguish import-stub calls (by PC) from real syscalls.
 	// Every Go callback handed to the backend goes through the panic guard
 	// (guard.go): a panic must never escape across the purego trampoline.
-	if _, err := be.HookInterrupt(e.guardInterrupt(e.onInterrupt)); err != nil {
+	// InterruptHooker/InvalidMemHooker are capability probes (P2.5a): an
+	// engine without them fails New with ErrUnsupported, matching the old
+	// unconditional-method error path.
+	intr, ok := be.(emu.InterruptHooker)
+	if !ok {
+		return nil, fmt.Errorf("hook interrupt: %w (engine %q)", emu.ErrUnsupported, e.engine)
+	}
+	if _, err := intr.HookInterrupt(e.guardInterrupt(e.onInterrupt)); err != nil {
 		return nil, err
 	}
 	// Diagnose unmapped/protected accesses during bring-up.
-	if _, err := be.HookMemInvalid(e.guardMemInvalid(func(b emu.Backend, typ int, addr uint64, size int, val int64) bool {
+	inv, ok := be.(emu.InvalidMemHooker)
+	if !ok {
+		return nil, fmt.Errorf("hook mem-invalid: %w (engine %q)", emu.ErrUnsupported, e.engine)
+	}
+	if _, err := inv.HookMemInvalid(e.guardMemInvalid(func(b emu.Backend, typ int, addr uint64, size int, val int64) bool {
 		pc, _ := b.RegRead(e.pcReg)
 		if e.cfg.Verbose {
 			fmt.Printf("[mem] INVALID access type=%d addr=0x%x size=%d value=0x%x pc=0x%x (%s)\n",
@@ -574,7 +585,7 @@ func (e *Emulator) makeStub(name string, kind arch.StubKind) uint64 {
 	if err != nil {
 		panic(fmt.Sprintf("makeStub %s: %v", name, err))
 	}
-	_ = e.be.MemWrite(a, code)
+	_ = e.be.MemWrite(emu.GuestAddr(a), code)
 	e.stubs[a] = name
 	return a
 }
@@ -713,7 +724,7 @@ func (e *Emulator) CallFunc(addr uint64, args ...uint64) (uint64, error) {
 		return 0, err
 	}
 	e.scCount = 0
-	if err := e.be.Start(addr, sentinel); err != nil {
+	if err := e.be.Start(emu.GuestAddr(addr), emu.GuestAddr(sentinel)); err != nil {
 		return 0, fmt.Errorf("emu_start @0x%x: %w", addr, err)
 	}
 	// A panic inside a guest up-call was recovered at the trampoline boundary
@@ -792,7 +803,7 @@ func (e *Emulator) RunInit(m *Module) error {
 func putU64(be emu.Backend, addr, val uint64) error {
 	var b [8]byte
 	binary.LittleEndian.PutUint64(b[:], val)
-	return be.MemWrite(addr, b[:])
+	return be.MemWrite(emu.GuestAddr(addr), b[:])
 }
 
 // InitArrayPtrs reads the module's init_array function pointers from guest
@@ -801,7 +812,7 @@ func putU64(be emu.Backend, addr, val uint64) error {
 func (e *Emulator) InitArrayPtrs(m *Module) ([]uint64, error) {
 	var ptrs []uint64
 	for i := 0; i < m.Img.InitArrayLen; i++ {
-		b, err := e.be.MemRead(m.Base+m.Img.InitArrayAddr+uint64(i)*8, 8)
+		b, err := e.be.MemRead(emu.GuestAddr(m.Base+m.Img.InitArrayAddr+uint64(i)*8), 8)
 		if err != nil {
 			return nil, err
 		}

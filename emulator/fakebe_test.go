@@ -13,6 +13,8 @@ import (
 // letting privatize/Replace semantics be tested without a real CPU engine.
 // It keeps a simple page store so MemRead/MemWrite round-trip like a real
 // engine; operations not implemented panic via the nil embedded interface.
+// P2.5a: it also implements the CacheInvalidator capability (FlushCache) —
+// the ReplaceE/privatize paths probe it by type assertion.
 type faultBE struct {
 	emu.Backend // nil embedded: calling an unimplemented op fails loudly
 
@@ -47,29 +49,32 @@ func (f *faultBE) ensure(a uint64, size uint64) []byte {
 	return f.regions[pg][off : off+size]
 }
 
-func (f *faultBE) MemUnmap(addr, size uint64) error {
-	f.unmapped = append(f.unmapped, struct{ addr, size uint64 }{addr, size})
+func (f *faultBE) MemUnmap(addr emu.GuestAddr, size uint64) error {
+	a0 := uint64(addr) // GuestAddr→raw：fake 的页表算术用 uint64
+	f.unmapped = append(f.unmapped, struct{ addr, size uint64 }{a0, size})
 	if f.unmapErr != nil {
 		return f.unmapErr
 	}
-	for pg := addr &^ 0xfff; pg < addr+size; pg += 0x1000 {
+	for pg := a0 &^ 0xfff; pg < a0+size; pg += 0x1000 {
 		delete(f.regions, pg)
 	}
 	return nil
 }
-func (f *faultBE) MemMap(addr, size uint64, prot int) error {
+func (f *faultBE) MemMap(addr emu.GuestAddr, size uint64, prot int) error {
 	if f.mapErr != nil {
 		return f.mapErr
 	}
-	for pg := addr &^ 0xfff; pg < addr+size; pg += 0x1000 {
+	a0 := uint64(addr) // GuestAddr→raw
+	for pg := a0 &^ 0xfff; pg < a0+size; pg += 0x1000 {
 		f.regions[pg] = make([]byte, 0x1000)
 	}
 	return nil
 }
-func (f *faultBE) MemMapPtr(addr, size uint64, prot int, host unsafe.Pointer) error {
+func (f *faultBE) MemMapPtr(addr emu.GuestAddr, size uint64, prot int, host unsafe.Pointer) error {
 	if f.mapPtrErr != nil {
 		return f.mapPtrErr
 	}
+	a0 := uint64(addr) // GuestAddr→raw
 	buf := unsafe.Slice((*byte)(host), size)
 	for off := uint64(0); off < size; off += 0x1000 {
 		end := uint64(len(buf)) - off
@@ -78,11 +83,11 @@ func (f *faultBE) MemMapPtr(addr, size uint64, prot int, host unsafe.Pointer) er
 		}
 		page := make([]byte, 0x1000)
 		copy(page, buf[off:off+end])
-		f.regions[addr+off] = page
+		f.regions[a0+off] = page
 	}
 	return nil
 }
-func (f *faultBE) MemWrite(addr uint64, data []byte) error {
+func (f *faultBE) MemWrite(addr emu.GuestAddr, data []byte) error {
 	f.writes++
 	if f.writeOnCount > 0 && f.writes >= f.writeOnCount {
 		return errors.New("write refused (count-gated)")
@@ -95,14 +100,15 @@ func (f *faultBE) MemWrite(addr uint64, data []byte) error {
 	f.memWrites = append(f.memWrites, struct {
 		addr uint64
 		data []byte
-	}{addr, b})
-	copy(f.ensure(addr, uint64(len(data))), data)
+	}{uint64(addr), b}) // GuestAddr→raw for the write log
+	copy(f.ensure(uint64(addr), uint64(len(data))), data)
 	return nil
 }
-func (f *faultBE) MemRead(addr, size uint64) ([]byte, error) {
+func (f *faultBE) MemRead(addr emu.GuestAddr, size uint64) ([]byte, error) {
+	a0 := uint64(addr) // GuestAddr→raw
 	out := make([]byte, size)
 	for i := uint64(0); i < size; i++ {
-		out[i] = f.ensure(addr+i, 1)[0]
+		out[i] = f.ensure(a0+i, 1)[0]
 	}
 	return out, nil
 }

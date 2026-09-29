@@ -16,6 +16,17 @@ func openBE(tb testing.TB) Backend {
 	return b
 }
 
+// contextManager asserts the ContextManager capability on the benchmark
+// backend (unicorn always implements it; the probe is the P2.5a pattern).
+func contextManager(tb testing.TB, be Backend) ContextManager {
+	tb.Helper()
+	cm, ok := be.(ContextManager)
+	if !ok {
+		tb.Fatal("backend lacks the ContextManager capability")
+	}
+	return cm
+}
+
 func BenchmarkMemWrite8MiB(b *testing.B) {
 	be := openBE(b)
 	defer be.Close()
@@ -52,13 +63,14 @@ func BenchmarkMemRead8MiB(b *testing.B) {
 func BenchmarkSaveRestoreContext(b *testing.B) {
 	be := openBE(b)
 	defer be.Close()
+	cm := contextManager(b, be)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		ctx, err := be.SaveContext()
+		ctx, err := cm.SaveContext()
 		if err != nil {
 			b.Fatal(err)
 		}
-		if err := be.RestoreContext(ctx); err != nil {
+		if err := cm.RestoreContext(ctx); err != nil {
 			b.Fatal(err)
 		}
 		_ = ctx.Free()
@@ -70,6 +82,7 @@ func BenchmarkSaveRestoreContext(b *testing.B) {
 func BenchmarkRestoreFootprint(b *testing.B) {
 	be := openBE(b)
 	defer be.Close()
+	cm := contextManager(b, be)
 	regions := []struct {
 		base, size uint64
 	}{
@@ -81,7 +94,7 @@ func BenchmarkRestoreFootprint(b *testing.B) {
 	}
 	var total uint64
 	for _, r := range regions {
-		if err := be.MemMap(r.base, r.size, ProtRead|ProtWrite); err != nil {
+		if err := be.MemMap(GuestAddr(r.base), r.size, ProtRead|ProtWrite); err != nil {
 			b.Fatal(err)
 		}
 		total += r.size
@@ -94,15 +107,15 @@ func BenchmarkRestoreFootprint(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		for j, r := range regions {
-			if err := be.MemWrite(r.base, bufs[j]); err != nil {
+			if err := be.MemWrite(GuestAddr(r.base), bufs[j]); err != nil {
 				b.Fatal(err)
 			}
 		}
-		ctx, err := be.SaveContext()
+		ctx, err := cm.SaveContext()
 		if err != nil {
 			b.Fatal(err)
 		}
-		_ = be.RestoreContext(ctx)
+		_ = cm.RestoreContext(ctx)
 		_ = ctx.Free()
 	}
 }

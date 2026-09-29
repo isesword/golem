@@ -5,6 +5,7 @@ import (
 
 	"unsafe"
 
+	"github.com/isesword/golem/internal/emu"
 	"github.com/isesword/golem/internal/loader"
 )
 
@@ -56,7 +57,7 @@ func (e *Emulator) privatize(addr, size uint64) error {
 		// longer shared by definition (the guest pages are engine-private,
 		// possibly broken) and are dropped from tracking; the error bubbles
 		// up and Replace panics, so the engine never pretends to be healthy.
-		if err := e.be.MemUnmap(sr.addr, sr.size); err != nil {
+		if err := e.be.MemUnmap(emu.GuestAddr(sr.addr), sr.size); err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("unmap shared %#x: %w", sr.addr, err)
 			}
@@ -67,7 +68,7 @@ func (e *Emulator) privatize(addr, size uint64) error {
 		// the range stays shared and the emulator remains usable (recoverable
 		// failure). If the rollback also fails the emulator is poisoned.
 		rollback := func(failWhat string, failErr error) error {
-			if rb := e.be.MemMapPtr(sr.addr, sr.size, m.Prot, sr.hostPtr); rb != nil {
+			if rb := e.be.MemMapPtr(emu.GuestAddr(sr.addr), sr.size, m.Prot, sr.hostPtr); rb != nil {
 				return e.poison(fmt.Sprintf("privatize rollback %#x after %s", sr.addr, failWhat),
 					fmt.Errorf("%v (rollback: %w)", failErr, rb))
 			}
@@ -77,14 +78,14 @@ func (e *Emulator) privatize(addr, size uint64) error {
 			}
 			return firstErr
 		}
-		if err := e.be.MemMap(sr.addr, sr.size, m.Prot); err != nil {
+		if err := e.be.MemMap(emu.GuestAddr(sr.addr), sr.size, m.Prot); err != nil {
 			if rerr := rollback("private re-map", fmt.Errorf("re-map private %#x: %w", sr.addr, err)); rerr != nil {
 				return rerr
 			}
 			continue
 		}
 		if len(m.Content) > 0 {
-			if err := e.be.MemWrite(sr.addr, m.Content); err != nil {
+			if err := e.be.MemWrite(emu.GuestAddr(sr.addr), m.Content); err != nil {
 				if rerr := rollback("content restore", fmt.Errorf("restore content %#x: %w", sr.addr, err)); rerr != nil {
 					return rerr
 				}
@@ -97,7 +98,7 @@ func (e *Emulator) privatize(addr, size uint64) error {
 	if firstErr != nil {
 		return firstErr
 	}
-	if err := e.be.FlushCache(); err != nil {
+	if err := e.flushCache(); err != nil {
 		return fmt.Errorf("flush after privatize: %w", err)
 	}
 	return nil

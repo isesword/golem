@@ -32,7 +32,7 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 		b[1] = byte(insn >> 8)
 		b[2] = byte(insn >> 16)
 		b[3] = byte(insn >> 24)
-		if err := be.MemWrite(base+uint64(i*4), b[:]); err != nil {
+		if err := be.MemWrite(GuestAddr(base+uint64(i*4)), b[:]); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -45,7 +45,11 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 	// mid-emulation — the nesting path every real consumer depends on.
 	hookFires := 0
 	sawX0 := []uint64{}
-	h, err := be.HookCode(base, base+uint64(adds*4-1), func(b Backend, addr uint64, size uint32) {
+	ih, ok := be.(InstructionHooker) // capability probe (P2.5a)
+	if !ok {
+		t.Fatal("backend lacks the InstructionHooker capability")
+	}
+	h, err := ih.HookCode(base, base+GuestAddr(adds*4-1), func(b Backend, addr GuestAddr, size uint32) {
 		hookFires++
 		if v, err := b.RegRead(regX0); err == nil {
 			sawX0 = append(sawX0, v)
@@ -58,7 +62,7 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := be.Start(base, base+uint64(adds*4)); err != nil {
+	if err := be.Start(base, base+GuestAddr(adds*4)); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.Remove(); err != nil {
@@ -91,7 +95,11 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	const wantVal = uint64(0xDEADBEEFCAFEBABE)
-	mh, err := be.HookMemInvalid(func(b Backend, typ int, addr uint64, size int, value int64) bool {
+	inv, ok := be.(InvalidMemHooker) // capability probe (P2.5a)
+	if !ok {
+		t.Fatal("backend lacks the InvalidMemHooker capability")
+	}
+	mh, err := inv.HookMemInvalid(func(b Backend, typ int, addr GuestAddr, size int, value int64) bool {
 		if err := b.MemMap(addr&^0xFFF, 0x1000, ProtRead|ProtWrite); err != nil {
 			return false
 		}
@@ -116,14 +124,18 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 	}
 
 	// Context save/restore round-trip.
-	ctx, err := be.SaveContext()
+	cm, ok := be.(ContextManager) // capability probe (P2.5a)
+	if !ok {
+		t.Fatal("backend lacks the ContextManager capability")
+	}
+	ctx, err := cm.SaveContext()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := be.RegWrite(regX0, 0x1234); err != nil {
 		t.Fatal(err)
 	}
-	if err := be.RestoreContext(ctx); err != nil {
+	if err := cm.RestoreContext(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := ctx.Free(); err != nil {
@@ -133,7 +145,11 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 		t.Errorf("X0 after restore = %#x, want %d", got, 5+adds)
 	}
 
-	if err := be.FlushCache(); err != nil {
+	ci, ok := be.(CacheInvalidator) // capability probe (P2.5a)
+	if !ok {
+		t.Fatal("backend lacks the CacheInvalidator capability")
+	}
+	if err := ci.FlushCache(); err != nil {
 		t.Fatal(err)
 	}
 }

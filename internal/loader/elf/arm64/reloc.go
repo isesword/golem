@@ -51,5 +51,5 @@ func (relocator) Apply(b emu.Backend, img *loader.Image, r loader.Reloc, base ui
 func put64(be emu.Backend, addr, val uint64) error {
 	var b [8]byte
 	binary.LittleEndian.PutUint64(b[:], val)
-	return be.MemWrite(addr, b[:])
+	return be.MemWrite(emu.GuestAddr(addr), b[:])
 }
