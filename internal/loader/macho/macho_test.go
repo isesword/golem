@@ -96,38 +96,9 @@ func TestParseFixture(t *testing.T) {
 	}
 }
 
-// TestParseRejectsChainedFixups: LC_DYLD_CHAINED_FIXUPS is the ARM64e world
-// (P5c) — a loud error, never a silent mis-load.
-func TestParseRejectsChainedFixups(t *testing.T) {
-	// Minimal valid Mach-O 64: header + one LC_DYLD_CHAINED_FIXUPS command.
-	var hdr []byte
-	u32 := func(v uint32) { hdr = append(hdr, byte(v), byte(v>>8), byte(v>>16), byte(v>>24)) }
-	u32(0xfeedfacf) // magic
-	u32(0x0100000c) // CPU_TYPE_ARM64
-	u32(0)          // subtype
-	u32(6)          // MH_DYLIB
-	u32(1)          // ncmds
-	u32(16)         // sizeofcmds
-	u32(0)          // flags
-	u32(0)          // reserved
-	u32(0x34)       // LC_DYLD_CHAINED_FIXUPS
-	u32(16)         // cmdsize
-	u32(0)          // dataoff
-	u32(0)          // datasize
-	f, err := os.CreateTemp(t.TempDir(), "*.dylib")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.Write(hdr); err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-	if _, err := Parse(f.Name()); err == nil {
-		t.Fatal("chained-fixups image must be rejected")
-	} else if got := err.Error(); !contains(got, "chained fixups") {
-		t.Fatalf("error %q must name chained fixups", got)
-	}
-}
+// TestParseRejectsChainedFixups retired in P5c: LC_DYLD_CHAINED_FIXUPS is
+// decoded now (chained.go); the minimal acceptance lives in
+// chained_test.go's TestParseChainedMinimal.
 
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {

@@ -13,10 +13,10 @@
 //
 // Deliberately out of scope (loud errors, never silent mis-loads):
 // fat/universal binaries (Sniff rejects them), big-endian/32-bit Mach-O,
-// ARM64e authenticated CHAINED FIXUPS (LC_DYLD_CHAINED_FIXUPS — the P5c PAC
-// world; rebuild fixtures with -Wl,-no_fixup_chains), lazy/weak bind streams
-// (dyld's stub-binder runtime is not emulated — fixtures must produce
-// non-lazy binds, e.g. through an initialized function-pointer global).
+// chained-fixup pointer formats other than DYLD_CHAINED_PTR_ARM64E
+// (chained.go), lazy/weak bind streams (dyld's stub-binder runtime is not
+// emulated — fixtures must produce non-lazy binds, e.g. through an
+// initialized function-pointer global).
 //
 // Name decoration: Mach-O C symbols carry a leading underscore ("_add"); the
 // parser strips exactly one so the format-agnostic namespace matches ELF's
@@ -56,7 +56,7 @@ const (
 const (
 	lcDyldInfo          = 0x22
 	lcDyldInfoOnly      = 0x80000022
-	lcDyldChainedFixups = 0x34 // LC_DYLD_CHAINED_FIXUPS — unsupported (P5c)
+	lcDyldChainedFixups = 0x34 // LC_DYLD_CHAINED_FIXUPS — decoded in chained.go (P5c)
 	lcMain              = 0x80000028
 
 	rebaseOpDone             = 0x00
@@ -127,11 +127,12 @@ func Parse(path string) (*loader.Image, error) {
 
 	// Load commands: segments, dylib dependencies, dyld info, entry point.
 	// allSegs tracks EVERY LC_SEGMENT_64 in load order — rebase/bind opcodes
-	// address by that ordinal, so segments skipped for mapping (__PAGEZERO)
-	// must still count here.
+	// and chained-fixup starts address by that ordinal, so segments skipped
+	// for mapping (__PAGEZERO) must still count here.
 	var allSegs []loader.Segment
 	var dyldInfo machoDyldInfo
 	var haveDyldInfo bool
+	var chainedOff, chainedSize uint32
 	for _, l := range f.Loads {
 		switch lc := l.(type) {
 		case *debugmacho.Segment:
@@ -154,7 +155,11 @@ func Parse(path string) (*loader.Image, error) {
 			cmd := binary.LittleEndian.Uint32(lc)
 			switch cmd {
 			case lcDyldChainedFixups:
-				return nil, fmt.Errorf("macho: %s uses chained fixups (ARM64e/PAC, P5c); rebuild with -Wl,-no_fixup_chains", path)
+				// linkedit_data_command: dataoff/datasize locate the payload;
+				// the decode runs after the symbol table is built (binds map
+				// imports onto img.Syms).
+				chainedOff = binary.LittleEndian.Uint32(lc[8:])
+				chainedSize = binary.LittleEndian.Uint32(lc[12:])
 			case lcDyldInfo, lcDyldInfoOnly:
 				dyldInfo, haveDyldInfo = parseDyldInfo(lc), true
 			case lcMain:
@@ -204,6 +209,9 @@ func Parse(path string) (*loader.Image, error) {
 	// loader.Reloc entries. Lazy/weak bind streams need dyld's stub binder —
 	// not emulated; fail loudly rather than half-binding the image.
 	if haveDyldInfo {
+		if chainedSize > 0 {
+			return nil, fmt.Errorf("macho: %s carries both LC_DYLD_INFO and LC_DYLD_CHAINED_FIXUPS — ambiguous fixup source", path)
+		}
 		if dyldInfo.lazyBindSize > 0 || dyldInfo.weakBindSize > 0 {
 			return nil, fmt.Errorf("macho: %s carries lazy/weak bind streams (unsupported — use non-lazy binds, e.g. an initialized function pointer)", path)
 		}
@@ -217,6 +225,16 @@ func Parse(path string) (*loader.Image, error) {
 			return nil, fmt.Errorf("macho: %s bind: %w", path, err)
 		}
 		img.Relocs = append(img.Relocs, binds...)
+	}
+	// Chained fixups (P5c): the LC_DYLD_CHAINED_FIXUPS payload expands into
+	// the same loader.Reloc contract (chained.go), so the registered
+	// relocator applies it unchanged.
+	if chainedSize > 0 {
+		rels, err := parseChainedFixups(raw, chainedOff, chainedSize, allSegs, img)
+		if err != nil {
+			return nil, fmt.Errorf("macho: %s chained fixups: %w", path, err)
+		}
+		img.Relocs = append(img.Relocs, rels...)
 	}
 
 	// __mod_init_func is the Mach-O init array (same raw-contents convention
