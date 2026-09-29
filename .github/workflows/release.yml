@@ -19,7 +19,10 @@ on:
         type: boolean
         default: true
   push:
-    branches: [main]
+    branches:
+      - main
+    tags:
+      - "v*"
     tags:
       - "v*"
 
@@ -187,9 +190,10 @@ jobs:
         run: |
           mkdir -p release
           # download-artifact with `path:` creates artifacts/<artifact-name>/
-          # dirs, each containing the uploaded stage/unicorn.dll.
-          cp artifacts/unicorn-dll-amd64/unicorn.dll release/
-          cp artifacts/unicorn-dll-arm64/unicorn.dll release/
+          # dirs, each containing the uploaded stage/unicorn.dll. Rename per
+          # arch so both survive in the same release directory.
+          cp artifacts/unicorn-dll-amd64/unicorn.dll release/unicorn-amd64.dll
+          cp artifacts/unicorn-dll-arm64/unicorn.dll release/unicorn-arm64.dll
           ls -la release/
       - name: Create release with auto-generated notes
         uses: softprops/action-gh-release@v2
