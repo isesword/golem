@@ -312,12 +312,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.ver.outputs.version }}
-          name: golem ${{ steps.ver.outputs.version }}
-          prerelease: ${{ steps.ver.outputs.prerelease }}
-          generate_release_notes: true
+          # Per-arch names: both files are named unicorn.dll in their own
+          # artifact dirs, so a bare glob would copy one over the other.
           files: |
-            artifacts/**/unicorn.dll
+            artifacts/unicorn-dll-amd64/unicorn.dll
+            artifacts/unicorn-dll-arm64/unicorn.dll
             artifacts/**/PROVENANCE-*.txt
       - name: Upload TCG sizing report
         uses: actions/upload-artifact@v4
