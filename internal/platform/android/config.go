@@ -3,15 +3,13 @@
 // address-space LayoutPolicy, the StartupABI (auxv initial state), and the
 // typed boot Config.
 //
-// Assembly status (P4e): there is deliberately NO platform.Factory /
-// Factory.Bind here yet. The composition root (emulator.New) wires each
-// component by hand — LayoutPolicy via resolveLayout, Transport/Table/Codecs
-// injected into kernel.Context, StartupABI driven via ensureStartup — and no
-// component receives more context than the minimal BindContext shape DESIGN
-// §4 allows (TargetInfo / Layout / Features; Backend and AddressSpace are
-// injected explicitly by the composition root at the call site, never as a
-// half-initialized Emulator). Factory.Bind is the P5 wiring point; nothing
-// in P4 pre-builds it.
+// Assembly status (P5b.5): the platform.Factory lives in factory.go —
+// registered under platform.Android from init(), it binds the complete
+// Runtime (startup/auxv, layout, syscall personality, runtime libraries,
+// bionic TLS init, ReplaceFns, pthread stubs, the Java/device interop
+// surface) from a minimal BindContext (arch.ID + this package's Config).
+// The composition root (emulator.New) resolves and binds it without any
+// Android-specific selection logic of its own.
 package android
 
 import (
