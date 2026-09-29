@@ -215,7 +215,7 @@ type Hook struct{ e *Emulator }
 // Emu returns the emulator, for memory access inside a Replace callback.
 func (h *Hook) Emu() *Emulator { return h.e }
 
-// Arg returns integer argument i (0-based, calling-ABI arg registers 0..7).
+// Arg returns integer argument i (0-based, CallABI arg registers 0..7).
 func (h *Hook) Arg(i int) uint64 {
 	if i < 0 || i > 7 {
 		return 0

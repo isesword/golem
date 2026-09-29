@@ -154,19 +154,21 @@ type Emulator struct {
 	fs     *vfs.VFS
 	kctx   *kernel.Context
 
-	abi     arch.ABI         // resolved once in New (P1: always ARM64)
-	stubEnc arch.StubEncoder // trampoline encoder; the ABI instance implements it
+	arch    arch.Arch        // CPU properties, resolved once in New (P2.5b; always ARM64 until P4)
+	callABI arch.CallABI     // function calling convention (AAPCS64) — args/results/return flow
+	stubEnc arch.StubEncoder // trampoline encoder; an independent capability, not part of Arch/CallABI
 	layout  memory.Layout    // guest address-space layout in use
 
-	// Boot-cached calling-convention role registers (from abi): hot paths
-	// (scheduler, JNI dispatch, host fns, debugger) use these instead of
-	// walking the interface per call (DESIGN.md §8: no interface chains on
-	// per-instruction paths).
-	argRegs [8]emu.Reg // abi.Arg(0..7)
-	retReg  emu.Reg    // abi.Ret()
-	pcReg   emu.Reg    // abi.PC()
-	spReg   emu.Reg    // abi.SP()
-	lrReg   emu.Reg    // abi.LR()
+	// Boot-cached role registers (P1, DESIGN.md §8: no interface walks on hot
+	// paths). Ownership after the P2.5b split (invariant 13): argRegs/retReg/
+	// lrReg are the CallABI's role registers; pcReg/spReg are the Arch's.
+	// Callers that build an Emulator literal directly (tests) must call
+	// cacheRoleRegs after setting arch/callABI.
+	argRegs [8]emu.Reg // callABI.Arg(0..7)
+	retReg  emu.Reg    // callABI.Ret()
+	lrReg   emu.Reg    // callABI.LR()
+	pcReg   emu.Reg    // arch.PC()
+	spReg   emu.Reg    // arch.SP()
 
 	modules  []*Module
 	main     *Module           // the Config.SOPath module, if any
@@ -270,15 +272,11 @@ func New(cfg Config) (e *Emulator, err error) {
 		return nil, fmt.Errorf("backend: %w", err)
 	}
 	// TODO(P4): 由 Config.Arch/Sniff 决定 — until then everything is ARM64.
-	abi, err := arch.Resolve(arch.IDARM64, arch.VariantGeneric)
+	cpuArch, callABI, stubEnc, err := arch.Resolve(arch.IDARM64, arch.VariantGeneric)
 	if err != nil {
 		return nil, err
 	}
-	stubEnc, ok := abi.(arch.StubEncoder)
-	if !ok {
-		return nil, fmt.Errorf("arch: %T does not implement StubEncoder", abi)
-	}
-	be, err := emu.NewNamed(engine, abi.EngineArch())
+	be, err := emu.NewNamed(engine, cpuArch.EngineArch())
 	if err != nil {
 		return nil, fmt.Errorf("backend(%s): %w", engine, err)
 	}
@@ -305,7 +303,8 @@ func New(cfg Config) (e *Emulator, err error) {
 		cfg:         cfg,
 		engine:      engine,
 		be:          be,
-		abi:         abi,
+		arch:        cpuArch,
+		callABI:     callABI,
 		stubEnc:     stubEnc,
 		layout:      legacyARM64Layout,
 		mem:         memory.NewSpace(),
@@ -419,7 +418,7 @@ func New(cfg Config) (e *Emulator, err error) {
 		tlsSlotThreadID = 1 // -> pthread_internal_t*
 	)
 	pthreadStruct := l.TLSBase + 0x1000
-	if err := abi.SetTLSBase(be, l.TLSBase); err != nil {
+	if err := cpuArch.SetTLSBase(be, emu.GuestAddr(l.TLSBase)); err != nil {
 		return nil, fmt.Errorf("set TLS base: %w", err)
 	}
 	_ = putU64(be, l.TLSBase+tlsSlotSelf*8, l.TLSBase)
@@ -471,18 +470,18 @@ func New(cfg Config) (e *Emulator, err error) {
 	return e, nil
 }
 
-// cacheRoleRegs snapshots the ABI's calling-convention role registers into
-// plain fields/slices at boot, so hot paths never walk the interface per call.
-// Callers that build an Emulator literal directly (tests) must call this after
-// setting abi.
+// cacheRoleRegs snapshots the Arch's and CallABI's role registers into plain
+// fields/slices at boot, so hot paths never walk the interface per call.
+// Callers that build an Emulator literal directly (tests) must call this
+// after setting arch/callABI.
 func (e *Emulator) cacheRoleRegs() {
 	for i := range e.argRegs {
-		e.argRegs[i] = e.abi.Arg(i)
+		e.argRegs[i] = e.callABI.Arg(i)
 	}
-	e.retReg = e.abi.Ret()
-	e.pcReg = e.abi.PC()
-	e.spReg = e.abi.SP()
-	e.lrReg = e.abi.LR()
+	e.retReg = e.callABI.Ret()
+	e.lrReg = e.callABI.LR()
+	e.pcReg = e.arch.PC()
+	e.spReg = e.arch.SP()
 }
 
 // boot maps bionic, then (if configured) loads + initializes the main library.
@@ -594,8 +593,8 @@ func (e *Emulator) makeStub(name string, kind arch.StubKind) uint64 {
 // to function tables filled with svc stubs, so any vm->/env-> call traps to Go.
 // GetEnv is special-cased to hand back the JNIEnv. Sets e.javaVM.
 func (e *Emulator) SetupJNI() uint64 {
-	ps := uint64(e.abi.PtrSize()) // function-table slot stride = guest pointer width
-	const envSlots = 256          // > 232 JNINativeInterface entries
+	ps := uint64(e.arch.PtrSize()) // function-table slot stride = guest pointer width
+	const envSlots = 256           // > 232 JNINativeInterface entries
 	envTable := e.MustAlloc(envSlots*8, emu.ProtRead|emu.ProtWrite)
 	for i := 0; i < envSlots; i++ {
 		stub := e.makeStub(fmt.Sprintf("JNIEnv[%d]", i), arch.StubHostCall)
@@ -705,13 +704,13 @@ func (e *Emulator) onInterrupt(b emu.Backend, intno uint32) {
 }
 
 // CallFunc invokes guest code at addr with up to 8 integer args (arg
-// registers 0..7 per the calling ABI), returning the return register. LR is
+// registers 0..7 per the CallABI), returning the return register. LR is
 // set to a sentinel so emulation stops on return.
 func (e *Emulator) CallFunc(addr uint64, args ...uint64) (uint64, error) {
 	if e.poisonErr != nil {
 		return 0, fmt.Errorf("emulator poisoned: %w", e.poisonErr)
 	}
-	regs := e.argRegs[:] // boot-cached abi.Arg(0..7)
+	regs := e.argRegs[:] // boot-cached callABI.Arg(0..7)
 	if len(args) > len(regs) {
 		return 0, fmt.Errorf("CallFunc: >8 args not supported")
 	}

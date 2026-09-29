@@ -174,7 +174,7 @@ func (e *Emulator) runFiberSlice(f *fiber) error {
 	startPC := f.routine
 	if !f.started {
 		// First slice: set up a plain function call (routine(arg)) per the
-		// calling ABI — own stack, arg in register 0, LR = sentinel.
+		// CallABI — own stack, arg in register 0, LR = sentinel.
 		if err := e.be.RegWrite(e.spReg, f.sp); err != nil {
 			return err
 		}

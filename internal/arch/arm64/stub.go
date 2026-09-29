@@ -16,9 +16,13 @@ import (
 // cannot honor (DESIGN.md §3.2, invariant 8).
 var stubCode = []byte{0x01, 0x00, 0x00, 0xd4, 0xc0, 0x03, 0x5f, 0xd6}
 
-// EmitStub implements arch.StubEncoder on the ABI instance. The returned
+// stubEncoder is the AArch64 trampoline StubEncoder — an independent
+// capability, deliberately not merged into Arch or CallABI (DESIGN.md §3.2).
+type stubEncoder struct{}
+
+// EmitStub implements arch.StubEncoder. The returned
 // slice is a fresh copy — callers may write it into guest memory and forget.
-func (abi) EmitStub(kind arch.StubKind) ([]byte, error) {
+func (stubEncoder) EmitStub(kind arch.StubKind) ([]byte, error) {
 	switch kind {
 	case arch.StubHostCall, arch.StubUnresolved:
 		return append([]byte(nil), stubCode...), nil

@@ -36,9 +36,10 @@ func (b *trapBE) RegWrite(r emu.Reg, v uint64) error {
 }
 
 // newTrapEmu builds an Emulator for interrupt-dispatch tests through the
-// shared test constructor (full ABI + role regs + transport/table/codecs
-// injected); tests that want a specific backend pass it in, and may still
-// nil out e.kctx to prove the stub path never reaches the kernel.
+// shared test constructor (full Arch/CallABI triple + role regs +
+// transport/table/codecs injected); tests that want a specific backend pass
+// it in, and may still nil out e.kctx to prove the stub path never reaches
+// the kernel.
 func newTrapEmu(t *testing.T, be emu.Backend) *Emulator {
 	t.Helper()
 	return newTestEmulator(t, be)

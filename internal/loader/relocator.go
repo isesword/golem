@@ -8,7 +8,7 @@ import (
 
 // Relocator applies the relocation SEMANTICS of one (Format, Arch) pair:
 // what each relocation type code means and how it is written into guest
-// memory. It deliberately does NOT live on arch.ABI (calling conventions
+// memory. It deliberately does NOT live on arch.CallABI (calling conventions
 // know nothing about object formats) and does NOT own memory layout (that
 // stays in Plan — segment mapping, shareability, protections).
 //

@@ -12,15 +12,15 @@ import (
 )
 
 // newTestEmulator builds an Emulator for unit tests with the full platform
-// personality injected — resolved ABI, cached role registers, and a kernel
-// Context carrying the Android/AArch64 syscall transport, dispatch table and
-// struct codecs exactly as New wires them (P2: no test may rely on zero-value
-// coincidences; a bare &Emulator{} has a nil transport/table and its first
-// guest syscall would panic). be may be nil for tests that never touch the
-// backend (e.g. JNI clock tests).
+// personality injected — resolved Arch/CallABI/StubEncoder triple, cached role
+// registers, and a kernel Context carrying the Android/AArch64 syscall
+// transport, dispatch table and struct codecs exactly as New wires them (P2:
+// no test may rely on zero-value coincidences; a bare &Emulator{} has a nil
+// transport/table and its first guest syscall would panic). be may be nil for
+// tests that never touch the backend (e.g. JNI clock tests).
 func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 	t.Helper()
-	abi, err := arch.Resolve(arch.IDARM64, arch.VariantGeneric)
+	cpuArch, callABI, stubEnc, err := arch.Resolve(arch.IDARM64, arch.VariantGeneric)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,9 @@ func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 	fs := vfs.New(t.TempDir(), defaultPid, "testproc")
 	e := &Emulator{
 		be:          be,
-		abi:         abi,
+		arch:        cpuArch,
+		callABI:     callABI,
+		stubEnc:     stubEnc,
 		mem:         mem,
 		fs:          fs,
 		layout:      legacyARM64Layout,
