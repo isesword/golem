@@ -222,3 +222,26 @@ func (sysV64) ReadReturnAddress(b emu.Backend) (emu.GuestAddr, error) {
 	}
 	return emu.GuestAddr(binary.LittleEndian.Uint64(raw)), nil
 }
+
+// InstallReturnContinuation (P10): re-aims the in-flight call's return at
+// the post continuation — SysV keeps the return address on the stack, so
+// the continuation is PUSHED: [RSP-8] ← post, RSP -= 8. The original's
+// `ret` then pops it.
+func (sysV64) InstallReturnContinuation(b emu.Backend, post emu.GuestAddr) error {
+	sp, err := b.RegRead(RSP)
+	if err != nil {
+		return fmt.Errorf("InstallReturnContinuation: RSP: %w", err)
+	}
+	sp -= 8
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], uint64(post))
+	if err := b.MemWrite(emu.GuestAddr(sp), buf[:]); err != nil {
+		return fmt.Errorf("InstallReturnContinuation: [RSP=%#x]: %w", sp, err)
+	}
+	return b.RegWrite(RSP, sp)
+}
+
+// ReturnTo (P10): jump to an explicit address.
+func (sysV64) ReturnTo(b emu.Backend, target emu.GuestAddr) error {
+	return b.RegWrite(RIP, uint64(target))
+}

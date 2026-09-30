@@ -151,6 +151,31 @@ type CallABI interface {
 	// whether that value MEANS a return address — the facade gates this by
 	// hook kind and reports ErrContextUnavailable where it does not.
 	ReadReturnAddress(b emu.Backend) (emu.GuestAddr, error)
+
+	// InstallReturnContinuation re-aims the IN-FLIGHT call's return at
+	// `post` (P10 wrap continuation, ABI observation+control semantics):
+	//
+	//	ARM64:       LR ← post
+	//	ARM32:       LR ← post (bit0 may set the continuation's ISA state)
+	//	AMD64 SysV:  push post ([RSP-8] ← post, RSP -= 8) — the original's
+	//	             `ret` pops it
+	//
+	// Valid in the ENTRY state, immediately before the original function
+	// runs: the original's return then lands on the wrap's post
+	// continuation instead of the real caller, whose return address was
+	// captured first (ReadReturnAddress). The post continuation resumes the
+	// real caller through ReturnTo.
+	InstallReturnContinuation(b emu.Backend, post emu.GuestAddr) error
+
+	// ReturnTo transfers control to an explicit address — the wrap post
+	// continuation's "resume the real caller" step (the caller's return
+	// address was captured at entry, before InstallReturnContinuation
+	// re-aimed the return):
+	//
+	//	ARM64:       PC ← target
+	//	ARM32:       PC/CPSR.T ← target (setPCBX interworking semantics)
+	//	AMD64 SysV:  RIP ← target
+	ReturnTo(b emu.Backend, target emu.GuestAddr) error
 }
 
 // CallABIIntrospector is an optional capability a CallABI may implement for

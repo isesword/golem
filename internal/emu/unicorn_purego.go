@@ -757,10 +757,25 @@ func (b *unicornBackend) InstallTrap(kind TrapKind, h TrapHandler) (HookHandle, 
 	if b.arch == ArchAMD64 && kind == TrapSyscall {
 		return b.installInsnTrap(kind, h)
 	}
-	if b.trapHook == nil {
+if b.trapHook == nil {
+		pcUC := pcUCRegFor(b.arch)
 		hh, err := b.HookInterrupt(func(bk Backend, _ uint32) {
+			// P10 termination semantics: a handler that REDIRECTS control flow
+			// (PC changed) claims the interrupt — later handlers must not
+			// re-dispatch the same SVC against the new PC. Empirically found
+			// when the wrap entry handler (ReturnTo original) was followed by
+			// the syscall dispatch, which ENOSYS-clobbered X0 against the
+			// new PC.
+			var prev uint64
+			pRegRead(b.uc, pcUC, unsafe.Pointer(&prev))
 			for _, tr := range b.traps {
 				tr.h(bk, tr.kind)
+				var cur uint64
+				pRegRead(b.uc, pcUC, unsafe.Pointer(&cur))
+				if cur != prev {
+					break // control flow was redirected — this SVC is claimed
+				}
+				prev = cur
 			}
 		})
 		if err != nil {
@@ -945,4 +960,19 @@ func (b *unicornBackend) WriteRegs(writes []RegWrite) error {
 		return ucErr("reg_write_batch", e)
 	}
 	return nil
+}
+
+// pcUCRegFor returns the raw UC_*_REG_PC id for one guest arch — used by the
+// shared INTR loop's termination check (P10: a handler that redirects PC
+// claims the interrupt; later handlers must not re-dispatch it).
+func pcUCRegFor(a Arch) int32 {
+	switch a {
+	case ArchARM64:
+		return ucRegPC
+	case ArchARM:
+		return ucArmRegPC
+	case ArchAMD64:
+		return ucX86RegRIP
+	}
+	return 0
 }

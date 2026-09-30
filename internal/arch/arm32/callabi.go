@@ -294,3 +294,15 @@ func (aapcs32) ReadReturnAddress(b emu.Backend) (emu.GuestAddr, error) {
 	v, err := b.RegRead(LR)
 	return emu.GuestAddr(v), err
 }
+
+// InstallReturnContinuation (P10): re-aims the in-flight call's return at
+// the post continuation — AAPCS32 keeps it in LR (R14).
+func (aapcs32) InstallReturnContinuation(b emu.Backend, post emu.GuestAddr) error {
+	return b.RegWrite(LR, uint64(post))
+}
+
+// ReturnTo (P10): transfer control with interworking semantics (bit0 →
+// CPSR.T, PC ← addr&^1) — the same contract as setPCBX.
+func (aapcs32) ReturnTo(b emu.Backend, target emu.GuestAddr) error {
+	return setPCBX(b, uint64(target))
+}
