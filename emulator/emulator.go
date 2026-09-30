@@ -550,6 +550,7 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 		Transport: rt.Transport,
 		Table:     rt.Table,
 		Codecs:    rt.Codecs,
+		Uname:     rt.Uname,
 	}
 	// A device profile anchors the monotonic clock at the persona's boot time
 	// and serves live battery sysfs. Epoch keeps winning (kernel.clock checks
@@ -1207,10 +1208,14 @@ func (e *Emulator) InitArrayPtrs(m *Module) ([]uint64, error) {
 }
 
 // poison records that a failed internal transition left the emulator in an
-// unusable state. The FIRST poison wins; every subsequent public entry point
-// returns it instead of operating on inconsistent state. Use for failures
-// whose rollback cannot be verified (e.g. an address-space remap that failed
-// mid-way), never for ordinary errors a caller can handle.
+// unusable state. The FIRST poison wins. The state-mutating entry points
+// refuse it instead of operating on inconsistent state: CallFunc/
+// CallFuncArgs, callNative, RunThreads, ReplaceE (interposeE), Alloc/
+// MustAlloc, Restore (P7.5b: the guard set is audited — read-only
+// inspection entries such as the memory helpers and Snapshot stay available
+// on purpose, for post-mortem debugging of a poisoned instance). Use for
+// failures whose rollback cannot be verified (e.g. an address-space remap
+// that failed mid-way), never for ordinary errors a caller can handle.
 func (e *Emulator) poison(what string, err error) error {
 	pErr := fmt.Errorf("emulator poisoned (%s): %w", what, err)
 	if e.poisonErr == nil {

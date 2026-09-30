@@ -274,12 +274,20 @@ func (e *Emulator) wakeFutex(uaddr uint64) int {
 // the same transport — no syscall-register identities (X8/X0/X1) appear here
 // anymore. The interception SEMANTICS are unchanged: the scheduler answers
 // these syscalls itself and the kernel table never sees them.
+//
+// P7.5b: an UNBOUND intercept number (0 — the platform personality's way of
+// saying "this platform intercepts nothing here", e.g. Darwin has no
+// futex/nanosleep fibers) NEVER matches. Before this guard, a guest issuing
+// syscall number 0 (BSD's indirect-syscall register value) on such a
+// platform entered the futex case and got a fabricated success; now it
+// falls through to the kernel table and fails loudly (ENOSYS). Unsupported
+// semantics loud-fail; they are never silently eaten by a zero value.
 func (e *Emulator) handleSchedSyscall(b emu.Backend, f *kernel.SyscallFrame) bool {
 	encode := func(res kernel.Result) {
 		_ = e.kctx.Transport.EncodeResult(b, res)
 	}
-	switch f.Num {
-	case e.sysFutex:
+	switch {
+	case e.sysFutex != 0 && f.Num == e.sysFutex:
 		uaddr, op := f.Args[0], f.Args[1]
 		switch op & 0x7f {
 		case futexOpWake:
@@ -294,7 +302,8 @@ func (e *Emulator) handleSchedSyscall(b emu.Backend, f *kernel.SyscallFrame) boo
 			encode(kernel.Result{})
 		}
 		return true
-	case e.sysNanosleep, e.sysClockNanosleep:
+	case e.sysNanosleep != 0 && f.Num == e.sysNanosleep,
+		e.sysClockNanosleep != 0 && f.Num == e.sysClockNanosleep:
 		encode(kernel.Result{})
 		if e.curFiber != nil {
 			e.yieldReason = yieldSleep

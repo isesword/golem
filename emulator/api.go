@@ -67,16 +67,24 @@ const (
 // anything else maps a dedicated region as before.
 //
 // The backing uc_mem_map failure is returned as an error AND the address-
-// space bookkeeping is rolled back (no phantom region, no consumed VA).
-// Call sites that cannot propagate errors (guest-initiated JNI up-calls)
-// use MustAlloc instead.
+// space bookkeeping is rolled back (no phantom region, no consumed VA); a
+// failed ROLLBACK poisons the emulator (the space is inconsistent — P7.5b:
+// armed for real, not just claimed in the message). Call sites that cannot
+// propagate errors (guest-initiated JNI up-calls) use MustAlloc instead.
 func (e *Emulator) Alloc(size uint64, prot int) (uint64, error) {
+	if e.poisonErr != nil {
+		return 0, fmt.Errorf("emulator poisoned: %w", e.poisonErr)
+	}
 	return e.doAlloc(size, prot)
 }
 
 // MustAlloc is Alloc with panic-on-error — reserved for call sites inside
 // guest-initiated up-calls (jni_dispatch) where no error channel exists.
+// The panic lands in the guest-callback guard, which poisons the emulator.
 func (e *Emulator) MustAlloc(size uint64, prot int) uint64 {
+	if e.poisonErr != nil {
+		panic(fmt.Sprintf("emulator: MustAlloc(%#x, %d): %v", size, prot, e.poisonErr))
+	}
 	a, err := e.doAlloc(size, prot)
 	if err != nil {
 		panic(fmt.Sprintf("emulator: MustAlloc(%#x, %d): %v — guest memory mapping failed", size, prot, err))
@@ -97,9 +105,11 @@ func (e *Emulator) doAlloc(size uint64, prot int) (uint64, error) {
 			if err := e.be.MemMap(emu.GuestAddr(base), uint64(chunk), prot); err != nil {
 				// transaction: the bookkeeping region must not outlive a
 				// failed backend map; if the rollback itself fails the
-				// emulator is poisoned (address space inconsistent).
+				// address space is inconsistent — POISON FOR REAL (P7.5b:
+				// the message used to claim this without arming it).
 				if rb := e.mem.RollbackLast(base, uint64(chunk)); rb != nil {
-					return 0, fmt.Errorf("map arena chunk %#x: %w (rollback also failed: %v — emulator poisoned)", base, err, rb)
+					return 0, e.poison(fmt.Sprintf("map arena chunk %#x", base),
+						fmt.Errorf("%w (rollback also failed: %v — address space inconsistent)", err, rb))
 				}
 				return 0, fmt.Errorf("map arena chunk %#x: %w", base, err)
 			}
@@ -112,7 +122,8 @@ func (e *Emulator) doAlloc(size uint64, prot int) (uint64, error) {
 	a := e.mem.Mmap(size, prot, "alloc")
 	if err := e.be.MemMap(emu.GuestAddr(a), (size+0xfff)&^0xfff, prot); err != nil {
 		if rb := e.mem.RollbackLast(a, (size+0xfff)&^0xfff); rb != nil {
-			return 0, fmt.Errorf("map %#x: %w (rollback also failed: %v — emulator poisoned)", a, err, rb)
+			return 0, e.poison(fmt.Sprintf("map %#x", a),
+				fmt.Errorf("%w (rollback also failed: %v — address space inconsistent)", err, rb))
 		}
 		return 0, fmt.Errorf("map %#x: %w", a, err)
 	}

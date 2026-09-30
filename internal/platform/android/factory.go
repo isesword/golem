@@ -6,6 +6,7 @@ import (
 
 	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/emu"
+	"github.com/isesword/golem/internal/kernel"
 	"github.com/isesword/golem/internal/memory"
 	"github.com/isesword/golem/internal/platform"
 )
@@ -80,6 +81,25 @@ func (factory) Bind(ctx platform.BindContext) (*platform.Runtime, error) {
 		}
 		initGuest = initBionicTLS32
 	}
+	// The guest-visible utsname identity is per-arch personality data
+	// (P7.5b): bionic's uname()-based checks read `machine` to pick library
+	// directories, so it must match the target (aarch64 / armv7l /
+	// x86_64). The kernel handler only encodes it.
+	uname := &kernel.UnameInfo{
+		Sysname:    "Linux",
+		Nodename:   "localhost",
+		Release:    "4.14.117-golem",
+		Version:    "#1 SMP PREEMPT",
+		Domainname: "localdomain",
+	}
+	switch ctx.ArchID {
+	case arch.IDARM:
+		uname.Machine = "armv7l"
+	case arch.IDAMD64:
+		uname.Machine = "x86_64"
+	default:
+		uname.Machine = "aarch64"
+	}
 	return &platform.Runtime{
 		Startup:         startup,
 		AuxvLookup:      auxvLookup,
@@ -93,6 +113,7 @@ func (factory) Bind(ctx platform.BindContext) (*platform.Runtime, error) {
 		ClockNanosleep:  pers.ClockNanosleep,
 		// Bionic from the asset tree, in load order.
 		RuntimeLibs:  runtimeLibs,
+		Uname:        uname,
 		InitGuest:    initGuest,
 		ReplaceFns:   cfg.ReplaceFns,
 		PthreadStubs: true,

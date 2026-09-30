@@ -147,6 +147,11 @@ func (e *Emulator) Restore(snap *Snapshot) error {
 	if snap == nil {
 		return fmt.Errorf("restore: nil snapshot")
 	}
+	// Poisoned = untrustworthy address space; rebuilding a snapshot on top of
+	// it would launder the inconsistency into "restored" state (P7.5b).
+	if e.poisonErr != nil {
+		return fmt.Errorf("emulator poisoned: %w", e.poisonErr)
+	}
 	// 1) Unmap arena regions the guest mapped after the snapshot (scratch allocs,
 	//    guest mmaps) so the address space matches the snapshot again.
 	snapSet := make(map[uint64]uint64, len(snap.layout))

@@ -39,6 +39,7 @@ const (
 	ENOENT Errno = 2
 	EINVAL Errno = 22
 	ERANGE Errno = 34
+	EFAULT Errno = 14
 )
 
 // Result is what a Handler produces: pure syscall semantics, no encoding
@@ -209,6 +210,13 @@ type Context struct {
 	// The emulator installs a profile-backed clock here when a device liveness
 	// profile is configured, so syscall-time and JNI-time agree.
 	Clock Clock
+	// Uname is the guest-visible utsname identity (P7.5b), supplied by the
+	// platform personality as pure data and injected at wiring time. The
+	// uname handler only encodes it — deciding WHO the guest is (sysname,
+	// machine, release) is platform business. nil = the platform bound no
+	// uname number into its table; if a table nevertheless binds uname, the
+	// handler fails loudly (EINVAL) instead of reporting a hardcoded lie.
+	Uname *UnameInfo
 
 	brkCur         uint64 // current program break (0 = uninitialized)
 	getrandomCalls uint64 // deterministic getrandom stream counter
@@ -856,21 +864,41 @@ func SysMprotect(c *Context, f *SyscallFrame) Result {
 
 func pageUp(x uint64) uint64 { return (x + 0xfff) &^ 0xfff }
 
-// SysUname fills `struct utsname` (6 × 65-byte NUL-padded fields) with
-// Android-ish values so libc's uname()-based checks succeed. The utsname
-// layout is identical on every Linux architecture (fixed 65-byte fields), so
-// it is NOT guest-ABI-layout dependent and stays inline here rather than
-// going through StructCodecs (DESIGN.md invariant 7).
+// UnameInfo is the platform-supplied utsname identity (P7.5b): per-arch
+// personality data selected at Bind time (e.g. Android: aarch64 / armv7l /
+// x86_64), injected into Context by the composition root. The utsname LAYOUT
+// is identical on every Linux architecture (fixed 65-byte fields), so the
+// handler stays layout-independent — but the IDENTITY is platform business,
+// never a kernel-side constant.
+type UnameInfo struct {
+	Sysname    string
+	Nodename   string
+	Release    string
+	Version    string
+	Machine    string
+	Domainname string
+}
+
+// SysUname fills `struct utsname` (6 × 65-byte NUL-padded fields) from the
+// platform-supplied identity (Context.Uname). A platform that binds uname
+// without configuring an identity is a wiring bug: fail loudly (EINVAL)
+// rather than fabricate values.
 func SysUname(c *Context, f *SyscallFrame) Result {
+	if c.Uname == nil {
+		return Result{Errno: EINVAL} // loud: uname bound without a platform identity
+	}
+	u := c.Uname
 	var buf [6 * 65]byte
 	set := func(i int, s string) { copy(buf[i*65:i*65+64], s) }
-	set(0, "Linux")
-	set(1, "localhost")
-	set(2, "4.14.117-golem")
-	set(3, "#1 SMP PREEMPT")
-	set(4, "aarch64")
-	set(5, "localdomain")
-	c.B.MemWrite(emu.GuestAddr(f.Args[0]), buf[:])
+	set(0, u.Sysname)
+	set(1, u.Nodename)
+	set(2, u.Release)
+	set(3, u.Version)
+	set(4, u.Machine)
+	set(5, u.Domainname)
+	if err := c.B.MemWrite(emu.GuestAddr(f.Args[0]), buf[:]); err != nil {
+		return Result{Errno: EFAULT}
+	}
 	return Result{}
 }
 

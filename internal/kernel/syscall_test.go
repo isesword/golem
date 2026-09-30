@@ -304,6 +304,13 @@ func newKernelCtxt(t testing.TB) *kernelCtxt {
 			Transport: testTransport{},
 			Table:     syntheticTable(),
 			Codecs:    cc,
+			// P7.5b: the utsname identity is platform-supplied data; the
+			// test persona stands in for what the android factory binds.
+			Uname: &UnameInfo{
+				Sysname: "Linux", Nodename: "localhost",
+				Release: "4.14.117-golem", Version: "#1 SMP PREEMPT",
+				Machine: "aarch64", Domainname: "localdomain",
+			},
 		},
 	}
 }
@@ -992,7 +999,8 @@ func TestGetrandom(t *testing.T) {
 func TestInfoSyscalls(t *testing.T) {
 	k := newKernelCtxt(t)
 
-	// uname: "Linux" at off 0, "aarch64" machine at off 4*65
+	// uname: the platform-supplied identity, encoded verbatim ("Linux" at
+	// off 0, machine at off 4*65).
 	if got := k.call(nrUname, scratch); got != 0 {
 		t.Fatalf("uname = %d, want 0", got)
 	}
@@ -1002,6 +1010,15 @@ func TestInfoSyscalls(t *testing.T) {
 	if got := k.memAt(scratch+4*65, 7); string(got) != "aarch64" {
 		t.Errorf("uname machine = %q, want %q", got, "aarch64")
 	}
+	// P7.5b: a platform that binds uname without an identity is a wiring
+	// bug — fail loudly instead of fabricating values. (k.call returns the
+	// transport wire encoding: Linux carries -errno.)
+	saved := k.ctx.Uname
+	k.ctx.Uname = nil
+	if got := k.call(nrUname, scratch); got != -int64(EINVAL) {
+		t.Errorf("uname without identity = %d, want -EINVAL(%d)", got, EINVAL)
+	}
+	k.ctx.Uname = saved
 
 	// sysinfo: totalram
 	if got := k.call(nrSysinfo, scratch); got != 0 {

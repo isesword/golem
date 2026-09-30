@@ -69,6 +69,9 @@ func TestFactoryBindARM64(t *testing.T) {
 	if len(rt.RuntimeLibs) != 3 || rt.RuntimeLibs[0] != "android/sdk23/lib64/libc.so" {
 		t.Fatalf("RuntimeLibs = %v, want bionic libc/libm/libdl", rt.RuntimeLibs)
 	}
+	if rt.Uname == nil || rt.Uname.Machine != "aarch64" || rt.Uname.Sysname != "Linux" {
+		t.Fatalf("Uname = %#v, want the Android/ARM64 identity (machine aarch64, P7.5b)", rt.Uname)
+	}
 	if rt.InitGuest == nil || !rt.PthreadStubs {
 		t.Fatal("Android must carry the bionic TLS init and pthread stubs")
 	}
@@ -92,6 +95,9 @@ func TestFactoryBindAMD64(t *testing.T) {
 	}
 	if rt.Futex != SYSX_futex || rt.Nanosleep != SYSX_nanosleep || rt.ClockNanosleep != SYSX_clock_nanosleep {
 		t.Fatal("scheduler interception numbers must be the x86-64 ones")
+	}
+	if rt.Uname == nil || rt.Uname.Machine != "x86_64" {
+		t.Fatalf("Uname = %#v, want machine x86_64 (P7.5b: no cross-arch identity lies)", rt.Uname)
 	}
 }
 
@@ -125,6 +131,9 @@ func TestFactoryBindARM32(t *testing.T) {
 	}
 	if len(rt.RuntimeLibs) != 4 || rt.RuntimeLibs[0] != "android/sdk23/lib/libc.so" || rt.RuntimeLibs[3] != "android/sdk23/lib/liblog.so" {
 		t.Fatalf("RuntimeLibs = %v, want 32-bit bionic under lib/ incl. liblog (P7: real ARM32 bionic ships in the asset tree)", rt.RuntimeLibs)
+	}
+	if rt.Uname == nil || rt.Uname.Machine != "armv7l" {
+		t.Fatalf("Uname = %#v, want machine armv7l (P7.5b: an armv7 guest must not read aarch64)", rt.Uname)
 	}
 	if rt.InitGuest == nil || !rt.PthreadStubs || rt.Layout == nil {
 		t.Fatal("ARM32 runtime must carry TLS init, pthread stubs and the layout policy")

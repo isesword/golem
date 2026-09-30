@@ -89,6 +89,13 @@ type Runtime struct {
 	// libraries; the guest then links against its own image plus host
 	// stubs only.
 	RuntimeLibs []string
+	// Uname is the guest-visible utsname identity (P7.5b), per-arch data
+	// selected at Bind time (Android: aarch64 / armv7l / x86_64). The
+	// kernel's uname handler encodes exactly this — the identity is
+	// platform business, never a kernel-side constant. nil = the platform
+	// binds no uname number into its table (e.g. Darwin); a table that
+	// binds uname without an identity makes the handler fail loudly.
+	Uname *kernel.UnameInfo
 	// InitGuest materializes platform-specific initial address-space state
 	// after the layout is mapped (e.g. bionic's TLS slot array: slot[0] =
 	// TLS base, slot[1] = a pthread_internal_t inside the TLS region).
