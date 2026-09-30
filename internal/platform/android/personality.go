@@ -50,6 +50,15 @@ func SyscallPersonalityFor(id arch.ID) (SyscallPersonality, error) {
 			Nanosleep:      SYSX_nanosleep,
 			ClockNanosleep: SYSX_clock_nanosleep,
 		}, nil
+	case arch.IDARM:
+		return SyscallPersonality{
+			Transport:      LinuxARM32Transport{},
+			Table:          NewARM32SyscallTable(kernel.DefaultHandlers()),
+			Codecs:         LinuxARM32Codecs{},
+			Futex:          SYSA_futex,
+			Nanosleep:      SYSA_nanosleep,
+			ClockNanosleep: SYSA_clock_nanosleep,
+		}, nil
 	}
 	return SyscallPersonality{}, fmt.Errorf("android: no syscall personality for arch id %d", id)
 }

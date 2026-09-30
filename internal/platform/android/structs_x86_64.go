@@ -66,12 +66,12 @@ func (c LinuxX8664Codecs) EncodeStatx(dst []byte, s kernel.Statx) error {
 	for i := range dst[:c.StatxSize()] {
 		dst[i] = 0
 	}
-	binary.LittleEndian.PutUint32(dst[0:], s.Mask)     // stx_mask
-	binary.LittleEndian.PutUint32(dst[4:], s.Blksize)  // stx_blksize
-	binary.LittleEndian.PutUint32(dst[16:], s.Nlink)   // stx_nlink
-	binary.LittleEndian.PutUint16(dst[28:], s.Mode)    // stx_mode
-	binary.LittleEndian.PutUint64(dst[40:], s.Size)    // stx_size
-	binary.LittleEndian.PutUint64(dst[48:], s.Blocks)  // stx_blocks
+	binary.LittleEndian.PutUint32(dst[0:], s.Mask)    // stx_mask
+	binary.LittleEndian.PutUint32(dst[4:], s.Blksize) // stx_blksize
+	binary.LittleEndian.PutUint32(dst[16:], s.Nlink)  // stx_nlink
+	binary.LittleEndian.PutUint16(dst[28:], s.Mode)   // stx_mode
+	binary.LittleEndian.PutUint64(dst[40:], s.Size)   // stx_size
+	binary.LittleEndian.PutUint64(dst[48:], s.Blocks) // stx_blocks
 	return nil
 }
 

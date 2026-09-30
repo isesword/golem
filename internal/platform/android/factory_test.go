@@ -95,6 +95,45 @@ func TestFactoryBindAMD64(t *testing.T) {
 	}
 }
 
+// TestFactoryBindARM32: ARM32 gets the full 32-bit personality — the ARM
+// EABI transport/table, ILP32 codecs, the 8-byte-pair auxv StartupABI32
+// (bound to the same instance as AuxvLookup), 32-bit bionic paths, and the
+// 4-byte TLS slot init. No field may be left nil.
+func TestFactoryBindARM32(t *testing.T) {
+	rt, err := (factory{}).Bind(platform.BindContext{ArchID: arch.IDARM})
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if _, ok := rt.Startup.(*StartupABI32); !ok {
+		t.Fatalf("Runtime.Startup = %T, want *android.StartupABI32 (8-byte auxv pairs)", rt.Startup)
+	}
+	if rt.AuxvLookup == nil {
+		t.Fatal("AuxvLookup must be bound (bionic getauxval)")
+	}
+	if _, ok := rt.Transport.(LinuxARM32Transport); !ok {
+		t.Fatalf("Transport = %T, want LinuxARM32Transport", rt.Transport)
+	}
+	if _, ok := rt.Codecs.(LinuxARM32Codecs); !ok {
+		t.Fatalf("Codecs = %T, want LinuxARM32Codecs", rt.Codecs)
+	}
+	if rt.Table == nil {
+		t.Fatal("Table must not be nil")
+	}
+	if rt.Futex != SYSA_futex || rt.Nanosleep != SYSA_nanosleep || rt.ClockNanosleep != SYSA_clock_nanosleep {
+		t.Fatalf("scheduler interception numbers = %d/%d/%d, want the ARM32 ones %d/%d/%d",
+			rt.Futex, rt.Nanosleep, rt.ClockNanosleep, SYSA_futex, SYSA_nanosleep, SYSA_clock_nanosleep)
+	}
+	if len(rt.RuntimeLibs) != 3 || rt.RuntimeLibs[0] != "android/sdk23/lib/libc.so" {
+		t.Fatalf("RuntimeLibs = %v, want 32-bit bionic under lib/", rt.RuntimeLibs)
+	}
+	if rt.InitGuest == nil || !rt.PthreadStubs || rt.Layout == nil {
+		t.Fatal("ARM32 runtime must carry TLS init, pthread stubs and the layout policy")
+	}
+	if rt.Interop == nil {
+		t.Fatal("Android always has the interop surface")
+	}
+}
+
 // TestFactoryBindDefaultsAndErrors: nil Config yields platform defaults; a
 // foreign config type and an unsupported arch are Bind errors.
 func TestFactoryBindDefaultsAndErrors(t *testing.T) {
