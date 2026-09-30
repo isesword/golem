@@ -59,3 +59,22 @@ long guest_getpid(void) {
     __asm__ volatile("svc #0" : "=r"(ret) : "r"(r7) : "memory");
     return ret;
 }
+
+// --- P10 wrap binding probes -------------------------------------------------
+// Address-taken `add` forces an R_ARM_ABS32 data reloc naming a DEFINED,
+// preemptible symbol — exactly the resolvable binding WrapSymbol redirects.
+// (host_magic has no definition in any module, so it is NOT wrappable: the
+// Sym lookup fails before any binding scan.)
+
+long nest(long x) {
+    long (*volatile p)(long, long) = add;
+    return p(x, 4) + 1000;
+}
+
+// Same recursion-through-the-binding probe as the ARM64 fixture: each level
+// re-enters the wrap entry stub. fact(5) plain = 120.
+long fact(long n) {
+    if (n <= 1) return 1;
+    long (*volatile p)(long) = fact;
+    return n * p(n - 1);
+}

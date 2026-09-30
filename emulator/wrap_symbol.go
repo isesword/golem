@@ -121,7 +121,24 @@ func (e *Emulator) WrapSymbol(name string, post func(h *Hook) uint64) (stop func
 
 	// Redirect every resolvable binding of `name` to the entry stub. Only
 	// slots that currently hold the ORIGINAL are touched — slots claimed by
-	// other interpositions keep their precedence.
+	// other interpositions keep their precedence. Slots are read/written at
+	// the TARGET's pointer width: a 4-byte ARM32 slot sits next to live data
+	// (an 8-byte read compares in the neighbor's bits and never matches; an
+	// 8-byte write clobbers it — both found live, P10-2d).
+	ptrSize := uint64(e.arch.PtrSize())
+	readSlot := func(addr uint64) (uint64, error) {
+		if ptrSize == 4 {
+			v, err := e.ReadU32(addr)
+			return uint64(v), err
+		}
+		return e.ReadU64(addr)
+	}
+	writeSlot := func(addr uint64, v uint64) error {
+		if ptrSize == 4 {
+			return e.WriteU32(addr, uint32(v))
+		}
+		return e.WriteU64(addr, v)
+	}
 	for _, m := range e.Modules() {
 		for _, r := range m.Img.Relocs {
 			if int(r.Sym) >= len(m.Img.Syms) {
@@ -131,11 +148,11 @@ func (e *Emulator) WrapSymbol(name string, post func(h *Hook) uint64) (stop func
 				continue
 			}
 			slot := m.Base + r.Offset
-			cur, rerr := e.ReadU64(slot)
+			cur, rerr := readSlot(slot)
 			if rerr != nil || cur != original {
 				continue
 			}
-			if werr := e.WriteU64(slot, uint64(entryStub)); werr == nil {
+			if werr := writeSlot(slot, uint64(entryStub)); werr == nil {
 				rt.slots = append(rt.slots, wrapSlot{addr: slot, orig: original})
 			}
 		}
@@ -152,7 +169,11 @@ func (e *Emulator) WrapSymbol(name string, post func(h *Hook) uint64) (stop func
 
 	stop = func() {
 		for _, s := range rt.slots {
-			_ = e.WriteU64(s.addr, s.orig)
+			if ptrSize == 4 {
+				_ = e.WriteU32(s.addr, uint32(s.orig))
+			} else {
+				_ = e.WriteU64(s.addr, s.orig)
+			}
 		}
 		delete(e.wrapStubs, wrapEntryName(name))
 		delete(e.wrapStubs, wrapPostName(name))

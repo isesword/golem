@@ -85,3 +85,25 @@ int jni_probe(void *env) {
 
     return (ver == 0x10006) + ul + al + same + pend + clr + refs;
 }
+
+// --- P10 wrap nesting + recursion probes ------------------------------------
+// Both route a guest call through a RESOLVABLE BINDING by taking the callee's
+// address (default visibility -> a data reloc naming the symbol): exactly the
+// slot WrapSymbol redirects, so the wrap fires even though both callees live
+// in this same module. Guest-internal DIRECT calls (slen above) stay unwrapped
+// — that honest v1 scope is what makes these probes load-bearing.
+
+// p(s) -> slen via its binding; wrap slen AND strlen and this call nests two
+// wrap frames (slen's on strlen's). +1000 keeps any rewrite visibly separate.
+int nest(const char *s) {
+    int (*volatile p)(const char *) = slen;
+    return p(s) + 1000;
+}
+
+// Self-recursion THROUGH the binding: every recursive call re-enters the wrap
+// entry stub, so depth-n recursion pushes n wrap frames. fact(5) plain = 120.
+long fact(long n) {
+    if (n <= 1) return 1;
+    long (*volatile p)(long) = fact;
+    return n * p(n - 1);
+}
