@@ -4,9 +4,18 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-golem 是一个用纯 Go 编写的多平台 native 库模拟框架:在本机加载一个 Android AArch64 native 库(`.so`),不借助 JVM、真机或 Android 系统就能直接调用里面的函数。它给这个 `.so` 搭出一套够用的 Android 进程环境(动态链接器、真实的 bionic libc、一部分 Linux 系统调用、按 JNI 规范实现引用生命周期的 JavaVM),你就能从 Go 里调它的导出函数、读写它的内存、观察它的每条指令。
+golem 是一个用纯 Go 编写的多平台 native 库模拟框架:在本机加载一个 Android/Darwin native 库(Android:`.so`,Darwin:Mach-O dylib),不借助 JVM、真机或 Android/macOS 系统就能直接调用里面的函数。它给这个库搭出一套够用的进程环境(动态链接器、真实的 bionic libc、一部分 Linux 系统调用、按 JNI 规范实现引用生命周期的 JavaVM),你就能从 Go 里调它的导出函数、读写它的内存、观察它的每条指令。
 
-CPU 引擎通过接口抽象解耦,内置 [Unicorn](https://www.unicorn-engine.org/) 后端——用 [purego](https://github.com/ebitengine/purego) 在运行时 `dlopen` 原版 libunicorn,**构建期零 cgo**(`CGO_ENABLED=0` 即可构建,无需 C 编译器、无自编 shim 库)。Android 先行;iOS(Mach-O)与多架构在路线图上。
+CPU 引擎通过接口抽象解耦,内置 [Unicorn](https://www.unicorn-engine.org/) 后端——用 [purego](https://github.com/ebitengine/purego) 在运行时 `dlopen` 原版 libunicorn,**构建期零 cgo**(`CGO_ENABLED=0` 即可构建,无需 C 编译器、无自编 shim 库)。
+
+**支持的目标(随实现更新):**
+
+```
+Android:  ARM64(AArch64) / ARM32(ARMv7, Thumb) / AMD64(x86_64)
+Darwin:   ARM64 / ARM64e(PAC 剥签名,实验)
+```
+
+x86(32 位) 与 iOS 在路线图上。
 
 ```go
 e, _ := emulator.New(emulator.Config{SOPath: "libfoo.so"})
@@ -20,7 +29,7 @@ sum, _ := e.CallSymbol("add", 2, 3) // -> 5,作为真实 AArch64 代码执行
 
 ## 架构
 
-分层不变量、平台支持矩阵与改动判据见 [ARCHITECTURE.md](ARCHITECTURE.md)——上层（emulator/dvm/loader/kernel/vfs 及一切消费者）只依赖 `emu.Backend` 接口，平台与 CPU 引擎差异全部封死在 `internal/emu` 层。
+分层不变量、平台支持矩阵与改动判据见 [ARCHITECTURE.md](ARCHITECTURE.md)——上层只依赖 `emu.Backend`（引擎差异）与 `platform.Factory/Runtime`（平台差异，纯数据 personality），CPU 引擎细节封死在 `internal/emu`，平台语义封死在 `internal/platform`。
 
 ## 为什么
 
@@ -34,9 +43,10 @@ unidbg 是这个领域的事实标准,但它跑在 JVM 上,依赖偏重,且它�
 
 ## 特性
 
-- AArch64 ELF 加载与动态链接(`RELATIVE` / `JUMP_SLOT` / `GLOB_DAT` / `ABS64`),`DT_INIT` + `init_array`。
-- 复用真实 bionic `libc/libm/libdl`(内置 AOSP sdk23 sysroot),支持跨模块符号解析。
-- Linux/AArch64 系统调用子集(mmap/mprotect/openat/read/write/clock_gettime/getrandom/futex/…),配一套小型虚拟文件系统(`/system/lib64`、`/proc/self/*`、属性、tzdata)。
+- ELF 加载与动态链接(AArch64 / ARM32 / AMD64;`RELATIVE` / `JUMP_SLOT` / `GLOB_DAT` / `ABS64` / ARM32 `REL` 等),`DT_INIT` + `init_array`。
+- 复用真实 bionic `libc/libm/libdl`(ARM64 内置 AOSP sdk23 sysroot;ARM32 经 `scripts/fetch_bionic_arm32.sh` 获取),支持跨模块符号解析。
+- Linux/Android 系统调用子集(mmap/mprotect/openat/read/write/clock_gettime/getrandom/futex/…,按架构 personality 提供传输/编号表/结构体编解码),配一套小型虚拟文件系统(`/system/lib64`、`/proc/self/*`、属性、tzdata)。
+- Mach-O 加载与 `DYLD_CHAINED_PTR_64` 链式修复(Darwin ARM64 / ARM64e,实验)。
 - JNI/JavaVM:guest 的 `JNIEnv`/`JavaVM` 调用会陷回到你用 Go 实现的处理器(`FindClass`、`GetMethodID`、`Call*Method*`、`RegisterNatives`、字符串、字节数组等)。
 - 按符号名或按模块偏移调用 native 函数,最多 8 个整型参数,可读取返回值。
 - 用 Go 回调替换 native 函数(`ReplaceE` 事务化入口补丁,失败恢复原指令),或**内联 hook**(`HookAddr`,逐指令,Unicorn)改寄存器 / 重定向 PC;写内存的路径自动刷新代码缓存。
@@ -164,8 +174,10 @@ golem/
 ├── dvm/          公开:假 Dalvik VM —— VM(JNI 规范引用生命周期)、Object、Class、Jni、AbstractJni、VaList
 ├── internal/
 │   ├── emu/      CPU 后端接口 + 注册表;unicorn 后端(purego 运行时加载 libunicorn)
-│   ├── loader/   ELF 解析 + 动态链接器 + Plan(编译/实例化分离、共享只读页)
-│   ├── kernel/   AArch64 Linux 系统调用子集
+│   ├── arch/     每架构寄存器模型 + CallABI(arm64 / arm32 / amd64)
+│   ├── platform/ 平台 personality(Factory→Runtime,纯数据):android / darwin
+│   ├── loader/   ELF/Mach-O 解析 + 动态链接器 + Plan(编译/实例化分离、共享只读页)
+│   ├── kernel/   Linux 系统调用子集(语义 handler,平台无关)
 │   ├── memory/   guest 地址空间分配器
 │   └── vfs/      guest 虚拟文件系统(/system/lib64、/proc/self、属性、tzdata)
 ├── cmd/
@@ -193,7 +205,7 @@ golem 的精神前身是 [unidbg](https://github.com/zhkl0228/unidbg)——加�
 
 **golem 还没做的(unidbg 有):**
 
-- ARM32 / x86(目前仅 AArch64);iOS / Mach-O 在路线图上。
+- x86(32 位) 与 iOS 在路线图上(Android ARM64/ARM32/AMD64 与 Darwin ARM64/ARM64e 已落地,见文首支持目标)。
 - 完整 syscall 表与全部 ~232 个 JNI 槽位(覆盖常见用法,未实现返回 ENOSYS)。
 - DEX 字节码执行(仅元数据级:类/方法/字段签名供解析;Java 行为用 `dvm.Jni` 建模)。
 

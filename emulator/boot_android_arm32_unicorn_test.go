@@ -35,6 +35,13 @@ func TestBootAndroidARM32EndToEnd(t *testing.T) {
 	if _, err := os.Stat(so); err != nil {
 		t.Skipf("fixture not present: %v", err)
 	}
+	// The ARM32 boot loads the platform RuntimeLibs (32-bit bionic, factory.go),
+	// which are NOT tracked in git (public repo — see .gitignore); fetch them
+	// with scripts/fetch_bionic_arm32.sh.
+	const bionic = "../assets/android/sdk23/lib/libc.so"
+	if _, err := os.Stat(bionic); err != nil {
+		t.Skipf("ARM32 bionic assets not fetched: %v (run scripts/fetch_bionic_arm32.sh)", err)
+	}
 
 	hostMagicRan := 0
 	e, err := New(Config{

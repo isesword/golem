@@ -167,17 +167,21 @@ func TestResolveUnregistered(t *testing.T) {
 
 // TestRegisterSemantics match the loader's registry contract: a nil factory
 // is ignored; a duplicate key overwrites (init-time registration, last
-// linked wins).
+// linked wins). It runs on an isolated Registry instance — the global
+// default table is init()-time territory, and "clean up" of global state
+// would be exactly the kind of order-dependent hermeticity leak that breaks
+// -count=2.
 func TestRegisterSemantics(t *testing.T) {
 	const id = ID(243)
-	Register(id, nil)
-	if _, err := Resolve(id); err == nil {
+	r := NewRegistry()
+	r.Register(id, nil)
+	if _, err := r.Resolve(id); err == nil {
 		t.Fatal("Register(id, nil) must leave the id unregistered")
 	}
 	first, second := &synthFactory{}, &synthFactory{}
-	Register(id, first)
-	Register(id, second)
-	if got, err := Resolve(id); err != nil || got != Factory(second) {
+	r.Register(id, first)
+	r.Register(id, second)
+	if got, err := r.Resolve(id); err != nil || got != Factory(second) {
 		t.Fatalf("duplicate Register must overwrite: got %v, %v", got, err)
 	}
 }

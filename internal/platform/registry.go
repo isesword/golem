@@ -133,17 +133,29 @@ type Interop struct {
 	Profile *profile.Profile
 }
 
-var factories = map[ID]Factory{}
+// Registry is one factory table. The package-level default registry backs
+// Register/Resolve — the init()-time registration path and the composition
+// root; tests that exercise registration semantics build their own instance
+// (NewRegistry) so they stay hermetic regardless of test order or -count
+// runs, instead of trying to un-register global state.
+type Registry struct {
+	factories map[ID]Factory
+}
 
-// Register makes a Factory available under id; called from a platform
-// subpackage's init(). As in loader.RegisterParser, a duplicate key
-// overwrites — registration happens at init time, so the last linked
-// implementation wins — and a nil factory is ignored.
-func Register(id ID, f Factory) {
+// NewRegistry returns an empty, isolated factory table.
+func NewRegistry() *Registry {
+	return &Registry{factories: make(map[ID]Factory)}
+}
+
+// Register makes a Factory available under id. As in loader.RegisterParser, a
+// duplicate key overwrites — registration happens at init time, so the last
+// linked implementation wins — and a nil factory is ignored (it does NOT
+// remove an existing registration).
+func (r *Registry) Register(id ID, f Factory) {
 	if f == nil {
 		return
 	}
-	factories[id] = f
+	r.factories[id] = f
 }
 
 // Resolve returns the Factory registered under id, or an error naming the
@@ -151,10 +163,21 @@ func Register(id ID, f Factory) {
 // same shape as the loader's parser dispatch). The registry consumes the
 // probed Target.Platform as-is; Probe→Target resolution stays upstream and
 // is never re-decided here.
-func Resolve(id ID) (Factory, error) {
-	f, ok := factories[id]
+func (r *Registry) Resolve(id ID) (Factory, error) {
+	f, ok := r.factories[id]
 	if !ok {
 		return nil, fmt.Errorf("platform: no factory registered for platform %s (import the platform/%s package for its init())", id, id)
 	}
 	return f, nil
 }
+
+// defaultRegistry is the process-wide table the platform subpackages'
+// init() functions register into and the composition root resolves from.
+var defaultRegistry = NewRegistry()
+
+// Register makes a Factory available under id on the default registry;
+// called from a platform subpackage's init().
+func Register(id ID, f Factory) { defaultRegistry.Register(id, f) }
+
+// Resolve returns the Factory registered under id on the default registry.
+func Resolve(id ID) (Factory, error) { return defaultRegistry.Resolve(id) }
