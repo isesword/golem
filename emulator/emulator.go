@@ -1180,14 +1180,24 @@ func putU64(be emu.Backend, addr, val uint64) error {
 // InitArrayPtrs reads the module's init_array function pointers from guest
 // memory AFTER relocation (on AArch64 the file section is zeros; RELATIVE
 // addends written by the linker hold the real, base-relative pointers).
+// Entry width follows the TARGET's pointer size (P7: 4 bytes on ARM32 —
+// the stride used to be a hardcoded 8). On ARM32 an entry may carry the
+// Thumb bit0; CallFunc's setPCBX interprets it, so entries are returned
+// verbatim.
 func (e *Emulator) InitArrayPtrs(m *Module) ([]uint64, error) {
+	ptrSize := uint64(e.arch.PtrSize())
 	var ptrs []uint64
 	for i := 0; i < m.Img.InitArrayLen; i++ {
-		b, err := e.be.MemRead(emu.GuestAddr(m.Base+m.Img.InitArrayAddr+uint64(i)*8), 8)
+		b, err := e.be.MemRead(emu.GuestAddr(m.Base+m.Img.InitArrayAddr+uint64(i)*ptrSize), ptrSize)
 		if err != nil {
 			return nil, err
 		}
-		v := binary.LittleEndian.Uint64(b)
+		var v uint64
+		if ptrSize == 4 {
+			v = uint64(binary.LittleEndian.Uint32(b))
+		} else {
+			v = binary.LittleEndian.Uint64(b)
+		}
 		if v == 0 {
 			continue // lld 对齐填充槽（无重定位覆盖，文件值为 0）：真机 bionic 同样跳过
 		}
