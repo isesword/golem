@@ -65,14 +65,19 @@ func (sysV64) ResultReg(i int) (emu.Reg, bool) {
 //
 // Nothing below the new RSP is written: the 128-byte red zone of the frame
 // being created stays intact.
+// P9.5a: the register writes (args, RSP, RIP) are collected into one set
+// and flushed in a single batch when the backend has the RegBatchWriter
+// capability — the no-capability loop writes the identical set in the
+// identical order, so the two paths cannot drift.
 func (sysV64) PrepareCall(b emu.Backend, req arch.CallRequest) error {
+	var writes [numArgRegs + 2]emu.RegWrite // args + RSP + RIP
+	n := 0
 	for i, a := range req.Args {
 		if i >= numArgRegs {
 			break
 		}
-		if err := b.RegWrite(argRegs[i], a.Value); err != nil {
-			return fmt.Errorf("amd64: PrepareCall: arg %d: %w", i, err)
-		}
+		writes[n] = emu.RegWrite{Reg: argRegs[i], Value: a.Value}
+		n++
 	}
 	rsp, err := b.RegRead(RSP)
 	if err != nil {
@@ -93,11 +98,21 @@ func (sysV64) PrepareCall(b emu.Backend, req arch.CallRequest) error {
 	if err := b.MemWrite(emu.GuestAddr(newRSP), frame); err != nil {
 		return fmt.Errorf("amd64: PrepareCall: write %d stack slots at RSP %#x: %w", slots, newRSP, err)
 	}
-	if err := b.RegWrite(RSP, newRSP); err != nil {
-		return fmt.Errorf("amd64: PrepareCall: write RSP: %w", err)
+	writes[n] = emu.RegWrite{Reg: RSP, Value: newRSP}
+	n++
+	writes[n] = emu.RegWrite{Reg: RIP, Value: uint64(req.Entry)}
+	n++
+
+	if bw, ok := b.(emu.RegBatchWriter); ok {
+		if err := bw.WriteRegs(writes[:n]); err != nil {
+			return fmt.Errorf("amd64: PrepareCall: batch write: %w", err)
+		}
+		return nil
 	}
-	if err := b.RegWrite(RIP, uint64(req.Entry)); err != nil {
-		return fmt.Errorf("amd64: PrepareCall: write RIP: %w", err)
+	for _, w := range writes[:n] {
+		if err := b.RegWrite(w.Reg, w.Value); err != nil {
+			return fmt.Errorf("amd64: PrepareCall: write %v=#x: %w", w.Reg, err)
+		}
 	}
 	return nil
 }

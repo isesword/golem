@@ -87,7 +87,15 @@ func layout(args []arch.CallArg) ([]placement, uint64) {
 // caller's ISA state for the interworking return), SP dropped by the
 // 8-aligned spill area, and PC ← req.Entry with BX semantics (bit0 into
 // CPSR.T, PC even — Thumb functions work; see setPCBX).
+// P9.5a: the plain register writes (args, SP, LR) are collected into one
+// set and flushed in a single batch when the backend has the
+// RegBatchWriter capability (identical loop otherwise). setPCBX stays a
+// separate trailing call — it is a STATEFUL write (CPSR.T + PC from one
+// address), not a plain slot store, and keeping it after the batch
+// preserves the original write order exactly.
 func (aapcs32) PrepareCall(b emu.Backend, req arch.CallRequest) error {
+	var writes [10]emu.RegWrite // r0..r3 + pair highs + SP + LR, with slack
+	n := 0
 	places, spill := layout(req.Args)
 	for i, a := range req.Args {
 		p := places[i]
@@ -95,13 +103,11 @@ func (aapcs32) PrepareCall(b emu.Backend, req arch.CallRequest) error {
 			continue
 		}
 		lo := a.Value & 0xffffffff
-		if err := b.RegWrite(argRegs[p.reg], lo); err != nil {
-			return fmt.Errorf("arm32: PrepareCall: arg %d (r%d): %w", i, p.reg, err)
-		}
+		writes[n] = emu.RegWrite{Reg: argRegs[p.reg], Value: lo}
+		n++
 		if p.wide {
-			if err := b.RegWrite(argRegs[p.reg+1], a.Value>>32); err != nil {
-				return fmt.Errorf("arm32: PrepareCall: arg %d high word (r%d): %w", i, p.reg+1, err)
-			}
+			writes[n] = emu.RegWrite{Reg: argRegs[p.reg+1], Value: a.Value >> 32}
+			n++
 		}
 	}
 	if spill > 0 {
@@ -125,12 +131,22 @@ func (aapcs32) PrepareCall(b emu.Backend, req arch.CallRequest) error {
 		if err := b.MemWrite(emu.GuestAddr(sp), raw); err != nil {
 			return fmt.Errorf("arm32: PrepareCall: write %d spill bytes at SP %#x: %w", spill, sp, err)
 		}
-		if err := b.RegWrite(SP, sp); err != nil {
-			return fmt.Errorf("arm32: PrepareCall: write SP: %w", err)
-		}
+		writes[n] = emu.RegWrite{Reg: SP, Value: sp}
+		n++
 	}
-	if err := b.RegWrite(LR, uint64(req.Return)); err != nil {
-		return fmt.Errorf("arm32: PrepareCall: write LR: %w", err)
+	writes[n] = emu.RegWrite{Reg: LR, Value: uint64(req.Return)}
+	n++
+
+	if bw, ok := b.(emu.RegBatchWriter); ok {
+		if err := bw.WriteRegs(writes[:n]); err != nil {
+			return fmt.Errorf("arm32: PrepareCall: batch write: %w", err)
+		}
+	} else {
+		for _, w := range writes[:n] {
+			if err := b.RegWrite(w.Reg, w.Value); err != nil {
+				return fmt.Errorf("arm32: PrepareCall: write %v=#x: %w", w.Reg, err)
+			}
+		}
 	}
 	if err := setPCBX(b, uint64(req.Entry)); err != nil {
 		return fmt.Errorf("arm32: PrepareCall: set PC: %w", err)

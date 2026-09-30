@@ -1054,6 +1054,16 @@ func (e *Emulator) onSyscallTrap(b emu.Backend, _ emu.TrapKind) {
 // alignment knowledge (64-bit arguments on 32-bit targets) use
 // CallFuncArgs.
 func (e *Emulator) CallFunc(addr uint64, args ...uint64) (uint64, error) {
+	if len(args) <= 8 {
+		// P9.5b: stack array — arch.WordArgs would heap-allocate the slice
+		// per call (memprofile: ~6% of call-path alloc objects). The array
+		// stays on the stack: CallFuncArgs/PrepareCall never retain Args.
+		var a [8]arch.CallArg
+		for i, v := range args {
+			a[i] = arch.CallArg{Value: v, Kind: arch.ArgWord}
+		}
+		return e.CallFuncArgs(addr, a[:len(args)]...)
+	}
 	return e.CallFuncArgs(addr, arch.WordArgs(args...)...)
 }
 
@@ -1106,6 +1116,15 @@ func (e *Emulator) CallSymbol(name string, args ...Value) (uint64, error) {
 	if !ok {
 		return 0, fmt.Errorf("symbol %q not found", name)
 	}
+	if len(args) <= 16 {
+		// P9.5b: stack array — valuesToCallArgs would heap-allocate (see
+		// CallFunc). Nothing in the call path retains Args.
+		var a [16]arch.CallArg
+		for i, v := range args {
+			a[i] = v.callArg()
+		}
+		return e.CallFuncArgs(addr, a[:len(args)]...)
+	}
 	return e.CallFuncArgs(addr, valuesToCallArgs(args)...)
 }
 
@@ -1129,6 +1148,14 @@ func (e *Emulator) CallOffset(m *Module, offset uint64, args ...Value) (uint64, 
 	}
 	if m == nil {
 		return 0, fmt.Errorf("CallOffset: no module (set Config.SOPath or pass a module)")
+	}
+	if len(args) <= 16 {
+		// P9.5b stack array, as in CallSymbol.
+		var a [16]arch.CallArg
+		for i, v := range args {
+			a[i] = v.callArg()
+		}
+		return e.CallFuncArgs(m.Base+offset, a[:len(args)]...)
 	}
 	return e.CallFuncArgs(m.Base+offset, valuesToCallArgs(args)...)
 }

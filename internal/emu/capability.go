@@ -96,3 +96,19 @@ type RegFileReader interface {
 	Backend
 	ReadGPRegs() ([]uint64, error)
 }
+
+// RegWrite is one register write in a batch (see RegBatchWriter).
+type RegWrite struct {
+	Reg   Reg
+	Value uint64
+}
+
+// RegBatchWriter is the OPTIONAL batch register-write capability (P9.5a):
+// one host↔engine crossing for a whole set of writes instead of one per
+// register. Purely a performance seam — the fallback (a RegWrite loop)
+// is bit-for-bit equivalent, so consumers probe it and degrade freely;
+// a backend without it is merely slower, never wrong.
+type RegBatchWriter interface {
+	Backend
+	WriteRegs(writes []RegWrite) error
+}

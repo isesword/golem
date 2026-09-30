@@ -76,7 +76,7 @@ func (cpuArch) ReadRole(b emu.Backend, role arch.RegisterRole) (uint64, error) {
 	case arch.RoleTLS:
 		return b.RegRead(TPIDRURW)
 	default:
-		return 0, fmt.Errorf("arch: role %s: %w", role, arch.ErrUnsupportedRole)
+		return 0, fmt.Errorf("arch: role %v: %w", role, arch.ErrUnsupportedRole)
 	}
 }
 

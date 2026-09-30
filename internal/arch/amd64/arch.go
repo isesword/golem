@@ -74,7 +74,7 @@ func (cpuArch) ReadRole(b emu.Backend, role arch.RegisterRole) (uint64, error) {
 	case arch.RoleTLS:
 		return b.RegRead(FS_BASE)
 	default: // RoleLR and anything else: loud, never a silent zero
-		return 0, fmt.Errorf("arch: role %s: %w", role, arch.ErrUnsupportedRole)
+		return 0, fmt.Errorf("arch: role %v: %w", role, arch.ErrUnsupportedRole)
 	}
 }
 

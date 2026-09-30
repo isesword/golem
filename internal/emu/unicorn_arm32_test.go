@@ -246,3 +246,29 @@ func TestUnicornARM32VFPEnabled(t *testing.T) {
 		t.Fatalf("VFP probe: %v (CPACR must enable cp10/cp11 at engine creation)", err)
 	}
 }
+
+// TestUnicornARM32WriteRegs pins the P9.5a batch-write capability live:
+// a single WriteRegs lands every value where individual RegReads see it.
+func TestUnicornARM32WriteRegs(t *testing.T) {
+	be := newARM32(t)
+	bw, ok := be.(emu.RegBatchWriter)
+	if !ok {
+		t.Fatal("the ARM32 unicorn backend must implement RegBatchWriter")
+	}
+	if err := bw.WriteRegs([]emu.RegWrite{
+		{Reg: arm32.R0, Value: 0x1111},
+		{Reg: arm32.R5, Value: 0x5555},
+		{Reg: arm32.SP, Value: 0x5ace00},
+		{Reg: arm32.LR, Value: 0x1e1e1e1e},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		reg  emu.Reg
+		want uint64
+	}{{arm32.R0, 0x1111}, {arm32.R5, 0x5555}, {arm32.SP, 0x5ace00}, {arm32.LR, 0x1e1e1e1e}} {
+		if got, err := be.RegRead(tc.reg); err != nil || got != tc.want {
+			t.Fatalf("RegRead(%d) = %#x, %v; want %#x", tc.reg, got, err, tc.want)
+		}
+	}
+}

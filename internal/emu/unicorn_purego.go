@@ -158,6 +158,7 @@ var (
 	pRegRead   func(uc unsafe.Pointer, regid int32, val unsafe.Pointer) int32                       // uc_reg_read
 	pRegWrite  func(uc unsafe.Pointer, regid int32, val unsafe.Pointer) int32                       // uc_reg_write
 	pRegRdBat  func(uc unsafe.Pointer, regs unsafe.Pointer, vals unsafe.Pointer, count int32) int32 // uc_reg_read_batch (void** vals)
+	pRegWrBat  func(uc unsafe.Pointer, regs unsafe.Pointer, vals unsafe.Pointer, count int32) int32 // uc_reg_write_batch (void** vals) — P9.5a
 	pMemMap    func(uc unsafe.Pointer, addr uint64, size uint64, prot uint32) int32
 	pMemMapPtr func(uc unsafe.Pointer, addr uint64, size uint64, prot uint32, ptr unsafe.Pointer) int32 // uc_mem_map_ptr
 	pMemUnmap  func(uc unsafe.Pointer, addr uint64, size uint64) int32
@@ -200,7 +201,8 @@ func loadUnicorn() error {
 		"uc_close":          &pClose,
 		"uc_reg_read":       &pRegRead,
 		"uc_reg_write":      &pRegWrite,
-		"uc_reg_read_batch": &pRegRdBat,
+		"uc_reg_read_batch":  &pRegRdBat,
+		"uc_reg_write_batch": &pRegWrBat,
 		"uc_mem_map":        &pMemMap,
 		"uc_mem_map_ptr":    &pMemMapPtr,
 		"uc_mem_unmap":      &pMemUnmap,
@@ -877,6 +879,43 @@ func (h *ucHook) Remove() error {
 	unregisterCB(h.id)
 	if e := pHookDel(h.b.uc, h.hh); e != ucOK {
 		return ucErr("hook_del", e)
+	}
+	return nil
+}
+
+// WriteRegs implements the RegBatchWriter capability (P9.5a): one
+// host↔engine crossing for the whole write set. On engines whose unicorn
+// build lacks uc_reg_write_batch (the binding stays nil) it degrades
+// internally to a per-register loop — bit-for-bit the same writes, just
+// slower.
+func (b *unicornBackend) WriteRegs(writes []RegWrite) error {
+	if len(writes) == 0 {
+		return nil
+	}
+	if len(writes) > 16 || pRegWrBat == nil {
+		// Oversized batches and engines whose unicorn lacks the symbol: the
+		// identical per-register loop — zero new allocations, bit-for-bit
+		// the same writes, just slower.
+		for _, w := range writes {
+			if err := b.RegWrite(w.Reg, w.Value); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	// Stack arrays: the batch path adds NO heap allocation. The arrays do
+	// escape to C (unavoidable), but as one escape-set instead of one
+	// escaping value per register.
+	var ids [16]int32
+	var vals [16]uint64
+	var ptrs [16]unsafe.Pointer
+	for i, w := range writes {
+		ids[i] = b.toUCReg(w.Reg)
+		vals[i] = w.Value
+		ptrs[i] = unsafe.Pointer(&vals[i])
+	}
+	if e := pRegWrBat(b.uc, unsafe.Pointer(&ids[0]), unsafe.Pointer(&ptrs[0]), int32(len(writes))); e != ucOK {
+		return ucErr("reg_write_batch", e)
 	}
 	return nil
 }

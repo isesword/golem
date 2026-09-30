@@ -85,7 +85,7 @@ func (cpuArch) ReadRole(b emu.Backend, role arch.RegisterRole) (uint64, error) {
 		}
 		return regs[fpIdx], nil
 	default:
-		return 0, fmt.Errorf("arch: role %s: %w", role, arch.ErrUnsupportedRole)
+		return 0, fmt.Errorf("arch: role %v: %w", role, arch.ErrUnsupportedRole)
 	}
 }
 

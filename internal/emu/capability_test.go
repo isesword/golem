@@ -13,9 +13,9 @@ import (
 // coreOnlyBE implements ONLY the Backend core interface — no capabilities.
 type coreOnlyBE struct{}
 
-func (coreOnlyBE) RegRead(Reg) (uint64, error)                             { return 0, nil }
-func (coreOnlyBE) RegWrite(Reg, uint64) error                              { return nil }
-func (coreOnlyBE) MemMap(GuestAddr, uint64, int) error                     { return nil }
+func (coreOnlyBE) RegRead(Reg) (uint64, error)                            { return 0, nil }
+func (coreOnlyBE) RegWrite(Reg, uint64) error                             { return nil }
+func (coreOnlyBE) MemMap(GuestAddr, uint64, int) error                    { return nil }
 func (coreOnlyBE) MemUnmap(GuestAddr, uint64) error                       { return nil }
 func (coreOnlyBE) MemProtect(GuestAddr, uint64, int) error                { return nil }
 func (coreOnlyBE) MemWrite(GuestAddr, []byte) error                       { return nil }
@@ -46,6 +46,7 @@ func (fullCapsBE) SaveContext() (CPUContext, error) { return nil, nil }
 func (fullCapsBE) RestoreContext(CPUContext) error  { return nil }
 func (fullCapsBE) FlushCache() error                { return nil }
 func (fullCapsBE) ReadGPRegs() ([]uint64, error)    { return nil, nil }
+func (fullCapsBE) WriteRegs([]RegWrite) error       { return nil }
 
 func TestCapabilityProbeCoreOnlyBackend(t *testing.T) {
 	var be Backend = coreOnlyBE{}
@@ -111,4 +112,17 @@ func TestGuestAddr(t *testing.T) {
 	var _ MemInvalidHookFunc = func(Backend, int, GuestAddr, int, int64) bool { return false }
 	var _ MemReadHookFunc = func(Backend, GuestAddr, int) {}
 	var _ MemWriteHookFunc = func(Backend, GuestAddr, int, int64) {}
+}
+
+// TestRegBatchWriterProbe: batch write is an OPTIONAL capability (P9.5a) —
+// a core-only backend must not satisfy it, a full-caps backend must.
+func TestRegBatchWriterProbe(t *testing.T) {
+	var core Backend = coreOnlyBE{}
+	if _, ok := core.(RegBatchWriter); ok {
+		t.Error("core-only backend must NOT satisfy RegBatchWriter")
+	}
+	var full Backend = fullCapsBE{}
+	if _, ok := full.(RegBatchWriter); !ok {
+		t.Error("full-caps backend must satisfy RegBatchWriter")
+	}
 }

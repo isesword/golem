@@ -43,14 +43,20 @@ func (aapcs64) ResultReg(i int) (emu.Reg, bool) {
 // 16-aligned spill area (AAPCS64 keeps SP 16-aligned at public interfaces),
 // LR ← req.Return, PC ← req.Entry. Every ArgKind occupies one 64-bit slot
 // (P6: AAPCS64 has no sub-word or paired placement).
+//
+// P9.5a: the whole write SET is collected first, then flushed in ONE batch
+// when the backend has the RegBatchWriter capability — the no-capability
+// loop writes the identical set in the identical order, so the two paths
+// cannot drift.
 func (aapcs64) PrepareCall(b emu.Backend, req arch.CallRequest) error {
+	var writes [numArgRegs + 3]emu.RegWrite // max: 8 args + SP + LR + PC
+	n := 0
 	for i, a := range req.Args {
 		if i >= numArgRegs {
 			break
 		}
-		if err := b.RegWrite(X0+emu.Reg(i), a.Value); err != nil {
-			return fmt.Errorf("arm64: PrepareCall: arg %d: %w", i, err)
-		}
+		writes[n] = emu.RegWrite{Reg: X0 + emu.Reg(i), Value: a.Value}
+		n++
 	}
 	if len(req.Args) > numArgRegs {
 		spill := req.Args[numArgRegs:]
@@ -67,15 +73,24 @@ func (aapcs64) PrepareCall(b emu.Backend, req arch.CallRequest) error {
 		if err := b.MemWrite(emu.GuestAddr(sp), raw); err != nil {
 			return fmt.Errorf("arm64: PrepareCall: write %d stack args at SP %#x: %w", len(spill), sp, err)
 		}
-		if err := b.RegWrite(SP, sp); err != nil {
-			return fmt.Errorf("arm64: PrepareCall: write SP: %w", err)
+		writes[n] = emu.RegWrite{Reg: SP, Value: sp}
+		n++
+	}
+	writes[n] = emu.RegWrite{Reg: LR, Value: uint64(req.Return)}
+	n++
+	writes[n] = emu.RegWrite{Reg: PC, Value: uint64(req.Entry)}
+	n++
+
+	if bw, ok := b.(emu.RegBatchWriter); ok {
+		if err := bw.WriteRegs(writes[:n]); err != nil {
+			return fmt.Errorf("arm64: PrepareCall: batch write: %w", err)
 		}
+		return nil
 	}
-	if err := b.RegWrite(LR, uint64(req.Return)); err != nil {
-		return fmt.Errorf("arm64: PrepareCall: write LR: %w", err)
-	}
-	if err := b.RegWrite(PC, uint64(req.Entry)); err != nil {
-		return fmt.Errorf("arm64: PrepareCall: write PC: %w", err)
+	for _, w := range writes[:n] {
+		if err := b.RegWrite(w.Reg, w.Value); err != nil {
+			return fmt.Errorf("arm64: PrepareCall: write %v=#x: %w", w.Reg, err)
+		}
 	}
 	return nil
 }
