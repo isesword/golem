@@ -73,7 +73,7 @@ jobs:
           cmake -S unicorn-src -B build `
             -A ${{ matrix.cmake_arch }} `
             -DWIN32_ENABLE_VEH=OFF `
-            -DUNICORN_ARCH="arm64;aarch64" `
+            -DUNICORN_ARCH="arm;arm64;aarch64;x86" `
             -DCMAKE_BUILD_TYPE=Release
 
       - name: Build unicorn.dll
