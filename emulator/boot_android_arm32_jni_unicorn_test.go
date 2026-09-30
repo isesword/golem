@@ -25,6 +25,12 @@ func TestBootAndroidARM32RealBionicJNI(t *testing.T) {
 	if _, err := os.Stat(so); err != nil {
 		t.Skipf("fixture not present: %v", err)
 	}
+	// The 32-bit bionic assets are NOT tracked in git (public repo — see
+	// .gitignore); fetch them with scripts/fetch_bionic_arm32.sh.
+	const bionic = "../assets/android/sdk23/lib/libc.so"
+	if _, err := os.Stat(bionic); err != nil {
+		t.Skipf("ARM32 bionic assets not fetched: %v (run scripts/fetch_bionic_arm32.sh)", err)
+	}
 
 	type logCall struct{ prio, tag uint64 }
 	var logCalls []logCall
