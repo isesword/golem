@@ -71,9 +71,15 @@ const (
 	// UC_CTL_TB_FLUSH = 10, UC_CTL_IO_WRITE = 1, no extra args.
 	ctlTBFlush = uint32(10) | 0<<26 | 1<<30
 
-	// UC_ERR_ARG in unicorn2's uc_err enum — returned by UC_CTL_UC_PREALLOC
-	// on POSIX builds where it does not apply.
-	ucErrArg = 4
+	// UC_ERR_ARG in unicorn2's uc_err enum = 10 (OK0 NOMEM1 ARCH2 HANDLE3
+	// MODE4 VERSION5 READ_UNMAPPED6 WRITE_UNMAPPED7 FETCH_UNMAPPED8 HOOK9
+	// INSN_INVALID10, …ARG) — returned by UC_CTL_UC_PREALLOC on builds where
+	// it does not apply. The old pin (4) was actually UC_ERR_MODE, which is
+	// why the PREALLOC tolerance in applyWindowsDefaults never matched when
+	// an engine answered ARG (found on the first Windows run of the
+	// multi-arch refactor: uc_open(ARM) answered MODE(4) there, so the bug
+	// hid twice over).
+	ucErrArg = 10
 
 	// UC_CTL_UC_PREALLOC: value 19 in unicorn dev's uc_control_type
 	// (PR #2364 appends it after UC_CTL_INVALID_ADDR=18; verified against
@@ -498,7 +504,7 @@ func (b *unicornBackend) applyWindowsDefaults() error {
 				"or point GOLEM_UNICORN at one.\n")
 		})
 	default:
-		return ucErr("uc_ctl prealloc", e)
+		return ucErr(fmt.Sprintf("uc_ctl prealloc (%s)", b.arch), e)
 	}
 	// PREALLOC commits the whole TCG buffer upfront — the default 1 GiB
 	// per instance would bill 10 GiB for a 10-engine pool. Sizing curve
