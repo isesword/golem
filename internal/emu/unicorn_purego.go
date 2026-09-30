@@ -435,6 +435,28 @@ func newUnicornBackend(a Arch) (Backend, error) {
 		return nil, ucErr("uc_open", e)
 	}
 	b := &unicornBackend{uc: uc, arch: a, pageSize: 4096}
+	if a == ArchARM {
+		// ARMv7 RESET leaves VFP/NEON disabled (cp10/cp11 inaccessible); a
+		// real Linux kernel enables them lazily on first use, and bionic
+		// assumes they are on. Without this, the first VLDR/NEON
+		// instruction raises Undefined → UC_ERR_INSN_INVALID (P8: exposed
+		// by real third-party ARMv7 libraries — Termux libsqlite3 hit a
+		// VLDR inside sqlite3_open→sqlite3_config's dispatch tail). Live
+		// probe pinned the semantics: THIS unicorn build gates VFP on
+		// FPEXC.EN (bit30), not CPACR — write both (CPACR = the
+		// architectural switch, FPEXC = the one that actually works here),
+		// engine-internal like the Windows PREALLOC default.
+		var fpexc uint64 = 1 << 30
+		if e := pRegWrite(uc, ucArmRegFPEXC, unsafe.Pointer(&fpexc)); e != ucOK {
+			pClose(uc)
+			return nil, ucErr("arm fpexc enable", e)
+		}
+		var cpacr uint64 = 0x00F00000
+		if e := pRegWrite(uc, ucArmRegC1C02, unsafe.Pointer(&cpacr)); e != ucOK {
+			pClose(uc)
+			return nil, ucErr("arm cpacr enable", e)
+		}
+	}
 	if runtime.GOOS == "windows" {
 		if err := b.applyWindowsDefaults(); err != nil {
 			pClose(uc)
@@ -547,19 +569,25 @@ func (b *unicornBackend) RegWrite(r Reg, val uint64) error {
 	return nil
 }
 
-// ReadGPRegs is the RegFileReader capability (P7.5c): AArch64 engines dump
-// their native file order (x0..x30, sp, pc, nzcv); other archs answer
-// ErrUnsupported loudly instead of borrowing the AArch64 shape.
+// ReadGPRegs is the RegFileReader capability: AArch64 dumps x0..x30, sp, pc,
+// nzcv; ARM32 dumps r0..r12, sp, lr, pc, cpsr (P8, real-library validation);
+// AMD64 answers ErrUnsupported loudly instead of borrowing either shape.
 func (b *unicornBackend) ReadGPRegs() ([]uint64, error) {
-	if b.arch != ArchARM64 {
+	var ids []int32
+	switch b.arch {
+	case ArchARM64:
+		ids = gpRegIDs[:]
+	case ArchARM:
+		ids = arm32RegIDs[:]
+	default:
 		return nil, errNoGPRegs(b.arch)
 	}
-	out := make([]uint64, len(gpRegIDs))
-	var ptrs [len(gpRegIDs)]unsafe.Pointer
+	out := make([]uint64, len(ids))
+	var ptrs [34]unsafe.Pointer
 	for i := range out {
 		ptrs[i] = unsafe.Pointer(&out[i])
 	}
-	if e := pRegRdBat(b.uc, unsafe.Pointer(&gpRegIDs[0]), unsafe.Pointer(&ptrs[0]), int32(len(gpRegIDs))); e != ucOK {
+	if e := pRegRdBat(b.uc, unsafe.Pointer(&ids[0]), unsafe.Pointer(&ptrs[0]), int32(len(ids))); e != ucOK {
 		return out, ucErr("read_gpregs", e)
 	}
 	return out, nil

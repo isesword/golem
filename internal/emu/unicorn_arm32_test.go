@@ -176,3 +176,73 @@ func TestUnicornARM32TLS(t *testing.T) {
 		t.Fatalf("mrc read TPIDRURW = %#x, want %#x", got, tls)
 	}
 }
+
+// TestUnicornARM32ReadGPRegs pins the ARM32 RegFileReader dump (P8, exposed
+// by real-library validation): 17 entries in native file order
+// (r0..r12, sp, lr, pc, cpsr), each agreeing with the individually-read
+// register.
+func TestUnicornARM32ReadGPRegs(t *testing.T) {
+	be := newARM32(t)
+	rr, ok := be.(emu.RegFileReader)
+	if !ok {
+		t.Fatal("the ARM32 unicorn backend must implement RegFileReader")
+	}
+
+	check := func(reg emu.Reg, gpIdx int, val uint64) {
+		t.Helper()
+		if err := be.RegWrite(reg, val); err != nil {
+			t.Fatalf("RegWrite(%d): %v", reg, err)
+		}
+		if got, err := be.RegRead(reg); err != nil || got != val {
+			t.Fatalf("RegRead(%d) = %#x, %v; want %#x", reg, got, err, val)
+		}
+		gp, err := rr.ReadGPRegs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(gp) != 17 {
+			t.Fatalf("ReadGPRegs = %d entries, want 17 (r0..r12,sp,lr,pc,cpsr)", len(gp))
+		}
+		if gp[gpIdx] != val {
+			t.Fatalf("ReadGPRegs()[%d] = %#x after writing reg %d, want %#x", gpIdx, gp[gpIdx], reg, val)
+		}
+	}
+
+	check(arm32.R5, 5, 0x55555555)
+	check(arm32.R12, 12, 0x1212121212121212&0xffffffff)
+	check(arm32.SP, 13, 0x5ace00)
+	check(arm32.LR, 14, 0x1e1e1e1e)
+	check(arm32.PC, 15, 0x100000)
+
+	// CPSR's low 5 bits are the CPU mode field, engine-managed (SVC=0x13) —
+	// unicorn ORs them back on every read; compare above the mode bits.
+	if err := be.RegWrite(arm32.CPSR, 0x60000000); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := be.RegRead(arm32.CPSR); got&^0x1f != 0x60000000 {
+		t.Fatalf("CPSR readback = %#x, want flags 0x60000000 above the mode bits", got)
+	}
+	if gp, err := rr.ReadGPRegs(); err != nil || gp[16]&^0x1f != 0x60000000 {
+		t.Fatalf("ReadGPRegs()[16] = %#x, %v; want flags 0x60000000 above mode bits", gp[16], err)
+	}
+}
+
+// TestUnicornARM32VFPEnabled pins the P8 engine-creation CPACR write: an
+// ARMv7 engine must execute VFP (cp10) instructions out of the box — real
+// third-party libraries (Termux libsqlite3) use VLDR/NEON deep inside
+// ordinary call paths, and the reset state disables cp10/cp11.
+func TestUnicornARM32VFPEnabled(t *testing.T) {
+	be := newARM32(t)
+	// Thumb: vldr s0, [r0, #0]; movs r0, #0; bx lr
+	code := []byte{0x90, 0xed, 0x00, 0x0a, 0x00, 0x20, 0x70, 0x47}
+	base := arm32Scratch(t, be, code)
+	if err := be.RegWrite(arm32.R0, uint64(base)); err != nil {
+		t.Fatal(err)
+	}
+	if err := be.RegWrite(arm32.LR, arm32Sentinel); err != nil {
+		t.Fatal(err)
+	}
+	if err := be.Start(base|1, arm32Sentinel); err != nil {
+		t.Fatalf("VFP probe: %v (CPACR must enable cp10/cp11 at engine creation)", err)
+	}
+}

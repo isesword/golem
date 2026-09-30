@@ -22,8 +22,8 @@ import (
 // gzip/buffer if you like.
 
 // gpRegNames indexes the AArch64 register-file order the RegFileReader
-// capability dumps (x0..x30, sp, pc, nzcv) — tracing is AArch64-shaped today
-// (opcode decode included); other archs degrade to no trace below.
+// capability dumps (x0..x30, sp, pc, nzcv); gpRegNamesARM32 the ARM32 file
+// (r0..r12, sp, lr, pc, cpsr — P8, exposed by real-library validation).
 var gpRegNames = [34]string{
 	"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10",
 	"x11", "x12", "x13", "x14", "x15", "x16", "x17", "x18", "x19", "x20",
@@ -31,7 +31,10 @@ var gpRegNames = [34]string{
 	"sp", "pc", "nzcv",
 }
 
-const gpIdxPC = 32 // pc is carried in the line prefix, not repeated as a delta
+var gpRegNamesARM32 = [17]string{
+	"r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10",
+	"r11", "r12", "sp", "lr", "pc", "cpsr",
+}
 
 // TraceGate, when false, makes the instruction tracer skip every instruction
 // (so a caller can time-gate tracing to a window of interest, e.g. just the
@@ -55,6 +58,9 @@ type insnTracer struct {
 	prev    []uint64 // register file as of the previous traced instruction
 	started bool
 	buf     []byte // reusable line scratch
+	names   []string // register names indexed by file order (arch-shaped)
+	pcIdx   int      // file index of pc (carried in the line prefix, not as a delta)
+	arm64   bool     // AArch64-specific opcode annotations (BL/BLR/SVC decode)
 }
 
 // TraceInsns installs a full instruction tracer over [start, end) and writes the
@@ -64,6 +70,14 @@ type insnTracer struct {
 // code hooks (errors wrap emu.ErrUnsupported on engines without them).
 func (e *Emulator) TraceInsns(w io.Writer, start, end, base uint64) (func(), error) {
 	t := &insnTracer{e: e, w: bufio.NewWriterSize(w, 1<<20), base: base, buf: make([]byte, 0, 256)}
+	switch e.target.Arch.EngineArch() {
+	case emu.ArchARM64:
+		t.names, t.pcIdx, t.arm64 = gpRegNames[:], 32, true
+	case emu.ArchARM:
+		t.names, t.pcIdx = gpRegNamesARM32[:], 15
+	default:
+		return nil, fmt.Errorf("TraceInsns: no register-file model for arch %s: %w", e.target.Arch, emu.ErrUnsupported)
+	}
 	fmt.Fprintf(t.w, "# golem instruction trace  base=0x%x range=[0x%x,0x%x)\n", base, start, end)
 	ih, ok := e.be.(emu.InstructionHooker)
 	if !ok {
@@ -127,11 +141,11 @@ func (t *insnTracer) onInsn(pc uint64) {
 	t.buf = appendHex(t.buf, uint64(op), 8)
 	t.buf = append(t.buf, ' ')
 	for i := 0; i < len(regs); i++ {
-		if i == gpIdxPC {
+		if i == t.pcIdx {
 			continue // pc is the line prefix
 		}
 		if !t.started || regs[i] != t.prev[i] {
-			t.buf = append(t.buf, gpRegNames[i]...)
+			t.buf = append(t.buf, t.names[i]...)
 			t.buf = append(t.buf, '=', '0', 'x')
 			t.buf = appendHex(t.buf, regs[i], 16)
 			t.buf = append(t.buf, ',')
@@ -140,7 +154,9 @@ func (t *insnTracer) onInsn(pc uint64) {
 	t.buf = append(t.buf, '\n')
 	_, _ = t.w.Write(t.buf)
 
-	t.annotate(pc, op, regs)
+	if t.arm64 {
+		t.annotate(pc, op, regs)
+	}
 
 	if !t.started {
 		t.prev = make([]uint64, len(regs))

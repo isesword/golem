@@ -23,12 +23,18 @@ const (
 	ucModeThumb = 1 << 4 // UC_MODE_THUMB (uc_open mode; NOT how golem enters Thumb — see the header)
 
 	// UC_ARM_REG_* values used by the ARM32 mapping.
+	ucArmRegFPEXC  = 4 // VFP enable register — the switch THIS unicorn build gates VFP on (live-probed)
 	ucArmRegCPSR   = 3
 	ucArmRegLR     = 10
 	ucArmRegPC     = 11
 	ucArmRegSP     = 12
 	ucArmRegR0     = 66  // R0..R12 contiguous: 66..78
 	ucArmRegC13C03 = 113 // UC_ARM_REG_C13_C0_3 — TPIDRURW (deprecated upstream in favor of UC_ARM_REG_CP_REG; functional, verified live)
+	// ucArmRegC1C02 = UC_ARM_REG_C1_C0_2 (CPACR), 111 by the same machine
+	// derivation as C13_C0_3=113 (the three deprecated CP regs are
+	// consecutive members: C1_C0_2, C13_C0_2, C13_C0_3). Written at engine
+	// creation together with FPEXC.EN — see newUnicornBackend.
+	ucArmRegC1C02 = 111
 )
 
 // regMapARM32 translates an abstract emu.Reg to its UC_ARM_REG_* id. It keys
@@ -56,3 +62,18 @@ func regMapARM32(r Reg) int32 {
 		return ucRegInvalid
 	}
 }
+
+// arm32RegIDs is the ARM32 register file order for ReadGPRegs (P8, exposed by
+// real-library validation): r0..r12, sp, lr, pc, cpsr — 17 entries. Same
+// contract as the AArch64 file: native order, consumed with the arch
+// package's register model.
+var arm32RegIDs = func() (ids [17]int32) {
+	for i := 0; i <= 12; i++ {
+		ids[i] = ucArmRegR0 + int32(i)
+	}
+	ids[13] = ucArmRegSP
+	ids[14] = ucArmRegLR
+	ids[15] = ucArmRegPC
+	ids[16] = ucArmRegCPSR
+	return ids
+}()
