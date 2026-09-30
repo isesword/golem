@@ -9,17 +9,22 @@
 // (blank) from the composition root.
 //
 // REL, not RELA: 32-bit ARM dynamic objects carry DT_REL (SHT_REL), whose
-// entries have NO explicit addend — the addend is the 32-bit word already
-// stored at the relocation target in the file image. Every handled type is
-// therefore a READ-MODIFY-WRITE of one little-endian u32 (this is exactly
-// how the bionic linker relocates REL sections: it reads the addend from
-// *reloc before writing the result):
+// entries have NO explicit addend. The addend handling is PER TYPE (AAELF
+// Table 4-9, and bionic's linker agrees — verified against the real lld +
+// API-23 bionic behavior, P7):
 //
-//	R_ARM_RELATIVE (23):  *P = B + A          (A = stored word)
-//	R_ARM_ABS32    (2):   *P = S + A          (A = stored word)
-//	R_ARM_TARGET1  (38):  *P = S + A          (same as ABS32 on Linux)
-//	R_ARM_GLOB_DAT (21):  *P = S + A          (A = stored word, usually 0)
-//	R_ARM_JUMP_SLOT(22):  *P = S + A          (A = stored word, usually 0)
+//	R_ARM_RELATIVE (23):  *P = B + A   (A = stored word — a genuine addend)
+//	R_ARM_ABS32    (2):   *P = S + A   (A = stored word)
+//	R_ARM_TARGET1  (38):  *P = S + A   (same as ABS32 on Linux)
+//	R_ARM_GLOB_DAT (21):  *P = S       (the stored word is NOT an addend —
+//	                                   spec result is S; it is 0 in practice)
+//	R_ARM_JUMP_SLOT(22):  *P = S       (the stored word is NOT an addend —
+//	                                   lld fills every .got.plt slot with the
+//	                                   image-relative PLT trampoline address
+//	                                   for LAZY binding; the dynamic linker
+//	                                   overwrites it with S. Adding it is the
+//	                                   classic RELA-habit bug — P7 hit it for
+//	                                   real: every PLT call landed S+0x690.)
 //
 // (B = load bias, S = resolved symbol value, A = addend.) TLS relocations
 // (R_ARM_TLS_DTPMOD32/DTPOFF32/TPOFF32, 17/18/19) are deliberately NOT
@@ -46,10 +51,11 @@ type relocator struct{}
 // P3.5 SymbolResolver contract — the result is always a guest address, so a
 // host-interposed symbol is indistinguishable from a guest one here.
 //
-// The addend is read from the target's stored word (REL semantics); the
-// explicit r.Addend is ignored — REL entries carry none, and for RELR-
-// expanded RELATIVE entries the parser already recorded the same value the
-// target word holds, so reading memory is correct in both cases.
+// The addend is read from the target's stored word ONLY for the types whose
+// stored word IS an addend (RELATIVE, ABS32, TARGET1 — see the package doc);
+// GLOB_DAT/JUMP_SLOT overwrite with S (for RELR-expanded RELATIVE entries
+// the parser already recorded the same value the target word holds, so
+// reading memory is correct there).
 func (relocator) Apply(b emu.Backend, img *loader.Image, r loader.Reloc, base uint64, res loader.SymbolResolver) error {
 	target := base + r.Offset
 	switch debugelf.R_ARM(r.Type) {
@@ -62,8 +68,8 @@ func (relocator) Apply(b emu.Backend, img *loader.Image, r loader.Reloc, base ui
 		if err := put32(b, target, base+uint64(a)); err != nil {
 			return err
 		}
-	case debugelf.R_ARM_GLOB_DAT, debugelf.R_ARM_JUMP_SLOT,
-		debugelf.R_ARM_ABS32, debugelf.R_ARM_TARGET1:
+	case debugelf.R_ARM_ABS32, debugelf.R_ARM_TARGET1:
+		// S + A: the stored word is a genuine addend.
 		val, err := img.SymValue(r.Sym, base, res)
 		if err != nil {
 			return err
@@ -73,6 +79,16 @@ func (relocator) Apply(b emu.Backend, img *loader.Image, r loader.Reloc, base ui
 			return err
 		}
 		if err := put32(b, target, val+uint64(a)); err != nil {
+			return err
+		}
+	case debugelf.R_ARM_GLOB_DAT, debugelf.R_ARM_JUMP_SLOT:
+		// S only: the stored word is 0 (GLOB_DAT) or the lazy PLT trampoline
+		// address (JUMP_SLOT) — never an addend (see the package doc).
+		val, err := img.SymValue(r.Sym, base, res)
+		if err != nil {
+			return err
+		}
+		if err := put32(b, target, val); err != nil {
 			return err
 		}
 	case debugelf.R_ARM_TLS_DTPMOD32, debugelf.R_ARM_TLS_DTPOFF32, debugelf.R_ARM_TLS_TPOFF32,

@@ -82,43 +82,65 @@ func TestRelRelativeReadModifyWrite(t *testing.T) {
 	}
 }
 
-// TestRelSymTypes pins S + A for the symbol types, both for a defined symbol
-// (base + st_value) and an import (resolver's guest address).
+// TestRelSymTypes pins the per-type addend rules (AAELF Table 4-9 + the
+// lld/bionic behavior P7 verified live): ABS32/TARGET1 add the stored word
+// (a genuine addend); GLOB_DAT/JUMP_SLOT write S and IGNORE the stored
+// word — JUMP_SLOT's stored word is lld's lazy PLT trampoline address,
+// never an addend.
 func TestRelSymTypes(t *testing.T) {
-	types := []struct {
-		name string
-		code debugelf.R_ARM
-	}{
-		{"GLOB_DAT", debugelf.R_ARM_GLOB_DAT},
-		{"JUMP_SLOT", debugelf.R_ARM_JUMP_SLOT},
-		{"ABS32", debugelf.R_ARM_ABS32},
-		{"TARGET1", debugelf.R_ARM_TARGET1},
-	}
-	for _, tc := range types {
-		t.Run(tc.name+"/defined", func(t *testing.T) {
+	t.Run("ABS32 and TARGET1 add the stored word", func(t *testing.T) {
+		for _, code := range []debugelf.R_ARM{debugelf.R_ARM_ABS32, debugelf.R_ARM_TARGET1} {
 			be := newMemBE()
-			be.put32(base+0x500, 0x10) // implicit addend
+			be.put32(base+0x500, 0x10) // genuine implicit addend
 			rc := relocator{}
-			if err := rc.Apply(be, definedImg(), loader.Reloc{Offset: 0x500, Type: uint32(tc.code), Sym: 1}, base, nil); err != nil {
+			if err := rc.Apply(be, definedImg(), loader.Reloc{Offset: 0x500, Type: uint32(code), Sym: 1}, base, nil); err != nil {
 				t.Fatal(err)
 			}
 			// S = base + 0x2000, A = 0x10.
 			if got, want := be.u32(base+0x500), uint32(base+0x2000+0x10); got != want {
-				t.Fatalf("%s wrote %#x, want %#x (S + stored word)", tc.name, got, want)
+				t.Fatalf("%s wrote %#x, want %#x (S + stored word)", code, got, want)
 			}
-		})
-		t.Run(tc.name+"/import", func(t *testing.T) {
+		}
+	})
+	t.Run("GLOB_DAT ignores the stored word", func(t *testing.T) {
+		be := newMemBE()
+		be.put32(base+0x500, 0x10) // 0 in practice; must NOT be added either way
+		rc := relocator{}
+		if err := rc.Apply(be, definedImg(), loader.Reloc{Offset: 0x500, Type: uint32(debugelf.R_ARM_GLOB_DAT), Sym: 1}, base, nil); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := be.u32(base+0x500), uint32(base+0x2000); got != want {
+			t.Fatalf("GLOB_DAT wrote %#x, want %#x (S only)", got, want)
+		}
+	})
+	t.Run("JUMP_SLOT overwrites the lazy PLT trampoline", func(t *testing.T) {
+		// The real-world P7 case: lld fills every .got.plt slot with the
+		// image-relative PLT address (0x690 in the NDK fixture) for lazy
+		// binding — adding it lands every PLT call at S+0x690.
+		be := newMemBE()
+		be.put32(base+0x500, 0x690)
+		rc := relocator{}
+		if err := rc.Apply(be, definedImg(), loader.Reloc{Offset: 0x500, Type: uint32(debugelf.R_ARM_JUMP_SLOT), Sym: 2}, base, fakeResolver{addr: 0x60001000}); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := be.u32(base+0x500), uint32(0x60001000); got != want {
+			t.Fatalf("JUMP_SLOT wrote %#x, want %#x (resolver address, trampoline ignored)", got, want)
+		}
+	})
+	t.Run("imports resolve through the resolver", func(t *testing.T) {
+		for _, code := range []debugelf.R_ARM{debugelf.R_ARM_GLOB_DAT, debugelf.R_ARM_JUMP_SLOT,
+			debugelf.R_ARM_ABS32, debugelf.R_ARM_TARGET1} {
 			be := newMemBE()
-			be.put32(base+0x500, 0) // JUMP_SLOT/GLOB_DAT slots usually store 0
+			be.put32(base+0x500, 0)
 			rc := relocator{}
-			if err := rc.Apply(be, definedImg(), loader.Reloc{Offset: 0x500, Type: uint32(tc.code), Sym: 2}, base, fakeResolver{addr: 0x60001000}); err != nil {
+			if err := rc.Apply(be, definedImg(), loader.Reloc{Offset: 0x500, Type: uint32(code), Sym: 2}, base, fakeResolver{addr: 0x60001000}); err != nil {
 				t.Fatal(err)
 			}
 			if got, want := be.u32(base+0x500), uint32(0x60001000); got != want {
-				t.Fatalf("%s wrote %#x, want %#x (resolver address)", tc.name, got, want)
+				t.Fatalf("%s wrote %#x, want %#x (resolver address)", code, got, want)
 			}
-		})
-	}
+		}
+	})
 }
 
 // TestRelUnresolvedImportErrors: an undef symbol with no resolver must error
