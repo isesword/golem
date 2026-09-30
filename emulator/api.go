@@ -215,8 +215,9 @@ func (e *Emulator) ReadCString(addr uint64) (string, error) { return e.ReadCStr(
 // reach the emulator for memory access; the callback's return value becomes the
 // call's result (written back per the target's CallABI).
 type Hook struct {
-	e    *Emulator
-	kind HookKind // where this hook fires — gates the P9 entry-scoped answers
+	e        *Emulator
+	kind     HookKind // where this hook fires — gates the P9 entry-scoped answers
+	wrapArgs []uint64 // exit context (P10 wrap): the entry args captured at entry
 }
 
 // Emu returns the emulator, for memory access inside a Replace callback.
@@ -226,11 +227,22 @@ func (h *Hook) Emu() *Emulator { return h.e }
 // machine-word Value (Portable API, P9): read through the CallABI (register
 // portion first, then the stack spill area — the entry-state contract).
 //
-// Valid ONLY at function-entry hooks (ReplaceFns / ReplaceE / HookSymbol):
-// there the ABI defines what "argument i" is. At an instruction hook the
-// "argument registers" are just registers — answering would be a guess, so
-// it fails with ErrContextUnavailable (use Reg/RegRead for raw observation).
+// Valid at function-entry hooks (ReplaceFns / ReplaceE / HookSymbol):
+// there the ABI defines what "argument i" is. Also valid at a WrapSymbol
+// post (function-exit) hook, which replays the entry args CAPTURED at the
+// wrap entry stub — by exit time the registers hold the result state, so
+// only the captured words exist and deeper indices degrade honestly.
+// At an instruction hook the "argument registers" are just registers —
+// answering would be a guess, so it fails with ErrContextUnavailable (use
+// Reg/RegRead for raw observation).
 func (h *Hook) Arg(i int) (Value, error) {
+	if h.kind == HookFunctionExit {
+		// P10 wrap exit: the entry state lives only in the captured frame.
+		if i < 0 || i >= len(h.wrapArgs) {
+			return Value{}, fmt.Errorf("Arg(%d) at wrap exit: only %d argument(s) captured: %w", i, len(h.wrapArgs), ErrContextUnavailable)
+		}
+		return Value{Kind: Word, Raw: h.wrapArgs[i]}, nil
+	}
 	if h.kind != HookFunctionEntry {
 		return Value{}, fmt.Errorf("Arg(%d) at a %s hook — arguments are only defined at function entry: %w", i, h.kind, ErrContextUnavailable)
 	}
@@ -249,9 +261,10 @@ func (h *Hook) Arg(i int) (Value, error) {
 
 // ReturnValue returns the value the in-flight call is RETURNING (Portable
 // API, P9). Only well-defined where the call has already PRODUCED its
-// result — a function-EXIT context. golem installs no exit hooks yet
-// (HookFunctionExit is reserved), so every context answerable today fails
-// with ErrContextUnavailable rather than reading pre-call register junk.
+// result — a function-EXIT context. Today that is exactly the WrapSymbol
+// post continuation (P10): it reads the ORIGINAL's live result before the
+// callback may replace it. Every other exit-shaped context fails with
+// ErrContextUnavailable rather than reading pre-call register junk.
 func (h *Hook) ReturnValue() (Value, error) {
 	if h.kind != HookFunctionExit {
 		return Value{}, fmt.Errorf("ReturnValue at a %s hook — the result only exists at function exit: %w", h.kind, ErrContextUnavailable)

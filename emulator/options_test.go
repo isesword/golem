@@ -222,10 +222,12 @@ func (fakeCallABI) PrepareCall(emu.Backend, arch.CallRequest) error { return nil
 func (fakeCallABI) ReadArgs(emu.Backend, int) ([]uint64, error) {
 	return nil, nil
 }
-func (fakeCallABI) WriteResult(emu.Backend, arch.CallResult) error       { return nil }
-func (fakeCallABI) ReadResult(emu.Backend) (arch.CallResult, error)      { return arch.CallResult{}, nil }
-func (fakeCallABI) ReturnFromCall(emu.Backend) error                     { return nil }
-func (fakeCallABI) ReadReturnAddress(emu.Backend) (emu.GuestAddr, error) { return 0, nil }
+func (fakeCallABI) WriteResult(emu.Backend, arch.CallResult) error             { return nil }
+func (fakeCallABI) ReadResult(emu.Backend) (arch.CallResult, error)            { return arch.CallResult{}, nil }
+func (fakeCallABI) ReturnFromCall(emu.Backend) error                           { return nil }
+func (fakeCallABI) ReadReturnAddress(emu.Backend) (emu.GuestAddr, error)       { return 0, nil }
+func (fakeCallABI) InstallReturnContinuation(emu.Backend, emu.GuestAddr) error { return nil }
+func (fakeCallABI) ReturnTo(emu.Backend, emu.GuestAddr) error                  { return nil }
 
 type fakeStubEnc struct{}
 
