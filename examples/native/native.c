@@ -102,6 +102,12 @@ int nest(const char *s) {
 
 // Self-recursion THROUGH the binding: every recursive call re-enters the wrap
 // entry stub, so depth-n recursion pushes n wrap frames. fact(5) plain = 120.
+// The volatile pointers are a LOAD-BEARING TEST CONTRACT, not a style choice:
+// they keep these references preemptible (data relocations naming the symbol),
+// so every recursive/nesting edge passes the binding site. -O2 folds a plain
+// local pointer into a direct call — no reloc, nothing to wrap (seen live).
+// A compiler/linker upgrade that changes this shape must fail the fixture
+// contract test (TestWrapFixtureBindings), not silently weaken the wrap tests.
 long fact(long n) {
     if (n <= 1) return 1;
     long (*volatile p)(long) = fact;

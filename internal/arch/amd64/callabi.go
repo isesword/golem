@@ -223,14 +223,16 @@ func (sysV64) ReadReturnAddress(b emu.Backend) (emu.GuestAddr, error) {
 	return emu.GuestAddr(binary.LittleEndian.Uint64(raw)), nil
 }
 
-// InstallReturnContinuation (P10): re-aims the in-flight call's return at
-// the post continuation — SysV keeps the return address ON THE STACK (the
-// caller's `call` pushed it at [RSP]), so the slot is OVERWRITTEN IN PLACE:
-// [RSP] ← post, RSP untouched. The original's `ret` then pops post with the
-// stack exactly back at the caller's state — the post continuation resumes
-// the caller with a plain RIP write, no pop. (A push here would leak 8 bytes
-// per wrap: the original's `ret` consumes the pushed post, but the real
-// return stays stranded below the caller's SP — found live, P10-2d.)
+// InstallReturnContinuation (P10): REPLACES the existing return
+// continuation of the in-flight call — SysV keeps the return address ON
+// THE STACK (the caller's `call` pushed it at [RSP]), so the slot is
+// OVERWRITTEN IN PLACE: [RSP] ← post, RSP untouched. The original's `ret`
+// then pops post with the stack exactly back at the caller's state — the
+// post continuation resumes the caller with a plain RIP write, no pop.
+// (This method replaces an existing continuation; constructing a NEW call
+// frame — a legitimate push on this ABI — is PrepareCall's job alone.
+// A push here strands the real return below the caller's SP: found live,
+// P10-2d.)
 func (sysV64) InstallReturnContinuation(b emu.Backend, post emu.GuestAddr) error {
 	sp, err := b.RegRead(RSP)
 	if err != nil {

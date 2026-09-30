@@ -72,7 +72,11 @@ long nest(long x) {
 }
 
 // Same recursion-through-the-binding probe as the ARM64 fixture: each level
-// re-enters the wrap entry stub. fact(5) plain = 120.
+// re-enters the wrap entry stub. fact(5) plain = 120. The volatile pointers
+// are a LOAD-BEARING TEST CONTRACT: they keep these references preemptible
+// (data relocations naming the symbol) so the edges pass the binding site —
+// -O2 folds plain local pointers into direct calls, emitting no reloc (seen
+// live). Shape changes must fail TestWrapFixtureBindings, not the wrap tests.
 long fact(long n) {
     if (n <= 1) return 1;
     long (*volatile p)(long) = fact;

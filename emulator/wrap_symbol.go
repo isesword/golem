@@ -25,6 +25,30 @@ package emulator
 // original). Guest-internal direct branches to the function body do not
 // pass through any binding and are NOT wrapped — WrapSymbol reports that
 // honestly (no resolvable binding → error) instead of pretending.
+//
+// v1 limitations, stated so they can never harden into invisible assumptions:
+//
+//   - Binding discovery is RELOCATION-BACKED SCANNING: walk relocations
+//     naming the symbol, keep slots whose current value equals the raw
+//     symbol address (raw, never normalized — Thumb bit0 and other
+//     guest-visible pointer bits must survive storage; normalization is
+//     for identity checks only). Deliberately not the final abstraction:
+//     slot values don't uniquely identify a binding once lazy PLTs,
+//     addends, aliases, weak/preempted symbols, IFUNCs or Mach-O
+//     chained fixups exist. Long-term shape: the loader records a
+//     BindingSite index at bind time and WrapSymbol rebinds sites through
+//     it — the scan is the v1 stopgap, not the architecture.
+//   - The frame stack is EXECUTION-CONTEXT scoped: golem runs a single
+//     guest execution context, so one []WrapFrame per wrapped symbol is
+//     correct today. Concurrent guest threads sharing a wrap are NOT
+//     supported — per-context frames are the prerequisite for that.
+//   - Rebinding writes through HOST-side memory access: guest page
+//     protection is not consulted (unicorn host-write semantics — the
+//     known backend leak, P7 debt). Safe today only because golem's
+//     loader applies ELF segment protections but NOT GNU_RELRO, so
+//     binding slots are writable by segment contract. When RELRO lands,
+//     the permission exception must move into a loader-owned Rebind
+//     path — never a global host-write backdoor.
 
 import (
 	"errors"
@@ -33,6 +57,11 @@ import (
 	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/emu"
 )
+
+// ErrAlreadyWrapped: WrapSymbol refuses a symbol that already has a live
+// wrap (v1 pins this — no implicit chaining; a future binding stack is the
+// feature that would relax it).
+var ErrAlreadyWrapped = errors.New("already wrapped")
 
 type wrapStubKind uint8
 
@@ -93,7 +122,7 @@ func (e *Emulator) WrapSymbol(name string, post func(h *Hook) uint64) (stop func
 		return nil, fmt.Errorf("WrapSymbol: symbol %q not found in any loaded module", name)
 	}
 	if _, dup := e.wraps[name]; dup {
-		return nil, fmt.Errorf("WrapSymbol %q: already wrapped", name)
+		return nil, fmt.Errorf("WrapSymbol %q: %w", name, ErrAlreadyWrapped)
 	}
 	if e.wrapStubs == nil {
 		e.wrapStubs = map[string]*wrapRuntime{}

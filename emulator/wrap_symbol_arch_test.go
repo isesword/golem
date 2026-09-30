@@ -235,4 +235,19 @@ func TestWrapSymbolARM32Binding(t *testing.T) {
 	if got, _ := e.CallSymbol("fact", Words(5)...); got != 120 {
 		t.Fatalf("unwrapped fact(5) = %d, want 120", got)
 	}
+
+	// Thumb bit0 survival, pinned by round-trip: stop() must restore the
+	// RAW guest pointer (bit0 set for Thumb), never a normalized one. If
+	// restoration normalized the address, this re-wrap's raw-equality scan
+	// would find no binding and refuse — the success IS the assertion.
+	// (Normalization is fine for identity checks; storage keeps raw
+	// pointers — the same principle ARM64e PAC will demand.)
+	stop2, err := e.WrapSymbol("add", func(h *Hook) uint64 {
+		r, _ := h.ReturnValue()
+		return r.Raw
+	})
+	if err != nil {
+		t.Fatalf("re-wrap after stop: %v — binding slot was not restored to its raw (bit0-preserving) value", err)
+	}
+	stop2()
 }

@@ -152,15 +152,20 @@ type CallABI interface {
 	// hook kind and reports ErrContextUnavailable where it does not.
 	ReadReturnAddress(b emu.Backend) (emu.GuestAddr, error)
 
-	// InstallReturnContinuation re-aims the IN-FLIGHT call's return at
-	// `post` (P10 wrap continuation, ABI observation+control semantics):
+	// InstallReturnContinuation REPLACES the existing return continuation
+	// of the IN-FLIGHT call (P10 wrap continuation, ABI observation+control
+	// semantics). Frame-construction contract: PrepareCall BUILDS a call
+	// frame; this method must NOT create one — it only rewrites where the
+	// already-entered frame's existing return lands:
 	//
 	//	ARM64:       LR ← post
 	//	ARM32:       LR ← post (bit0 may set the continuation's ISA state)
 	//	AMD64 SysV:  [RSP] ← post in place — the caller's `call` pushed the
 	//	             return address there; the original's `ret` pops post with
-	//	             the stack back at the caller's exact state (never push:
-	//	             that strands the real return below the caller's SP)
+	//	             the stack back at the caller's exact state. (Pushing here
+	//	             would strand the real return below the caller's SP — the
+	//	             push that IS legitimate on this ABI belongs to
+	//	             PrepareCall, which constructs the frame.)
 	//
 	// Valid in the ENTRY state, immediately before the original function
 	// runs: the original's return then lands on the wrap's post
