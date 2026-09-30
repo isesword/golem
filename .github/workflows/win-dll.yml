@@ -82,7 +82,7 @@ jobs:
             -A ${{ matrix.cmake_arch }} `
             -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.cmake_arch }} `
             -DWIN32_ENABLE_VEH=OFF `
-            -DUNICORN_ARCH="aarch64" `
+            -DUNICORN_ARCH="arm;aarch64;x86" `
             -DCMAKE_BUILD_TYPE=Release
           echo "=== configure result: MSVC_TARGET_ARCH / processor ==="
           Select-String -Path unicorn-src/CMakeLists.txt -Pattern "CMAKE_SYSTEM_PROCESSOR" | Select-Object -First 2
@@ -97,7 +97,7 @@ jobs:
           $prov = @(
             "unicorn commit : $(git -C unicorn-src rev-parse HEAD) [golem/win-veh-off]",
             "target arch    : ${{ matrix.arch }}",
-            "cmake          : -A ${{ matrix.cmake_arch }} -DWIN32_ENABLE_VEH=OFF -DUNICORN_ARCH=aarch64 -DCMAKE_BUILD_TYPE=Release",
+            "cmake          : -A ${{ matrix.cmake_arch }} -DWIN32_ENABLE_VEH=OFF -DUNICORN_ARCH=arm;aarch64;x86 -DCMAKE_BUILD_TYPE=Release",
             "built           : $(Get-Date -AsUTC -Format 'yyyy-MM-ddTHH:mm:ssZ')"
           )
           $prov | Out-File -Encoding ascii PROVENANCE-${{ matrix.arch }}.txt
