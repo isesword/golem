@@ -700,7 +700,28 @@ func trampFor(htype int32) uintptr {
 	}
 }
 
+// HookCode registers a code hook over [start, end].
+//
+// P10 range normalization: unicorn2 quantizes hook range ENDS down to the
+// target's instruction size, so [addr, addr] collapses to an EMPTY range on
+// aarch64 (end addr+1 aligns back to addr) and never fires — while firing
+// fine on x86_64 (1-byte granularity). This backend adapter normalizes a
+// single-address hook to at least one instruction slot per target, so the
+// PUBLIC semantic ("fire at this address") holds everywhere:
+//
+//	ARM64: end ← addr+4 (fixed 4-byte encoding)
+//	ARM (P6b): end ← addr+4 (ARM state; a Thumb entry may co-fire the
+//	           following 2-byte instruction — documented, tolerated)
+//	AMD64: end ← addr+1 (1-byte granularity)
 func (b *unicornBackend) HookCode(start, end GuestAddr, fn CodeHookFunc) (HookHandle, error) {
+	if start == end {
+		switch b.arch {
+		case ArchARM64, ArchARM:
+			end = start + 4
+		case ArchAMD64:
+			end = start + 1
+		}
+	}
 	return b.addHook(hkCode, start, end, &hookReg{be: b, code: fn})
 }
 
