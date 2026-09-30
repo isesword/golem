@@ -24,6 +24,14 @@ import (
 // BrkBase is the guest program-break heap origin (clear of modules/mmap arena).
 const BrkBase = 0x30000000
 
+// MaxGuestIO bounds every guest-supplied byte count that would become a
+// HOST allocation or copy (getrandom fill, writable-fd write capture, JNI
+// byte arrays). 64 MiB is far above any legitimate bionic/JNI traffic and
+// far below OOM territory. Policy (P7.6): a guest length never converts
+// directly into a host allocation size — over-cap requests fail loudly
+// (errno / JNI NULL / pending exception) instead of allocating.
+const MaxGuestIO = 64 << 20
+
 // Errno is a semantic syscall error, carried in Result.Errno (0 = success).
 // It is deliberately NOT a wire encoding: how an Errno reaches the guest
 // (Linux: x0 = -errno; Darwin: x0 = +errno + carry flag) is the transport's
@@ -421,6 +429,9 @@ func SysWrite(c *Context, f *SyscallFrame) Result {
 	fd, buf, n := a[0], a[1], a[2]
 	// writable file fd -> store into the overlay
 	if f := c.fdTable()[int32(fd)]; f != nil && f.writable {
+		if n > MaxGuestIO {
+			return Result{Errno: EINVAL} // P7.6: a guest count never sizes a host alloc
+		}
 		d, err := c.B.MemRead(emu.GuestAddr(buf), n)
 		if err != nil {
 			return Result{Errno: EBADF}
@@ -829,6 +840,9 @@ func SysGettimeofday(c *Context, f *SyscallFrame) Result {
 func SysGetrandom(c *Context, f *SyscallFrame) Result {
 	a := f.Args
 	n := a[1]
+	if n > MaxGuestIO {
+		return Result{Errno: EINVAL} // P7.6: a guest count never sizes a host alloc
+	}
 	buf := make([]byte, n)
 	if c.TrueRandom {
 		if _, err := crand.Read(buf); err != nil {

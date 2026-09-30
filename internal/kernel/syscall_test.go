@@ -534,6 +534,36 @@ func TestLseek(t *testing.T) {
 	}
 }
 
+// TestGuestLengthCaps pins the P7.6 policy: a guest-supplied byte count
+// never converts directly into a host allocation. Over-cap requests fail
+// loudly with an errno — without the guard, getrandom(MaxGuestIO+1) would
+// make() a 64 MiB host buffer from one guest register.
+func TestGuestLengthCaps(t *testing.T) {
+	k := newKernelCtxt(t)
+
+	// getrandom: over-cap refuses without allocating; the in-cap path still
+	// fills (boundary: n == MaxGuestIO passes, +1 refuses).
+	if got := k.call(nrGetrandom, scratch, MaxGuestIO+1); got != -int64(EINVAL) {
+		t.Errorf("getrandom(MaxGuestIO+1) = %d, want -EINVAL", got)
+	}
+	if got := k.call(nrGetrandom, scratch, 64); got != 64 {
+		t.Errorf("getrandom(64) = %d, want 64", got)
+	}
+
+	// write capture on a writable overlay fd: same guard, same errno.
+	const wpath = "/data/local/out.cap"
+	fd := k.call(nrOpenat, 0, k.putStr(scratch+0x800, wpath), oWRONLY|oCREAT)
+	if fd != 100 {
+		t.Fatalf("writable openat fd = %d, want 100", fd)
+	}
+	if got := k.call(nrWrite, uint64(fd), scratch, MaxGuestIO+1); got != -int64(EINVAL) {
+		t.Errorf("write(MaxGuestIO+1) = %d, want -EINVAL", got)
+	}
+	if got := k.call(nrWrite, uint64(fd), scratch, 2); got != 2 {
+		t.Errorf("write(2) = %d, want 2", got)
+	}
+}
+
 func TestWritableOverlay(t *testing.T) {
 	k := newKernelCtxt(t)
 	const wpath = "/data/local/out.bin"

@@ -171,9 +171,9 @@ func TestChainedWalkRebaseBind(t *testing.T) {
 		t.Fatalf("relocs = %v, want exactly 3", rels)
 	}
 	// Walk order is chain order.
-	wantRebase1 := loader.Reloc{Offset: 0x4010, Type: RelocRebasePointer, Addend: 0x1234 | 0x5<<43}
+	wantRebase1 := loader.Reloc{Offset: 0x4010, Type: RelocRebasePointer, Addend: 0x1234 | 0x5<<56}
 	if rels[0] != wantRebase1 {
-		t.Errorf("relocs[0] = %+v, want %+v (target43 | high8<<43)", rels[0], wantRebase1)
+		t.Errorf("relocs[0] = %+v, want %+v (target43 | high8<<56 — raw bits 43-50 land at pointer 56-63)", rels[0], wantRebase1)
 	}
 	wantBind := loader.Reloc{Offset: 0x4018, Type: RelocBindPointer, Sym: 1, Addend: -8}
 	if rels[1] != wantBind {
@@ -185,10 +185,40 @@ func TestChainedWalkRebaseBind(t *testing.T) {
 	}
 }
 
+// TestARM64ERebaseHigh8BitPlacement pins the P7.6 bit-placement fix: the
+// high8 field occupies bits 43-50 of the RAW chain entry but reconstructs
+// at bits 56-63 of the pointer (dyld/Loader.cpp shifts value<<13; mach_o
+// ChainedFixups writes high8<<56). high8=0 must stay a pure pass-through.
+func TestARM64ERebaseHigh8BitPlacement(t *testing.T) {
+	raw, off, size, segs := (&chainedSynth{
+		pageStarts: []uint16{0},
+		entries: map[uint64]uint64{
+			0x4000: chainedRebaseEntry(0x7ffffffffff, 0xff, 1), // max target43 + max high8
+			0x4008: chainedRebaseEntry(0x1234, 0, 0),           // high8=0: plain pass-through
+		},
+	}).build()
+	rels, err := parseChainedFixups(raw, off, size, segs, synthImg())
+	if err != nil {
+		t.Fatalf("parseChainedFixups: %v", err)
+	}
+	if len(rels) != 2 {
+		t.Fatalf("relocs = %d entries, want 2", len(rels))
+	}
+	wantHigh := uint64(0xff)<<56 | 0x7ffffffffff
+	if rels[0].Addend != int64(wantHigh) {
+		t.Errorf("high8 rebase addend = %#x, want %#x (high8 at bits 56-63)", rels[0].Addend, wantHigh)
+	}
+	if rels[0].Addend == int64(uint64(0xff)<<43|0x7ffffffffff) {
+		t.Error("high8 reconstructed at bit 43 — the pre-P7.6 wrong placement")
+	}
+	if rels[1].Addend != 0x1234 {
+		t.Errorf("high8=0 rebase addend = %#x, want plain 0x1234", rels[1].Addend)
+	}
+}
+
 // TestChainedBindAddendSignExtension pins the 19-bit signed addend edges:
 // +0x3FFFF (max) and -0x40000 (min).
-func TestChainedBindAddendSignExtension(t *testing.T) {
-	raw, off, size, segs := (&chainedSynth{
+func TestChainedBindAddendSignExtension(t *testing.T) {	raw, off, size, segs := (&chainedSynth{
 		pageStarts: []uint16{0},
 		imports:    []string{"host_magic"},
 		entries: map[uint64]uint64{

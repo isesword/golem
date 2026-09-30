@@ -331,10 +331,15 @@ func decodeChainedEntryARM64E(v, slotVA uint64, imports []string, symIdx map[str
 	auth := v>>63&1 != 0
 	switch {
 	case !bind && !auth:
-		// dyld_chained_ptr_arm64e_rebase: target:43 | high8:8 << 43 — the
-		// unrelocated vmaddr; the relocator adds the load bias, exactly the
-		// classic REBASE_TYPE_POINTER contract.
-		target := v&0x7ffffffffff | (v>>43&0xff)<<43
+		// dyld_chained_ptr_arm64e_rebase: target:43 | high8:8. The high8
+		// field occupies bits 43-50 of the RAW ENTRY but reconstructs at
+		// bits 56-63 of the pointer — dyld shifts value<<13 into the high
+		// byte (Loader.cpp fixupPageAuth64), mach_o writes high8<<56
+		// (ChainedFixups.cpp). The value is the unrelocated vmaddr; the
+		// relocator adds the load bias, exactly the classic
+		// REBASE_TYPE_POINTER contract. (P7.6: reconstruction used to land
+		// high8 at bit 43 — silent wrong pointers whenever high8 != 0.)
+		target := v&0x7ffffffffff | (v>>43&0xff)<<56
 		return &loader.Reloc{Offset: slotVA, Type: RelocRebasePointer, Addend: int64(target)}, next, nil
 	case bind && !auth:
 		// dyld_chained_ptr_arm64e_bind: ordinal:16, addend:19 SIGNED

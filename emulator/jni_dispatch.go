@@ -8,6 +8,7 @@ import (
 	"github.com/isesword/golem/dvm"
 	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/emu"
+	"github.com/isesword/golem/internal/kernel"
 )
 
 func le64(b []byte) uint64 { return binary.LittleEndian.Uint64(b) }
@@ -405,7 +406,14 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 			}
 		}
 	case jniNewByteArray:
-		ret = uint64(dvm.NewByteArray(e.vm, make([]byte, e.jarg(b, 1))))
+		// P7.6: a guest-supplied length never sizes a host allocation —
+		// over-cap refuses with JNI NULL (the JNI contract's own failure
+		// answer for NewByteArray), never a giant make().
+		if ln := e.jarg(b, 1); ln > kernel.MaxGuestIO {
+			ret = 0
+		} else {
+			ret = uint64(dvm.NewByteArray(e.vm, make([]byte, ln)))
+		}
 	case jniGetByteArrayElements: // (jarray, jboolean* isCopy) -> jbyte*
 		data := e.gbytes(e.jarg(b, 1))
 		p := e.WriteScratch(data)
@@ -429,15 +437,26 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 	case jniGetByteArrayRegion: // (jarray, start, len, buf)
 		data := e.gbytes(e.jarg(b, 1))
 		start, ln, buf := e.jarg(b, 2), e.jarg(b, 3), e.jarg(b, 4)
-		if int(start+ln) <= len(data) {
-			_ = e.be.MemWrite(emu.GuestAddr(buf), data[start:start+ln])
+		// P7.6: uint64-safe bounds — the old int(start+ln) WRAPPED for huge
+		// guest values (2^63+2^63 → 0) and sliced out of range. Out of
+		// range = pending exception, like ART's
+		// ArrayIndexOutOfBoundsException — never a silent skip.
+		if start > uint64(len(data)) || ln > uint64(len(data))-start {
+			e.pendingExc = true
+			break
 		}
+		_ = e.be.MemWrite(emu.GuestAddr(buf), data[start:start+ln])
 	case jniSetByteArrayRegion: // (jarray, start, len, buf)
 		o := e.vm.Deref(dvm.Ref(int32(e.jarg(b, 1))))
 		start, ln, buf := e.jarg(b, 2), e.jarg(b, 3), e.jarg(b, 4)
 		if o != nil {
-			if bs, ok := o.Value.([]byte); ok && int(start+ln) <= len(bs) {
-				if d, err := e.be.MemRead(emu.GuestAddr(buf), ln); err == nil {
+			if bs, ok := o.Value.([]byte); ok {
+				// P7.6: uint64-safe bounds (same wrap as Get); the guard
+				// also bounds the MemRead host allocation below, since ln
+				// is guest-controlled and bs is already ≤ MaxGuestIO.
+				if start > uint64(len(bs)) || ln > uint64(len(bs))-start {
+					e.pendingExc = true
+				} else if d, err := e.be.MemRead(emu.GuestAddr(buf), ln); err == nil {
 					copy(bs[start:], d)
 				}
 			}
