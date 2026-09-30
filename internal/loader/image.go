@@ -31,8 +31,13 @@ type Segment struct {
 
 // Reloc is one dynamic relocation entry, format-agnostic: Type is the raw
 // format-and-arch-specific relocation code (ELF: r_info&0xffffffff, i.e.
-// elf.R_AARCH64_* / elf.R_X86_64_* values) and is interpreted only by the
-// Relocator registered for the image's (Format, Arch).
+// elf.R_AARCH64_* / elf.R_X86_64_* / elf.R_ARM_* values) and is interpreted
+// only by the Relocator registered for the image's (Format, Arch).
+//
+// Addend note: ELF RELA entries carry an explicit addend; ELF REL entries
+// (32-bit targets, e.g. ARM32's DT_REL) do NOT — the parser stores Addend 0
+// and the Relocator reads the addend from the word already stored at the
+// relocation target (read-modify-write semantics).
 type Reloc struct {
 	Offset uint64 // where to patch (image-relative)
 	Type   uint32 // raw format-specific relocation type code

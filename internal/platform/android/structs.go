@@ -39,10 +39,10 @@ func (c AsmGenericLP64Codecs) EncodeStat(dst []byte, s kernel.Stat) error {
 	for i := range dst[:c.StatSize()] {
 		dst[i] = 0
 	}
-	binary.LittleEndian.PutUint32(dst[16:], s.Mode)              // st_mode
-	binary.LittleEndian.PutUint64(dst[48:], s.Size)              // st_size
-	binary.LittleEndian.PutUint32(dst[56:], 0x1000)              // st_blksize
-	binary.LittleEndian.PutUint64(dst[64:], (s.Size+511)/512)    // st_blocks
+	binary.LittleEndian.PutUint32(dst[16:], s.Mode)           // st_mode
+	binary.LittleEndian.PutUint64(dst[48:], s.Size)           // st_size
+	binary.LittleEndian.PutUint32(dst[56:], 0x1000)           // st_blksize
+	binary.LittleEndian.PutUint64(dst[64:], (s.Size+511)/512) // st_blocks
 	return nil
 }
 
@@ -56,12 +56,12 @@ func (c AsmGenericLP64Codecs) EncodeStatx(dst []byte, s kernel.Statx) error {
 	for i := range dst[:c.StatxSize()] {
 		dst[i] = 0
 	}
-	binary.LittleEndian.PutUint32(dst[0:], s.Mask)     // stx_mask
-	binary.LittleEndian.PutUint32(dst[4:], s.Blksize)  // stx_blksize
-	binary.LittleEndian.PutUint32(dst[16:], s.Nlink)   // stx_nlink
-	binary.LittleEndian.PutUint16(dst[28:], s.Mode)    // stx_mode
-	binary.LittleEndian.PutUint64(dst[40:], s.Size)    // stx_size
-	binary.LittleEndian.PutUint64(dst[48:], s.Blocks)  // stx_blocks
+	binary.LittleEndian.PutUint32(dst[0:], s.Mask)    // stx_mask
+	binary.LittleEndian.PutUint32(dst[4:], s.Blksize) // stx_blksize
+	binary.LittleEndian.PutUint32(dst[16:], s.Nlink)  // stx_nlink
+	binary.LittleEndian.PutUint16(dst[28:], s.Mode)   // stx_mode
+	binary.LittleEndian.PutUint64(dst[40:], s.Size)   // stx_size
+	binary.LittleEndian.PutUint64(dst[48:], s.Blocks) // stx_blocks
 	return nil
 }
 

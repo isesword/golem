@@ -121,13 +121,13 @@ func TestAMD64TableCoversHandlerSet(t *testing.T) {
 	// The tables must NOT share numbers for the same name (x86-64 is not
 	// asm-generic): spot-check the classic divergences.
 	pairs := map[string][2]uint64{
-		"write":   {SYS_write, SYSX_write},     // 64 vs 1
-		"mmap":    {SYS_mmap, SYSX_mmap},       // 222 vs 9
-		"openat":  {SYS_openat, SYSX_openat},   // 56 vs 257
-		"getpid":  {SYS_getpid, SYSX_getpid},   // 172 vs 39
-		"statx":   {SYS_statx, SYSX_statx},     // 291 vs 332
-		"uname":   {SYS_uname, SYSX_uname},     // 160 vs 63
-		"getcwd":  {SYS_getcwd, SYSX_getcwd},   // 17 vs 79
+		"write":   {SYS_write, SYSX_write},         // 64 vs 1
+		"mmap":    {SYS_mmap, SYSX_mmap},           // 222 vs 9
+		"openat":  {SYS_openat, SYSX_openat},       // 56 vs 257
+		"getpid":  {SYS_getpid, SYSX_getpid},       // 172 vs 39
+		"statx":   {SYS_statx, SYSX_statx},         // 291 vs 332
+		"uname":   {SYS_uname, SYSX_uname},         // 160 vs 63
+		"getcwd":  {SYS_getcwd, SYSX_getcwd},       // 17 vs 79
 		"faccess": {SYS_faccessat, SYSX_faccessat}, // 48 vs 269
 	}
 	for name, p := range pairs {
