@@ -1,0 +1,39 @@
+# GitHub auto-generated release notes: category config.
+#
+# PRs merged between two tags land in a section by their LABELS (apply with
+# `gh pr edit <n> --add-label perf` or when creating the PR). Unlabeled PRs
+# fall into 📦 Other Changes — the flat "What's Changed" list. PR titles
+# should follow conventional-commit style (`fix(scope): ...`) so the list
+# reads like a changelog.
+
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+  categories:
+    - title: 🚀 Features
+      labels:
+        - enhancement
+        - feat
+    - title: 🐛 Bug Fixes
+      labels:
+        - bug
+        - fix
+    - title: ⚡ Performance
+      labels:
+        - perf
+    - title: 🏛️ Architecture
+      labels:
+        - refactor
+        - arch
+    - title: 📝 Documentation
+      labels:
+        - documentation
+        - docs
+    - title: 🔧 CI / Build
+      labels:
+        - ci
+        - build
+    - title: 📦 Other Changes
+      labels:
+        - "*"
