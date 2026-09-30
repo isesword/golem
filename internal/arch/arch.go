@@ -36,6 +36,8 @@ const (
 	IDARM64 ID = 183
 	// IDAMD64 is ELF EM_X86_64.
 	IDAMD64 ID = 62
+	// IDARM is ELF EM_ARM (32-bit armv7 EABI, P6).
+	IDARM ID = 40
 )
 
 // Variant distinguishes ISA variants that share one engine architecture.
