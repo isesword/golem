@@ -19,6 +19,12 @@ import (
 	// (The ARM64 quad arrives via debugger.go's functional import.)
 	_ "github.com/isesword/golem/internal/arch/amd64"
 
+	// P6: register the ARM32 quad and the (FormatELF, ArchARM) relocator —
+	// the EM_ARM end-to-end chain is proven by the unicorn-tagged
+	// acceptance test (boot_android_arm32_unicorn_test.go).
+	_ "github.com/isesword/golem/internal/arch/arm32"
+	_ "github.com/isesword/golem/internal/loader/elf/arm32"
+
 	// P5b.5: register the platform personalities — the emulator resolves
 	// the probed Target.Platform through platform.Resolve, so every
 	// supported platform's Factory must be linked in. (platform/android is

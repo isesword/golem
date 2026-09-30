@@ -53,11 +53,12 @@ func (factory) Bind(ctx platform.BindContext) (*platform.Runtime, error) {
 		s := &StartupABI{}
 		startup, auxvLookup = s, s.Lookup
 	}
-	// Bionic runtime libraries and the TLS slot init are arch-keyed too:
-	// 32-bit bionic lives under lib/ (the asset tree ships AArch64 lib64
-	// only — the ARM32 assets are P6e fixture work, and the boot's
-	// machine-mismatch skip stays composition-root business), and the TLS
-	// slot array holds guest pointers (4 bytes on ARM32).
+	// Bionic runtime libraries and the TLS slot init are arch-keyed. P6e
+	// seam: the asset tree ships AArch64 lib64 ONLY — there is no 32-bit
+	// bionic under lib/ (the ARM32 fixture is -nostdlib), so EVERY target
+	// keeps the lib64 paths and the boot's machine-mismatch skip (the
+	// P5a.5 convention, composition-root business) drops them on non-ARM64
+	// targets. The TLS slot array holds guest pointers (4 bytes on ARM32).
 	runtimeLibs := []string{
 		"android/sdk23/lib64/libc.so",
 		"android/sdk23/lib64/libm.so",
@@ -65,11 +66,6 @@ func (factory) Bind(ctx platform.BindContext) (*platform.Runtime, error) {
 	}
 	initGuest := initBionicTLS
 	if ctx.ArchID == arch.IDARM {
-		runtimeLibs = []string{
-			"android/sdk23/lib/libc.so",
-			"android/sdk23/lib/libm.so",
-			"android/sdk23/lib/libdl.so",
-		}
 		initGuest = initBionicTLS32
 	}
 	return &platform.Runtime{
