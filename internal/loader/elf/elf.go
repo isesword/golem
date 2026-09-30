@@ -62,6 +62,14 @@ func Parse(path string) (*loader.Image, error) {
 		if p.Type != debugelf.PT_LOAD {
 			continue
 		}
+		// P7.5d: a segment claiming more file bytes than the file HAS is a
+		// corrupt/truncated image — refuse here with a parse error, never
+		// slice out of range later in Plan (the loader rejects malformed
+		// binaries, it does not read as much as it can).
+		if p.Off > uint64(len(raw)) || p.Filesz > uint64(len(raw))-p.Off {
+			return nil, fmt.Errorf("elf %s: PT_LOAD file range [%#x,%#x) exceeds file size %#x (corrupt image)",
+				path, p.Off, p.Off+p.Filesz, len(raw))
+		}
 		seg := loader.Segment{
 			Vaddr: p.Vaddr, FileSz: p.Filesz, MemSz: p.Memsz,
 			Off: p.Off, Flags: p.Flags, Aligned: pageUp(p.Vaddr+p.Memsz) - pageDown(p.Vaddr),
@@ -150,6 +158,24 @@ func Parse(path string) (*loader.Image, error) {
 		data, err := sec.Data()
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", sec.Name, err)
+		}
+		// P7.5d: a relocation section whose byte length is not a whole
+		// number of entries is malformed — reject loudly instead of
+		// silently dropping a ragged tail (the loader rejects; it does not
+		// read as much as it can). entrySz 0 = class/kind not parsed here
+		// (ELFCLASS64 SHT_REL), nothing to validate.
+		entrySz := 0
+		switch {
+		case f.Class == debugelf.ELFCLASS64 && isRela:
+			entrySz = 24
+		case f.Class == debugelf.ELFCLASS32 && isRel:
+			entrySz = 8
+		case f.Class == debugelf.ELFCLASS32 && isRela:
+			entrySz = 12
+		}
+		if entrySz != 0 && len(data)%entrySz != 0 {
+			return nil, fmt.Errorf("elf %s: relocation section %s: length %d is not a multiple of the %d-byte entry (malformed)",
+				path, sec.Name, len(data), entrySz)
 		}
 		switch {
 		case f.Class == debugelf.ELFCLASS64 && isRela:

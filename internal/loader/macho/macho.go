@@ -140,6 +140,14 @@ func Parse(path string) (*loader.Image, error) {
 	for _, l := range f.Loads {
 		switch lc := l.(type) {
 		case *debugmacho.Segment:
+			// P7.5d: same contract as the ELF parser — a segment claiming
+			// more file bytes than the file HAS is corrupt/truncated;
+			// refuse with a parse error instead of slicing out of range at
+			// Plan time.
+			if lc.Offset > uint64(len(raw)) || lc.Filesz > uint64(len(raw))-lc.Offset {
+				return nil, fmt.Errorf("macho %s: %s file range [%#x,%#x) exceeds file size %#x (corrupt image)",
+					path, lc.Name, lc.Offset, lc.Offset+lc.Filesz, len(raw))
+			}
 			seg := loader.Segment{
 				Vaddr: lc.Addr, FileSz: lc.Filesz, MemSz: lc.Memsz,
 				Off: lc.Offset, Flags: protToELF(lc.Prot),
