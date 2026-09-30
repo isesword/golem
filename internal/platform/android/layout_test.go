@@ -97,12 +97,54 @@ func TestLayoutPolicyRejectsUnsupportedInputs(t *testing.T) {
 	if _, err := p.Resolve(platform.TargetInfo{Platform: platform.Darwin, Caps: arm64Caps}, platform.LayoutOverrides{}); err == nil {
 		t.Fatal("non-Android platform must error")
 	}
-	caps32 := arch.AddressSpaceCaps{PointerBits: 32, VABits: 32, PageSize: 0x1000, MaxUserVA: 1 << 32}
-	if _, err := p.Resolve(platform.TargetInfo{Platform: platform.Android, Caps: caps32}, platform.LayoutOverrides{}); err == nil {
-		t.Fatal("32-bit caps must error")
-	}
 	caps16k := arch.AddressSpaceCaps{PointerBits: 64, VABits: 39, PageSize: 0x4000, MaxUserVA: 1 << 39}
 	if _, err := p.Resolve(platform.TargetInfo{Platform: platform.Android, Caps: caps16k}, platform.LayoutOverrides{}); err == nil {
 		t.Fatal("16K pages must error (layout assumes 4K)")
+	}
+	caps16 := arch.AddressSpaceCaps{PointerBits: 16, VABits: 16, PageSize: 0x1000, MaxUserVA: 1 << 16}
+	if _, err := p.Resolve(platform.TargetInfo{Platform: platform.Android, Caps: caps16}, platform.LayoutOverrides{}); err == nil {
+		t.Fatal("a pointer width that is neither 64 nor 32 must error")
+	}
+}
+
+// TestLayoutPolicyARM32 is the P6e three-state pin for 32-bit targets:
+// ACCEPT the ARM Linux 3G/1G caps (32-bit geometry, everything below
+// MaxUserVA 0xBF000000), keep the 64-bit layout byte-identical, and fail
+// LOUDLY when a 32-bit ceiling cannot hold the geometry.
+func TestLayoutPolicyARM32(t *testing.T) {
+	p := LayoutPolicy{}
+	caps32 := arch.AddressSpaceCaps{PointerBits: 32, VABits: 32, PageSize: 0x1000, MaxUserVA: 0xBF000000}
+	l, err := p.Resolve(platform.TargetInfo{Platform: platform.Android, Caps: caps32}, platform.LayoutOverrides{})
+	if err != nil {
+		t.Fatalf("32-bit caps must be accepted: %v", err)
+	}
+	want := memory.Layout{
+		ModuleRegion: memory.Region{Addr: 0x12000000, Size: 0x1E000000},
+		HeapRegion:   memory.Region{Addr: 0x30000000, Size: 0x10000000},
+		MmapRegion:   memory.Region{Addr: 0x40000000, Size: 0x20000000},
+		StubBase:     0x60000000,
+		StubSize:     0x00100000,
+		StackBase:    0xB0000000, // moved under the 0xBF000000 ceiling
+		StackSize:    0x00800000,
+		TLSBase:      0xB1000000,
+		TLSSize:      0x00010000,
+	}
+	if l != want {
+		t.Fatalf("32-bit layout:\n got %+v\nwant %+v", l, want)
+	}
+	// The whole geometry must sit below the ARM Linux user ceiling.
+	if uint64(l.TLSBase)+uint64(l.TLSSize) >= 0xBF000000 {
+		t.Fatalf("TLS end %#x must stay below 0xbf000000", uint64(l.TLSBase)+uint64(l.TLSSize))
+	}
+	// A full-4G ceiling accepts the same geometry.
+	full := arch.AddressSpaceCaps{PointerBits: 32, VABits: 32, PageSize: 0x1000, MaxUserVA: 1 << 32}
+	if l2, err := p.Resolve(platform.TargetInfo{Platform: platform.Android, Caps: full}, platform.LayoutOverrides{}); err != nil || l2 != l {
+		t.Fatalf("full-4G 32-bit caps: (%+v, %v), want the same layout", l2, err)
+	}
+	// A ceiling that cannot hold the geometry fails loudly — the stub
+	// window ends at 0x60100000, so 0x60000000 must error, naming a region.
+	low := arch.AddressSpaceCaps{PointerBits: 32, VABits: 32, PageSize: 0x1000, MaxUserVA: 0x60000000}
+	if _, err := p.Resolve(platform.TargetInfo{Platform: platform.Android, Caps: low}, platform.LayoutOverrides{}); err == nil {
+		t.Fatal("a 32-bit ceiling below the stub/stack geometry must error loudly")
 	}
 }
