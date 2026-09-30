@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	ucArchX86 = 4     // UC_ARCH_X86
+	ucArchX86 = 4      // UC_ARCH_X86
 	ucMode64  = 1 << 3 // UC_MODE_64
 
 	hkInsn = 1 << 1 // UC_HOOK_INSN

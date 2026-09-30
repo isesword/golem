@@ -418,6 +418,10 @@ func newUnicornBackend(a Arch) (Backend, error) {
 	switch a {
 	case ArchARM64:
 		ucArch, ucMode = ucArchARM64, ucModeARM
+	case ArchARM:
+		// UC_MODE_ARM is the RESET state; Thumb entry is by the start
+		// address bit0 (unicorn_arm.go header) — no per-run mode needed here.
+		ucArch, ucMode = ucArchARM, ucModeARM
 	case ArchAMD64:
 		ucArch, ucMode = ucArchX86, ucMode64
 	default:
@@ -513,13 +517,17 @@ func SetTCGBufferSize(b Backend, size uint32) error {
 }
 
 // toUCReg translates an abstract emu.Reg to this engine's UC register id,
-// dispatching on the engine's guest architecture. Both mappings key on the
-// frozen id NUMBERS of internal/arch/arm64 (regMap) and internal/arch/amd64
-// (regMapAMD64) — emu cannot import those packages (import cycle); their
-// TestFrozenRegIDs pin the numbers on the other side.
+// dispatching on the engine's guest architecture. The mappings key on the
+// frozen id NUMBERS of internal/arch/arm64 (regMap), internal/arch/amd64
+// (regMapAMD64) and internal/arch/arm32 (regMapARM32) — emu cannot import
+// those packages (import cycle); their TestFrozenRegIDs pin the numbers on
+// the other side.
 func (b *unicornBackend) toUCReg(r Reg) int32 {
-	if b.arch == ArchAMD64 {
+	switch b.arch {
+	case ArchAMD64:
 		return regMapAMD64(r)
+	case ArchARM:
+		return regMapARM32(r)
 	}
 	return regMap(r)
 }

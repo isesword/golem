@@ -8,17 +8,18 @@ import (
 )
 
 // TestUnicornFactoryArchGate checks the real unicorn factory's arch gate:
-// ArchARM is refused BEFORE any libunicorn loading (this test needs no engine
-// and no library), while ArchARM64 and ArchAMD64 are both creatable (P5a —
-// the AMD64 path needs the library, so it skips when libunicorn is absent).
+// an UNKNOWN arch is refused before any libunicorn loading (this test needs
+// no engine and no library), while ArchARM64, ArchARM (P6b) and ArchAMD64
+// are all creatable (the ARM/AMD64 paths need the library, so the test
+// skips when libunicorn is absent).
 func TestUnicornFactoryArchGate(t *testing.T) {
-	if _, err := NewNamed("unicorn", ArchARM); !errors.Is(err, ErrUnsupported) {
-		t.Errorf("NewNamed(unicorn, arm): err = %v, want errors.Is(ErrUnsupported)", err)
+	if _, err := NewNamed("unicorn", Arch(0)); !errors.Is(err, ErrUnsupported) {
+		t.Errorf("NewNamed(unicorn, Arch(0)): err = %v, want errors.Is(ErrUnsupported)", err)
 	}
 	if err := ensureLoaded(); err != nil {
 		t.Skipf("libunicorn unavailable: %v", err)
 	}
-	for _, a := range []Arch{ArchARM64, ArchAMD64} {
+	for _, a := range []Arch{ArchARM64, ArchARM, ArchAMD64} {
 		be, err := NewNamed("unicorn", a)
 		if err != nil {
 			t.Fatalf("NewNamed(unicorn, %s): %v", a, err)
@@ -52,6 +53,36 @@ func TestRegMapFrozenIDs(t *testing.T) {
 	for _, tc := range cases {
 		if got := regMap(tc.in); got != tc.want {
 			t.Errorf("regMap(%s=%d) = %d, want %d", tc.name, tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestRegMapARM32FrozenIDs verifies regMapARM32 translates the frozen
+// arch/arm32 id NUMBERS (R0=96..R15=111, CPSR=112, TPIDRURW=113) to the
+// right UC_ARM_REG_* ids. regMapARM32 keys on numbers because emu cannot
+// import internal/arch/arm32 (import cycle); arch/arm32's TestFrozenRegIDs
+// pins the numbering on that side.
+func TestRegMapARM32FrozenIDs(t *testing.T) {
+	cases := []struct {
+		name string
+		in   Reg
+		want int32
+	}{
+		{"R0", 96, ucArmRegR0},
+		{"R7", 103, ucArmRegR0 + 7},
+		{"R12", 108, ucArmRegR0 + 12},
+		{"R13/SP", 109, ucArmRegSP},
+		{"R14/LR", 110, ucArmRegLR},
+		{"R15/PC", 111, ucArmRegPC},
+		{"CPSR", 112, ucArmRegCPSR},
+		{"TPIDRURW", 113, ucArmRegC13C03},
+		{"arm64 X0 (collision check)", 0, ucRegInvalid},
+		{"amd64 RAX (collision check)", 64, ucRegInvalid},
+		{"invalid", 114, ucRegInvalid},
+	}
+	for _, tc := range cases {
+		if got := regMapARM32(tc.in); got != tc.want {
+			t.Errorf("regMapARM32(%s=%d) = %d, want %d", tc.name, tc.in, got, tc.want)
 		}
 	}
 }

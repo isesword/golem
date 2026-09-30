@@ -47,6 +47,11 @@ const (
 	R14
 	R15
 	CPSR
+	// TPIDRURW is the ARM32 Linux thread-pointer register (CP15 c13,c0,3 —
+	// the user read/write thread ID register). Appended AFTER the frozen P6
+	// set (the "unicorn mapping needs" the block doc reserves): every id
+	// above keeps its number; TPIDRURW is id 113.
+	TPIDRURW
 )
 
 // Conventional role names: the same ids as R13/R14/R15 (see the package

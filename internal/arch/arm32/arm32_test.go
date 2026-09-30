@@ -20,7 +20,7 @@ func TestFrozenRegIDs(t *testing.T) {
 		{"R4", R4, 100}, {"R5", R5, 101}, {"R6", R6, 102}, {"R7", R7, 103},
 		{"R8", R8, 104}, {"R9", R9, 105}, {"R10", R10, 106}, {"R11", R11, 107},
 		{"R12", R12, 108}, {"R13", R13, 109}, {"R14", R14, 110}, {"R15", R15, 111},
-		{"CPSR", CPSR, 112},
+		{"CPSR", CPSR, 112}, {"TPIDRURW", TPIDRURW, 113},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {
@@ -40,9 +40,9 @@ func TestFrozenRegIDs(t *testing.T) {
 // alias. Expressed without importing the sibling packages (numbers are the
 // contract, per the frozen-id rule).
 func TestRegBlockDisjoint(t *testing.T) {
-	for r := R0; r <= CPSR; r++ {
-		if r < 96 || r > 112 {
-			t.Fatalf("reg %d escaped the arm32 block [96,112]", r)
+	for r := R0; r <= TPIDRURW; r++ {
+		if r < 96 || r > 113 {
+			t.Fatalf("reg %d escaped the arm32 block [96,113]", r)
 		}
 		if r >= 64 && r <= 83 {
 			t.Fatalf("reg %d collides with the amd64 block [64,83]", r)
