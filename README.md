@@ -20,7 +20,7 @@ x86(32 位) 与 iOS 在路线图上。
 ```go
 e, _ := emulator.New(emulator.Config{SOPath: "libfoo.so"})
 defer e.Close()
-sum, _ := e.CallSymbol("add", 2, 3) // -> 5,作为真实 AArch64 代码执行
+sum, _ := e.CallSymbol("add", emulator.Words(2, 3)...) // -> 5,作为真实 AArch64 代码执行
 ```
 
 > 当前状态:Unicorn(purego)后端完整跑通——加载并链接 bionic 和目标 `.so`、执行 `init_array` 与 `JNI_OnLoad`、调用导出函数、处理 syscall 与 JNI;引擎池支持多 goroutine 并发;常驻负载实测 10 万次签名 @ 100 QPS 延迟恒定、内存零增长。Linux / macOS / Windows(amd64 与 arm64)CI 实弹全绿——Windows 使用 CI 构建并经真机验证的 VEH-off unicorn.dll,随仓库分发。与 unidbg 的能力对照见 [与 unidbg 的关系](#与-unidbg-的关系)。
@@ -107,21 +107,25 @@ if err != nil { panic(err) }
 defer e.Close()
 
 // 按名调用导出函数(最多 8 个整型/指针参数,返回 X0)。
-r, _ := e.CallSymbol("add", 2, 3)
+r, _ := e.CallSymbol("add", emulator.Words(2, 3)...)
 
 // 按模块偏移调用非导出入口(= unidbg 的 callFunction(offset))。
-r, _ = e.CallOffset(nil /*主模块*/, 0x1234, argPtr)
+r, _ = e.CallOffset(nil /*主模块*/, 0x1234, emulator.Ptr(argPtr))
 
 // 交换内存。
 p := e.WriteCStringAlloc("hello")
-n, _ := e.CallSymbol("strlen_wrapper", p)
+n, _ := e.CallSymbol("strlen_wrapper", emulator.Ptr(p))
 out, err := e.Malloc(4)
 if err != nil { panic(err) }
-_, _ = e.CallSymbol("sum_into", out, 20, 22)
+_, _ = e.CallSymbol("sum_into", emulator.Words(out, 20, 22)...)
 v, _ := e.ReadU32(out)
 
 // 用 Go 替换一个 native 函数(hook)。ReplaceE 返回 error; ReplaceSymbol 同。
-err = e.ReplaceSymbol("add", func(h *emulator.Hook) uint64 { return h.Arg(0) + h.Arg(1) })
+err = e.ReplaceSymbol("add", func(h *emulator.Hook) uint64 {
+	a, _ := h.Arg(0)
+	b, _ := h.Arg(1)
+	return a.Raw + b.Raw
+})
 ```
 
 ### 给 Java 侧建模(JNI)

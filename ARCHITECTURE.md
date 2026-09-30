@@ -3,13 +3,20 @@
 本文档定义 golem 的分层不变量。**任何改动违反本文档的分层边界即架构回退**，
 需要先修改本文档并说明理由。
 
-> 本版（2026-09-30，P7.5a）同步 Architecture Freeze v1 之后的实际模型：
-> platform / target / arch 三层入宪，旧"两层宪法"（emulator 直面 emu）作废。
+> 本版（2026-09-30，P9）同步 Public Semantic API 的落成：emulator 包升级为
+> facade（Portable / Advanced 双层文档化），arch 层新增观察语义
+> （CallABI.ReadReturnAddress、RoleReader）。上一版（P7.5a）确立的三层
+> 模型不变；P9 只在消费者一侧加缝，未触碰冻结核。
 
 ## 分层图
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
+│ Public Semantic API（emulator 包 = facade，P9）                │
+│   Portable: HookContext(Arg/ReturnAddress/ReadRole)          │
+│             CallSymbol(...Value) / Value kinds               │
+│   Advanced: Reg(i) / RegRead / CallSymbolArgs（架构自担）      │
+├─────────────────────────────────────────────────────────────┤
 │ 上层（消费者，永不感知平台/架构/引擎差异）                        │
 │   emulator / dvm / vfs / Pool[T]                             │
 │   TrainApp 的 apseemu、未来的业务层                            │
@@ -17,7 +24,8 @@
 │ 平台语义层（per-platform / per-arch，纯数据 personality）       │
 │   internal/platform  Factory→Runtime（android / darwin）      │
 │   internal/target    Target（格式探测产物：format/platform/arch）│
-│   internal/arch      每架构 CallABI / 寄存器模型                │
+│   internal/arch      每架构 CallABI / 寄存器模型 /              │
+│                      RoleReader + ReadReturnAddress（P9 观察语义）│
 │   internal/loader    ELF / Mach-O 解析 + 动态链接器             │
 │   internal/kernel    syscall 语义 handler（平台无关）           │
 │   internal/memory    guest 地址空间分配器                      │
@@ -29,6 +37,20 @@
 │   windows 路径       unicorn.dll(预提交,VEH-off)+UC_CTL_UC_PREALLOC│
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### P9 观察语义（已验证入宪）
+
+- **角色与返回地址是两个概念，永不合并没有例外**：`ReadRole(RoleLR)` 是
+  CPU 状态观察（任何 hook kind、任何 PC 可读；AMD64 无此角色 →
+  ErrUnsupportedRole）；`ReturnAddress()` 是调用上下文事实（仅
+  function-entry hook 可答，AMD64 从 [RSP] 读）。三架构 quad 均实现
+  RoleReader；测试钉死含 AMD64 的负例。
+- **上下文门控是契约不是便利**：Arg/ReturnAddress 在非 entry hook 一律
+  ErrContextUnavailable（不猜）；ReturnValue 仅 exit 上下文有意义
+  （HookFunctionExit 预留，暂无安装 API）。
+- Value/ValueKind 是 arch.CallArg 的公开面：Word 类 = 单字（32 位目标单
+  寄存器），U64/I64 = 32 位目标的寄存器对；转换只在 facade→CallABI 边界
+  发生一次。
 
 ## 不变量（逐条可测）
 
