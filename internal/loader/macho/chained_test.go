@@ -620,3 +620,60 @@ func TestChained64LoudErrors(t *testing.T) {
 		})
 	}
 }
+
+// fixtureARM64Chained is the committed clang-built Mach-O plain-arm64
+// dylib with LC_DYLD_CHAINED_FIXUPS in pointer format DYLD_CHAINED_PTR_64
+// (examples/native/hello_darwin_arm64.c + build_darwin_fixture.sh — the
+// SAME source as the classic fixture, linked with -fixup_chains).
+const fixtureARM64Chained = "../../../examples/native/hello_darwin_arm64_chained.dylib"
+
+// TestParseChainedFixturePtr64 pins the decode of the REAL format 2
+// toolchain product: one chain over the single __DATA page (page_size
+// 0x4000, pointer_format 2, imports format 1) carrying
+//
+//	0x4000  bind    host_fp        <- host_magic (ordinal 0, addend 0)
+//	0x4008  rebase  fptr_table[0]  -> seven      (vmaddr 0x3a8)
+//
+// Addresses are THIS build's (dyld_info/nm); if the fixture is rebuilt and
+// they shift, regenerate with:
+//
+//	dyld_info -fixups examples/native/hello_darwin_arm64_chained.dylib
+//	nm examples/native/hello_darwin_arm64_chained.dylib | grep seven
+//
+// and update the constants — exact values on purpose, so a silent
+// toolchain-layout drift fails here first.
+func TestParseChainedFixturePtr64(t *testing.T) {
+	if _, err := os.Stat(fixtureARM64Chained); err != nil {
+		t.Skipf("fixture not present: %v", err)
+	}
+	img, err := Parse(fixtureARM64Chained)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if img.Format != loader.FormatMachO || img.Arch != emu.ArchARM64 || img.Machine != arch.IDARM64 {
+		t.Fatalf("identity = (%v, %v, %v), want (macho, arm64, IDARM64)", img.Format, img.Arch, img.Machine)
+	}
+	symByName := map[string]uint32{}
+	for i, s := range img.Syms {
+		if _, ok := symByName[s.Name]; !ok {
+			symByName[s.Name] = uint32(i)
+		}
+	}
+	hostMagic, ok := symByName["host_magic"]
+	if !ok {
+		t.Fatalf("host_magic not in the symbol table (syms: %v)", img.Syms)
+	}
+
+	want := []loader.Reloc{
+		{Offset: 0x4000, Type: RelocBindPointer, Sym: hostMagic, Addend: 0}, // bind, zero addend
+		{Offset: 0x4008, Type: RelocRebasePointer, Addend: 0x3a8},           // rebase -> seven vmaddr (36-bit target)
+	}
+	if len(img.Relocs) != len(want) {
+		t.Fatalf("relocs = %v, want exactly %d (the two chain entries)", img.Relocs, len(want))
+	}
+	for i, w := range want {
+		if img.Relocs[i] != w {
+			t.Errorf("relocs[%d] = %+v, want %+v", i, img.Relocs[i], w)
+		}
+	}
+}

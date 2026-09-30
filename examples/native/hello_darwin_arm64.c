@@ -6,14 +6,17 @@
 // the single explicit import below (host_magic), which the tests interpose at
 // link time (HostResolver stub) — exercising the bind-opcode channel.
 //
-// Build (committed prebuilt is hello_darwin_arm64.dylib; rebuild on macOS
-// with build_darwin_fixture.sh, or manually):
+// Build (committed prebuilts are hello_darwin_arm64.dylib and
+// hello_darwin_arm64_chained.dylib; rebuild on macOS with
+// build_darwin_fixture.sh, or manually):
 //   clang -arch arm64 -target arm64-apple-macos11 -dynamiclib \
 //         -fno-builtin -fno-stack-protector -O2 \
 //         -Wl,-no_fixup_chains -nostdlib \
 //         -o hello_darwin_arm64.dylib hello_darwin_arm64.c
-// (-no_fixup_chains keeps classic LC_DYLD_INFO rebase/bind opcodes; chained
-// fixups are the ARM64e/PAC world, deliberately out of P5b scope.)
+// (-no_fixup_chains keeps classic LC_DYLD_INFO rebase/bind opcodes;
+// -fixup_chains instead produces the P5d variant: LC_DYLD_CHAINED_FIXUPS
+// with pointer format DYLD_CHAINED_PTR_64 — same source, same behaviors,
+// the modern chained container.)
 
 long add(long a, long b) { return a + b; }
 
