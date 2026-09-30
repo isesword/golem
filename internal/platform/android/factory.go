@@ -53,12 +53,15 @@ func (factory) Bind(ctx platform.BindContext) (*platform.Runtime, error) {
 		s := &StartupABI{}
 		startup, auxvLookup = s, s.Lookup
 	}
-	// Bionic runtime libraries and the TLS slot init are arch-keyed. P6e
-	// seam: the asset tree ships AArch64 lib64 ONLY — there is no 32-bit
-	// bionic under lib/ (the ARM32 fixture is -nostdlib), so EVERY target
-	// keeps the lib64 paths and the boot's machine-mismatch skip (the
-	// P5a.5 convention, composition-root business) drops them on non-ARM64
-	// targets. The TLS slot array holds guest pointers (4 bytes on ARM32).
+	// Bionic runtime libraries and the TLS slot init are arch-keyed. The
+	// asset tree ships BOTH widths: AArch64 under lib64/, ARM32 (P7: real
+	// API-23 armeabi-v7a bionic) under lib/. On ARM64 the lib64 set loads
+	// for real; on any other target the boot's machine-mismatch skip (the
+	// P5a.5 convention) drops whatever does not match — AMD64 therefore
+	// still boots libc-less, while ARM32 gets its real libc/libm/libdl
+	// (naming note: the ARM32 tree keeps the image's original libc++.so /
+	// libstdc++.so names, unlike lib64's libcpp/libstdcpp). The TLS slot
+	// array holds guest pointers (4 bytes on ARM32).
 	runtimeLibs := []string{
 		"android/sdk23/lib64/libc.so",
 		"android/sdk23/lib64/libm.so",
@@ -66,6 +69,15 @@ func (factory) Bind(ctx platform.BindContext) (*platform.Runtime, error) {
 	}
 	initGuest := initBionicTLS
 	if ctx.ArchID == arch.IDARM {
+		// liblog too: the P7 NDK-built fixtures DT_NEEDED it (real
+		// __android_log_print — usually interposed by the caller). The
+		// ARM64 list deliberately stays three-library (boot red line).
+		runtimeLibs = []string{
+			"android/sdk23/lib/libc.so",
+			"android/sdk23/lib/libm.so",
+			"android/sdk23/lib/libdl.so",
+			"android/sdk23/lib/liblog.so",
+		}
 		initGuest = initBionicTLS32
 	}
 	return &platform.Runtime{

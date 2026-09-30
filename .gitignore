@@ -35,3 +35,6 @@ config.json
 /traces/**
 
 *.pkl
+
+# device-extracted binaries are fetched locally, never committed (public repo)
+/assets/android/sdk23/lib/

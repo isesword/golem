@@ -123,8 +123,8 @@ func TestFactoryBindARM32(t *testing.T) {
 		t.Fatalf("scheduler interception numbers = %d/%d/%d, want the ARM32 ones %d/%d/%d",
 			rt.Futex, rt.Nanosleep, rt.ClockNanosleep, SYSA_futex, SYSA_nanosleep, SYSA_clock_nanosleep)
 	}
-	if len(rt.RuntimeLibs) != 3 || rt.RuntimeLibs[0] != "android/sdk23/lib64/libc.so" {
-		t.Fatalf("RuntimeLibs = %v, want the lib64 paths (the boot's machine-mismatch skip drops them on ARM32 — no 32-bit bionic ships)", rt.RuntimeLibs)
+	if len(rt.RuntimeLibs) != 4 || rt.RuntimeLibs[0] != "android/sdk23/lib/libc.so" || rt.RuntimeLibs[3] != "android/sdk23/lib/liblog.so" {
+		t.Fatalf("RuntimeLibs = %v, want 32-bit bionic under lib/ incl. liblog (P7: real ARM32 bionic ships in the asset tree)", rt.RuntimeLibs)
 	}
 	if rt.InitGuest == nil || !rt.PthreadStubs || rt.Layout == nil {
 		t.Fatal("ARM32 runtime must carry TLS init, pthread stubs and the layout policy")
