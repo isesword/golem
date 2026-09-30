@@ -11,8 +11,8 @@ import (
 	"testing"
 	"unsafe"
 
-	_ "github.com/isesword/golem/internal/arch/amd64" // register the AMD64 quad (stub encoder for the HostResolver)
 	"github.com/isesword/golem/internal/arch"
+	_ "github.com/isesword/golem/internal/arch/amd64" // register the AMD64 quad (stub encoder for the HostResolver)
 	"github.com/isesword/golem/internal/emu"
 	"github.com/isesword/golem/internal/interpose"
 	"github.com/isesword/golem/internal/loader"

@@ -1,7 +1,9 @@
-// Package elf parses an ELF shared object into a format-agnostic
-// loader.Image: PT_LOAD segments, dynamic symbols, RELA relocations, and
-// Android packed relative relocations (SHT_RELR "address+bitmap", expanded
-// to explicit relative entries). Pure stdlib (debug/elf), no cgo.
+// Package elf parses an ELF shared object (ELFCLASS64 or ELFCLASS32 — P6c)
+// into a format-agnostic loader.Image: PT_LOAD segments, dynamic symbols,
+// RELA relocations (64-bit targets), REL relocations (32-bit targets such as
+// ARM32 — the addend is implicit, the word stored at the target), and Android
+// packed relative relocations (SHT_RELR "address+bitmap", expanded to
+// explicit relative entries). Pure stdlib (debug/elf), no cgo.
 //
 // The package registers itself as the FormatELF Parser via init(); import it
 // (blank) from the composition root. Relocation SEMANTICS are not here —
@@ -28,6 +30,7 @@ func init() { loader.RegisterParser(loader.FormatELF, Parse) }
 var machineArch = map[debugelf.Machine]emu.Arch{
 	debugelf.EM_AARCH64: emu.ArchARM64,
 	debugelf.EM_X86_64:  emu.ArchAMD64, // P5a
+	debugelf.EM_ARM:     emu.ArchARM,   // P6c (ELFCLASS32)
 }
 
 // Parse reads the ELF at path and builds the loader.Image. base is not
@@ -81,8 +84,16 @@ func Parse(path string) (*loader.Image, error) {
 			break
 		}
 	}
-	if img.PhdrAddr == 0 && f.Class == debugelf.ELFCLASS64 && len(raw) >= 64 {
-		phoff := binary.LittleEndian.Uint64(raw[0x20:])
+	if img.PhdrAddr == 0 {
+		// e_phoff: u64 @0x20 (ELFCLASS64, 64-byte header) / u32 @0x1C
+		// (ELFCLASS32, 52-byte header).
+		var phoff uint64
+		switch {
+		case f.Class == debugelf.ELFCLASS64 && len(raw) >= 64:
+			phoff = binary.LittleEndian.Uint64(raw[0x20:])
+		case f.Class == debugelf.ELFCLASS32 && len(raw) >= 52:
+			phoff = uint64(binary.LittleEndian.Uint32(raw[0x1c:]))
+		}
 		if phoff > 0 {
 			for _, sgm := range img.Segments {
 				if phoff >= sgm.Off && phoff < sgm.Off+sgm.FileSz {
@@ -116,37 +127,84 @@ func Parse(path string) (*loader.Image, error) {
 		}
 	}
 
-	// Relocations: parse SHT_RELA sections manually (we need r_sym + type).
-	// The raw type code is stored format-natively; interpretation is the
-	// Relocator's job (loader/elf/<arch>).
+	// Relocations: parse SHT_RELA/SHT_REL sections manually (we need r_sym +
+	// type). The raw type code is stored format-natively; interpretation is
+	// the Relocator's job (loader/elf/<arch>).
+	//
+	// Entry layout is class-dependent:
+	//   - ELFCLASS64 RELA: {u64 r_offset, u64 r_info, s64 r_addend} (24 B),
+	//     r_sym = r_info>>32, r_type = r_info&0xffffffff.
+	//   - ELFCLASS32 REL:  {u32 r_offset, u32 r_info} (8 B),
+	//     r_sym = r_info>>8, r_type = r_info&0xff — ARM32 uses REL (DT_REL):
+	//     there is NO explicit addend; the addend is the word already stored
+	//     at the relocation target, read at apply time by the Relocator
+	//     (read-modify-write). Addend stays 0 here.
+	//   - ELFCLASS32 RELA: {u32 r_offset, u32 r_info, s32 r_addend} (12 B);
+	//     parsed for completeness (ARM does not emit it).
 	for _, sec := range f.Sections {
-		if sec.Type != debugelf.SHT_RELA {
+		isRela := sec.Type == debugelf.SHT_RELA
+		isRel := sec.Type == debugelf.SHT_REL
+		if !isRela && !isRel {
 			continue
 		}
 		data, err := sec.Data()
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", sec.Name, err)
 		}
-		for off := 0; off+24 <= len(data); off += 24 {
-			rOff := binary.LittleEndian.Uint64(data[off:])
-			rInfo := binary.LittleEndian.Uint64(data[off+8:])
-			rAdd := int64(binary.LittleEndian.Uint64(data[off+16:]))
-			img.Relocs = append(img.Relocs, loader.Reloc{
-				Offset: rOff,
-				Type:   uint32(rInfo & 0xffffffff),
-				Sym:    uint32(rInfo >> 32),
-				Addend: rAdd,
-			})
+		switch {
+		case f.Class == debugelf.ELFCLASS64 && isRela:
+			for off := 0; off+24 <= len(data); off += 24 {
+				rOff := binary.LittleEndian.Uint64(data[off:])
+				rInfo := binary.LittleEndian.Uint64(data[off+8:])
+				rAdd := int64(binary.LittleEndian.Uint64(data[off+16:]))
+				img.Relocs = append(img.Relocs, loader.Reloc{
+					Offset: rOff,
+					Type:   uint32(rInfo & 0xffffffff),
+					Sym:    uint32(rInfo >> 32),
+					Addend: rAdd,
+				})
+			}
+		case f.Class == debugelf.ELFCLASS32 && isRel:
+			for off := 0; off+8 <= len(data); off += 8 {
+				rOff := binary.LittleEndian.Uint32(data[off:])
+				rInfo := binary.LittleEndian.Uint32(data[off+4:])
+				img.Relocs = append(img.Relocs, loader.Reloc{
+					Offset: uint64(rOff),
+					Type:   rInfo & 0xff,
+					Sym:    rInfo >> 8,
+					// Addend 0: the REL addend is implicit (the stored
+					// target word); the Relocator reads it from memory.
+				})
+			}
+		case f.Class == debugelf.ELFCLASS32 && isRela:
+			for off := 0; off+12 <= len(data); off += 12 {
+				rOff := binary.LittleEndian.Uint32(data[off:])
+				rInfo := binary.LittleEndian.Uint32(data[off+4:])
+				rAdd := int32(binary.LittleEndian.Uint32(data[off+8:]))
+				img.Relocs = append(img.Relocs, loader.Reloc{
+					Offset: uint64(rOff),
+					Type:   rInfo & 0xff,
+					Sym:    rInfo >> 8,
+					Addend: int64(rAdd),
+				})
+			}
 		}
+		// ELFCLASS64 SHT_REL: not parsed (no current 64-bit target uses REL).
 	}
 
 	// Android packed relative relocations (SHT_RELR / DT_RELR): decode the
 	// address+bitmap stream and expand to explicit relative-reloc entries
-	// (R_AARCH64_RELATIVE code on AArch64). The addend is the value already
+	// (the machine's R_*_RELATIVE code). The addend is the value already
 	// stored at the target in the file image (RELR carries no addends); map
-	// vaddr -> file offset via PT_LOAD segments.
+	// vaddr -> file offset via PT_LOAD segments. Entry width follows the ELF
+	// class: Elf64_Addr/Elf32_Addr.
+	relrType, relrOK := relrRelocType(f.Machine)
+	wordSize := 8
+	if f.Class == debugelf.ELFCLASS32 {
+		wordSize = 4
+	}
 	for _, sec := range f.Sections {
-		if sec.Type != debugelf.SectionType(0x13) /* SHT_RELR */ {
+		if sec.Type != debugelf.SectionType(0x13) /* SHT_RELR */ || !relrOK {
 			continue
 		}
 		data, err := sec.Data()
@@ -163,51 +221,88 @@ func Parse(path string) (*loader.Image, error) {
 		}
 		addRelr := func(va uint64) {
 			fo, ok := va2off(va)
-			if !ok || fo+8 > len(raw) {
+			if !ok || fo+wordSize > len(raw) {
 				return
+			}
+			var addend int64
+			if wordSize == 8 {
+				addend = int64(binary.LittleEndian.Uint64(raw[fo:]))
+			} else {
+				addend = int64(binary.LittleEndian.Uint32(raw[fo:]))
 			}
 			img.Relocs = append(img.Relocs, loader.Reloc{
 				Offset: va,
-				Type:   uint32(debugelf.R_AARCH64_RELATIVE),
-				Addend: int64(binary.LittleEndian.Uint64(raw[fo:])),
+				Type:   relrType,
+				Addend: addend,
 			})
 		}
 		var where uint64
-		for off := 0; off+8 <= len(data); off += 8 {
-			word := binary.LittleEndian.Uint64(data[off:])
+		for off := 0; off+wordSize <= len(data); off += wordSize {
+			var word uint64
+			if wordSize == 8 {
+				word = binary.LittleEndian.Uint64(data[off:])
+			} else {
+				word = uint64(binary.LittleEndian.Uint32(data[off:]))
+			}
 			if word&1 == 0 {
 				where = word
 				addRelr(where)
-				where += 8
+				where += uint64(wordSize)
 			} else {
-				for i := 1; i < 64; i++ {
+				for i := 1; i < wordSize*8; i++ {
 					if word&(1<<uint(i)) != 0 {
 						addRelr(where)
 					}
-					where += 8
+					where += uint64(wordSize)
 				}
 			}
 		}
 	}
 
-	// init_array
+	// init_array. Function-pointer width follows the ELF class: 8 bytes on
+	// ELFCLASS64, 4 on ELFCLASS32 (ARM32 .init_array holds 32-bit pointers).
 	if v, err := f.DynValue(debugelf.DT_INIT); err == nil && len(v) > 0 {
 		img.Init = v[0]
 	}
+	entSize := uint64(8)
+	if f.Class == debugelf.ELFCLASS32 {
+		entSize = 4
+	}
 	for _, sec := range f.Sections {
-		if sec.Type == debugelf.SHT_INIT_ARRAY {
-			img.InitArrayAddr = sec.Addr
-			img.InitArrayLen = int(sec.Size / 8)
-			data, err := sec.Data()
-			if err != nil {
-				return nil, err
-			}
-			for off := 0; off+8 <= len(data); off += 8 {
+		if sec.Type != debugelf.SHT_INIT_ARRAY {
+			continue
+		}
+		img.InitArrayAddr = sec.Addr
+		img.InitArrayLen = int(sec.Size / entSize)
+		data, err := sec.Data()
+		if err != nil {
+			return nil, err
+		}
+		for off := uint64(0); off+entSize <= uint64(len(data)); off += entSize {
+			if entSize == 4 {
+				img.InitArray = append(img.InitArray, uint64(binary.LittleEndian.Uint32(data[off:])))
+			} else {
 				img.InitArray = append(img.InitArray, binary.LittleEndian.Uint64(data[off:]))
 			}
 		}
 	}
 	return img, nil
+}
+
+// relrRelocType maps an ELF machine to the R_*_RELATIVE relocation type code
+// SHT_RELR entries expand to. Machines without RELR support report ok=false
+// (their SHT_RELR sections, should any appear, are skipped — the same
+// behavior as before RELR support existed).
+func relrRelocType(m debugelf.Machine) (uint32, bool) {
+	switch m {
+	case debugelf.EM_AARCH64:
+		return uint32(debugelf.R_AARCH64_RELATIVE), true
+	case debugelf.EM_X86_64:
+		return uint32(debugelf.R_X86_64_RELATIVE), true
+	case debugelf.EM_ARM:
+		return uint32(debugelf.R_ARM_RELATIVE), true
+	}
+	return 0, false
 }
 
 func pageUp(x uint64) uint64   { return (x + 0xfff) &^ 0xfff }
