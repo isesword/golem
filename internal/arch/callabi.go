@@ -157,8 +157,10 @@ type CallABI interface {
 	//
 	//	ARM64:       LR ← post
 	//	ARM32:       LR ← post (bit0 may set the continuation's ISA state)
-	//	AMD64 SysV:  push post ([RSP-8] ← post, RSP -= 8) — the original's
-	//	             `ret` pops it
+	//	AMD64 SysV:  [RSP] ← post in place — the caller's `call` pushed the
+	//	             return address there; the original's `ret` pops post with
+	//	             the stack back at the caller's exact state (never push:
+	//	             that strands the real return below the caller's SP)
 	//
 	// Valid in the ENTRY state, immediately before the original function
 	// runs: the original's return then lands on the wrap's post
