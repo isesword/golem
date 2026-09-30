@@ -21,7 +21,9 @@ import (
 // instruction) and produces large output; wrap the writer in your own
 // gzip/buffer if you like.
 
-// gpRegNames indexes the [34]uint64 ReadGPRegs returns.
+// gpRegNames indexes the AArch64 register-file order the RegFileReader
+// capability dumps (x0..x30, sp, pc, nzcv) — tracing is AArch64-shaped today
+// (opcode decode included); other archs degrade to no trace below.
 var gpRegNames = [34]string{
 	"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10",
 	"x11", "x12", "x13", "x14", "x15", "x16", "x17", "x18", "x19", "x20",
@@ -49,8 +51,8 @@ var (
 type insnTracer struct {
 	e       *Emulator
 	w       *bufio.Writer
-	base    uint64     // module base, for module-relative offsets
-	prev    [34]uint64 // register file as of the previous traced instruction
+	base    uint64   // module base, for module-relative offsets
+	prev    []uint64 // register file as of the previous traced instruction
 	started bool
 	buf     []byte // reusable line scratch
 }
@@ -102,7 +104,13 @@ func (t *insnTracer) onInsn(pc uint64) {
 			fmt.Printf("[SNAP] dumped [%#x,%#x) at traceN=%d\n", SnapLo, SnapHi, traceN)
 		}
 	}
-	regs, err := t.e.be.ReadGPRegs()
+	// P7.5c: the register-file dump is a capability now — an engine without
+	// it (or an arch it refuses) traces nothing rather than crashing.
+	rr, ok := t.e.be.(emu.RegFileReader)
+	if !ok {
+		return
+	}
+	regs, err := rr.ReadGPRegs()
 	if err != nil {
 		return
 	}
@@ -118,7 +126,7 @@ func (t *insnTracer) onInsn(pc uint64) {
 	t.buf = append(t.buf, ' ', ':')
 	t.buf = appendHex(t.buf, uint64(op), 8)
 	t.buf = append(t.buf, ' ')
-	for i := 0; i < 34; i++ {
+	for i := 0; i < len(regs); i++ {
 		if i == gpIdxPC {
 			continue // pc is the line prefix
 		}
@@ -134,13 +142,16 @@ func (t *insnTracer) onInsn(pc uint64) {
 
 	t.annotate(pc, op, regs)
 
-	t.prev = regs
+	if !t.started {
+		t.prev = make([]uint64, len(regs))
+	}
+	copy(t.prev, regs)
 	t.started = true
 }
 
 // annotate emits a sym: line for control-flow / syscall instructions, resolving
 // targets through the module symbol table.
-func (t *insnTracer) annotate(pc uint64, op uint32, regs [34]uint64) {
+func (t *insnTracer) annotate(pc uint64, op uint32, regs []uint64) {
 	switch {
 	case op&0xFC000000 == 0x94000000: // BL imm26 (direct call)
 		off := int64(int32(op<<6) >> 6) // sign-extend imm26

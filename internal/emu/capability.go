@@ -82,3 +82,17 @@ type CacheInvalidator interface {
 type CodeCacheController interface {
 	FlushCodeCache(start, end GuestAddr) error
 }
+
+// RegFileReader is the whole-register-file dump capability (P7.5c): one call
+// returns the guest's general-purpose register file, cheap enough for
+// per-instruction consumers (the full tracer) — individual RegReads would
+// pay the purego boundary per register. The FILE SHAPE is arch business,
+// never a core contract: entries come in the engine's native file order and
+// only make sense together with the arch package's register model (AArch64:
+// [0..30]=x0..x30, [31]=sp, [32]=pc, [33]=nzcv). Engines without a defined
+// file shape answer an error wrapping ErrUnsupported — loudly, never by
+// stuffing foreign registers into another arch's slots.
+type RegFileReader interface {
+	Backend
+	ReadGPRegs() ([]uint64, error)
+}

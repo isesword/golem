@@ -21,6 +21,17 @@ func rd8le(b []byte) uint64 {
 	return v
 }
 
+// reg reads register-file index i (AArch64 order) and REFUSES to run without
+// the engine's register-file dump — Hook.Reg answers (value, ok) since P7.5c,
+// and this oracle's logic is meaningless with fabricated zeros.
+func reg(h *emulator.Hook, i int) uint64 {
+	v, ok := h.Reg(i)
+	if !ok {
+		panic(fmt.Sprintf("reg x%d: engine has no register-file dump (RegFileReader capability)", i))
+	}
+	return v
+}
+
 // installProbe logs every VM-program entry (sub_2AB64C) with the live head of the body buffer
 // (0x4050a000) and protobuf (0x4052d000), to locate the VM that produces a8bbb28b (ph5-1st cipher),
 // and dumps that producer VM's entry state for offline lifting. Env A8DUMP=<n> dumps entry #n.
@@ -70,7 +81,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 			return b
 		}
 		// x23 = current regfile (handler entry convention)
-		x23 := h.Reg(23)
+		x23 := reg(h, 23)
 		rf, _ := h.Emu().ReadBytes(x23, 8*256)
 		_ = os.WriteFile(tag+"_rf.bin", rf, 0644)
 		_ = os.WriteFile(tag+"_heap.bin", dr(0x40400000, 0x40c00000), 0644)
@@ -148,7 +159,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 			_ = os.WriteFile("med_gen.bin", genDump(0x60000000, 0x60800000), 0644)
 			var sb []byte
 			for i := 0; i < 34; i++ {
-				sb = append(sb, []byte(fmt.Sprintf("%d=%x\n", i, h.Reg(i)))...)
+				sb = append(sb, []byte(fmt.Sprintf("%d=%x\n", i, reg(h, i)))...)
 			}
 			_ = os.WriteFile("med_gpregs.txt", sb, 0644)
 			emulator.TraceGate = true
@@ -184,15 +195,15 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		if !bytes.Contains(pbtail, []byte("false}")) {
 			return
 		}
-		pcb, _ := h.Emu().ReadBytes(h.Reg(19), 4)
-		ib, _ := h.Emu().ReadBytes(h.Reg(20), 8)
+		pcb, _ := h.Emu().ReadBytes(reg(h, 19), 4)
+		ib, _ := h.Emu().ReadBytes(reg(h, 20), 8)
 		bh, _ := h.Emu().ReadBytes(0x4050a000, 8)
 		fmt.Printf("[ENC-ENTRY] ecbN=%d handler@%#x VMpc=%x instrArr=%#x body=%x\n", ecbN, rel(addr), pcb, rel(rd8le(ib)), bh)
 		dumpState(h, "enc")
 		// also dump native GP registers at the trace start, for the lifter's initial state
 		var sb []byte
 		for i := 0; i < 34; i++ {
-			sb = append(sb, []byte(fmt.Sprintf("%d=%x\n", i, h.Reg(i)))...)
+			sb = append(sb, []byte(fmt.Sprintf("%d=%x\n", i, reg(h, i)))...)
 		}
 		_ = os.WriteFile("enc_gpregs.txt", sb, 0644)
 		// emulator.TraceGate = true // (off: this run only needs the rf_at_2c / rf_after_2c dumps)
@@ -209,10 +220,10 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		// the main body cipher writes the ciphertext via SB handler 0x2ad9b0 — capture its VM context
 		// (x20=instrArr ptr, x19=pc ptr, x23=regfile) + dump state, so we can lift the core cipher.
 		if h.PC() == m.Base+0x2ad9b0 && !mencDumped {
-			ib, _ := h.Emu().ReadBytes(h.Reg(20), 8)
-			pcb, _ := h.Emu().ReadBytes(h.Reg(19), 4)
+			ib, _ := h.Emu().ReadBytes(reg(h, 20), 8)
+			pcb, _ := h.Emu().ReadBytes(reg(h, 19), 4)
 			instrArr := rd8le(ib)
-			x23 := h.Reg(23)
+			x23 := reg(h, 23)
 			rf, _ := h.Emu().ReadBytes(x23, 8*256)
 			drm2 := func(lo, hi uint64) []byte {
 				var b []byte
@@ -229,12 +240,12 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 			_ = os.WriteFile("menc_heap.bin", drm2(0x40400000, 0x40c00000), 0644)
 			_ = os.WriteFile("menc_low.bin", drm2(0x40100000, 0x40400000), 0644)
 			_ = os.WriteFile("menc_stack.bin", drm2(0xc07e0000, 0xc0800000), 0644)
-			_ = os.WriteFile("menc_meta.txt", []byte(fmt.Sprintf("instrArr=%#x pc=%d x19=%#x x20=%#x x23=%#x", rel(instrArr), int32(rd8le(pcb)), h.Reg(19), h.Reg(20), x23)), 0644)
+			_ = os.WriteFile("menc_meta.txt", []byte(fmt.Sprintf("instrArr=%#x pc=%d x19=%#x x20=%#x x23=%#x", rel(instrArr), int32(rd8le(pcb)), reg(h, 19), reg(h, 20), x23)), 0644)
 			fmt.Printf("[MENC] main-encryption VM: instrArr=%#x pc=%d x23=%#x\n", rel(instrArr), int32(rd8le(pcb)), x23)
 			mencDumped = true
 		}
 		if bodyWrN <= 30 {
-			fmt.Printf("[BODYWR] pc=%#x lr=%#x addr=%#x sz=%d val=%#x\n", rel(h.PC()), rel(h.Reg(30)), addr, size, uint64(value))
+			fmt.Printf("[BODYWR] pc=%#x lr=%#x addr=%#x sz=%d val=%#x\n", rel(h.PC()), rel(reg(h, 30)), addr, size, uint64(value))
 			bodyWrN++
 		}
 	})
@@ -253,7 +264,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 				continue
 			}
 			if idx := bytes.Index(win, pat); idx >= 0 {
-				fmt.Printf("[MEDFIND] %s @buf=%#x pc=%#x lr=%#x\n", tag, (addr&^63)+uint64(idx), rel(h.PC()), rel(h.Reg(30)))
+				fmt.Printf("[MEDFIND] %s @buf=%#x pc=%#x lr=%#x\n", tag, (addr&^63)+uint64(idx), rel(h.PC()), rel(reg(h, 30)))
 				medFind[tag] = true
 			}
 		}
@@ -269,7 +280,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		pc := h.PC() - m.Base
 		if !medBodyPCs[pc] {
 			medBodyPCs[pc] = true
-			fmt.Printf("[MEDBODY] writer pc=%#x lr=%#x addr=%#x sz=%d\n", pc, rel(h.Reg(30)), addr, size)
+			fmt.Printf("[MEDBODY] writer pc=%#x lr=%#x addr=%#x sz=%d\n", pc, rel(reg(h, 30)), addr, size)
 		}
 		// when the post-XOR head appears, dump the finalized 214-byte buffer (base64 input)
 		if !medBodyDumped {
@@ -292,8 +303,8 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		b, _ := h.Emu().ReadBytes(addr&^7, 16)
 		if i := bytes.Index(b, []byte{0xc2, 0x36, 0xa4, 0xfe, 0x8e, 0x66, 0x53, 0x68}); i >= 0 {
 			body176Found = true
-			ib, _ := h.Emu().ReadBytes(h.Reg(20), 8)
-			pcb, _ := h.Emu().ReadBytes(h.Reg(19), 4)
+			ib, _ := h.Emu().ReadBytes(reg(h, 20), 8)
+			pcb, _ := h.Emu().ReadBytes(reg(h, 19), 4)
 			var ia uint64
 			var pcv int32
 			if len(ib) == 8 {
@@ -303,7 +314,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 				pcv = int32(rd8le(pcb))
 			}
 			fmt.Printf("[BODY176] @buf=%#x writer-pc=%#x lr=%#x VM_ia=%#x VM_pc=%d x23=%#x\n",
-				(addr&^7)+uint64(i), rel(h.PC()), rel(h.Reg(30)), rel(ia), pcv, h.Reg(23))
+				(addr&^7)+uint64(i), rel(h.PC()), rel(reg(h, 30)), rel(ia), pcv, reg(h, 23))
 		}
 	})
 	// [IVM]: the inner VM (0x2db000) main-encryption bytecode lives at ~0x475dxxxx (out of heap). The
@@ -318,7 +329,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		if pc < 0x2dbb00 || pc > 0x2dbca0 { // only the inner-VM decoder's reads
 			return
 		}
-		x9, x10, x11 := h.Reg(9), h.Reg(10), h.Reg(11)
+		x9, x10, x11 := reg(h, 9), reg(h, 10), reg(h, 11)
 		if ivmN == 0 {
 			bc, _ := h.Emu().ReadBytes(x10&^0xff, 0x800)
 			tbl, _ := h.Emu().ReadBytes(x11, 0x300)
@@ -326,7 +337,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 			_ = os.WriteFile("ivm_table.bin", tbl, 0644)
 		}
 		fmt.Printf("[IVMCTX] #%d pc=%#x readaddr=%#x x9=%#x x10=%#x x11=%#x x12=%#x\n",
-			ivmN, pc, addr, x9, x10, x11, h.Reg(12))
+			ivmN, pc, addr, x9, x10, x11, reg(h, 12))
 		ivmN++
 	})
 	// [SBOX]: sub_2caa60's table lookup (ldrb w8,[x8,x3] @0x2caae0) — x3=table base, x8=index. If a
@@ -336,7 +347,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		if sboxN >= 12 {
 			return
 		}
-		x3, x8 := h.Reg(3), h.Reg(8)
+		x3, x8 := reg(h, 3), reg(h, 8)
 		tbl, _ := h.Emu().ReadBytes(x3, 256)
 		fmt.Printf("[SBOX] #%d table@%#x idx=%#x head=%x\n", sboxN, rel(x3), x8, tbl[:24])
 		if sboxN == 0 {
@@ -363,7 +374,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 	heliosSeen := false
 	_, _ = e.HookAddr(m.Base+0x243ac0, func(h *emulator.Hook) {
 		blk, _ := h.Emu().ReadBytes(h.Arg(1), 32)
-		fmt.Printf("[md5blk] blk=%x lr=%#x\n", blk, rel(h.Reg(30)))
+		fmt.Printf("[md5blk] blk=%x lr=%#x\n", blk, rel(reg(h, 30)))
 		if !heliosSeen && len(blk) >= 11 && string(blk[4:10]) == "482431" && blk[10] == 0x80 {
 			heliosSeen = true
 			fmt.Printf("[HELIOS] key block=%x rand4=%x\n", blk[:10], blk[:4])
@@ -414,10 +425,10 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 	// memcpy'd to 0x40154140 — hook both regions to capture the derivation at the source.
 	_, _ = e.HookMemWrite(0x40154130, 0x40154230, func(h *emulator.Hook, addr uint64, size int, value int64) {
 		fmt.Printf("[KEYWR] pc=%#x addr=%#x sz=%d val=%016x x0=%#x x1=%#x x2=%#x lr=%#x\n",
-			rel(h.PC()), addr, size, uint64(value), h.Reg(0), h.Reg(1), h.Reg(2), rel(h.Reg(30)))
+			rel(h.PC()), addr, size, uint64(value), reg(h, 0), reg(h, 1), reg(h, 2), rel(reg(h, 30)))
 		// Capture the RIGHT key-build VM: when an in-.so handler (SB) writes the key bytes, dump its
 		// regfile (x23) + memory + log instrArr context (x0/pcval), and gate the trace for the lift.
-		if !keyTraced && addr >= 0x40154218 && addr <= 0x4015421f && h.Reg(0) >= 0x40a80000 && h.Reg(0) < 0x40a90000 {
+		if !keyTraced && addr >= 0x40154218 && addr <= 0x4015421f && reg(h, 0) >= 0x40a80000 && reg(h, 0) < 0x40a90000 {
 			dd := func(name string, lo, hi uint64) {
 				var b []byte
 				for a := lo; a < hi; a += 0x1000 {
@@ -429,13 +440,13 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 				}
 				_ = os.WriteFile(name, b, 0644)
 			}
-			rf, _ := h.Emu().ReadBytes(h.Reg(23), 8*256)
+			rf, _ := h.Emu().ReadBytes(reg(h, 23), 8*256)
 			_ = os.WriteFile("kb_rf.bin", rf, 0644)
 			dd("kb_heap.bin", 0x40400000, 0x40c00000)
 			dd("kb_low.bin", 0x40100000, 0x40400000)
 			dd("kb_stack.bin", 0xc07e0000, 0xc0800000)
-			pcv, _ := h.Emu().ReadBytes(h.Reg(19), 4)
-			fmt.Printf("[KB] pc=%#x x0=%#x x19=%#x x20=%#x x23=%#x pcval=%x\n", rel(h.PC()), h.Reg(0), h.Reg(19), h.Reg(20), h.Reg(23), pcv)
+			pcv, _ := h.Emu().ReadBytes(reg(h, 19), 4)
+			fmt.Printf("[KB] pc=%#x x0=%#x x19=%#x x20=%#x x23=%#x pcval=%x\n", rel(h.PC()), reg(h, 0), reg(h, 19), reg(h, 20), reg(h, 23), pcv)
 			emulator.TraceGate = true
 			keyTraced = true
 		}
@@ -448,8 +459,8 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		// precip snapshot at the dispatch RIGHT AFTER the encrypt-core's 0x2c (event-based, robust to
 		// per-run address shifts): 0x2c's structure is built, orchestration is past it. The driver
 		// resumes here, auto-resolves the rest (nested VMs + cipher loop) -> body, SKIPPING 0x2c.
-		if encDumped && dumped2c && !dumped13 && h.Reg(1) == orchCtx {
-			ctx := h.Reg(1)
+		if encDumped && dumped2c && !dumped13 && reg(h, 1) == orchCtx {
+			ctx := reg(h, 1)
 			drp := func(lo, hi uint64) []byte {
 				var b []byte
 				for a := lo; a < hi; a += 0x1000 {
@@ -495,7 +506,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		// (sub_2a0a34): inputs at the 0x2c dispatch, outputs at the following 0x13 dispatch. This
 		// lets us model 0x2c's scatter (rf[8/0xb/0xe/0x1b/0x1e]) in pure Python.
 		if encDumped && a3 == 0x2c && !dumped2c {
-			orchCtx = h.Reg(1) // the orchestration's ctx (0x2c is dispatched BY the orchestration)
+			orchCtx = reg(h, 1) // the orchestration's ctx (0x2c is dispatched BY the orchestration)
 			rfb, _ := h.Emu().ReadBytes(orchCtx+0x6050, 8*256)
 			_ = os.WriteFile("rf_at_2c.bin", rfb, 0644)
 			dumped2c = true
@@ -504,8 +515,8 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		// [MOVESRC]: log the 0x6 MOVE's dst(rf8)/src(rf9) in the encrypt core — the src is the buffer
 		// holding the ciphertext body (09ac3193) built by the MAIN encryption (upstream of here).
 		if encDumped && a3 == 0x6 {
-			rf8b, _ := h.Emu().ReadBytes(h.Reg(1)+0x6050+8*8, 8)
-			rf9b, _ := h.Emu().ReadBytes(h.Reg(1)+0x6050+9*8, 8)
+			rf8b, _ := h.Emu().ReadBytes(reg(h, 1)+0x6050+8*8, 8)
+			rf9b, _ := h.Emu().ReadBytes(reg(h, 1)+0x6050+9*8, 8)
 			dst, src := rd8le(rf8b), rd8le(rf9b)
 			// read the src buffer's data ptr (C++ buffer obj: data@+16) + first bytes
 			dp, _ := h.Emu().ReadBytes(src+16, 8)
@@ -540,7 +551,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		// (the cipher's input block) + body[0:8]. Offline: the cipher = the repeated subIA; this
 		// validates enc_cipher_core.py against the real 128 I/O pairs + reveals the loop's body addressing.
 		if encDumped && v4 != 0 {
-			rfreg, _ := h.Emu().ReadBytes(h.Reg(1)+0x6050+5*8, 7*8)
+			rfreg, _ := h.Emu().ReadBytes(reg(h, 1)+0x6050+5*8, 7*8)
 			b8, _ := h.Emu().ReadBytes(0x4050a000, 8)
 			fmt.Printf("[CIO] sub=%#x r5_11=%x body=%x\n", rel(subIA), rfreg, b8)
 		}

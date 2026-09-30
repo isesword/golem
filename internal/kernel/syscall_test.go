@@ -48,7 +48,6 @@ func (f *fakeBE) page(a uint64) []byte {
 
 func (f *fakeBE) RegRead(reg emu.Reg) (uint64, error)  { f.regReads++; return f.regs[reg], nil }
 func (f *fakeBE) RegWrite(reg emu.Reg, v uint64) error { f.regWrites++; f.regs[reg] = v; return nil }
-func (f *fakeBE) ReadGPRegs() ([34]uint64, error)      { return [34]uint64{}, emu.ErrUnsupported }
 
 func (f *fakeBE) MemMap(addr emu.GuestAddr, size uint64, _ int) error {
 	if f.mapErr != nil {

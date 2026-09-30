@@ -233,18 +233,22 @@ func (h *Hook) Arg(i int) uint64 {
 	return args[i]
 }
 
-// Reg returns register Xi for any i in 0..30 (also 31=SP, 32=PC, 33=NZCV) via the
-// full GP register file — for registers that are not call arguments (Arg covers
-// every integer argument, registers and stack spill alike).
-func (h *Hook) Reg(i int) uint64 {
-	if i < 0 || i > 33 {
-		return 0
+// Reg returns (value, ok) for register-file index i — AArch64 order: 0..30 =
+// x0..x30, 31 = SP, 32 = PC, 33 = NZCV — via the RegFileReader capability.
+// ok=false means "this engine/arch has no register-file dump" (or i out of
+// range): a genuine zero value and a missing register stay distinguishable
+// (P7.5c — this used to answer a silent 0 for both). For call ARGUMENTS use
+// Arg: it covers registers and stack spill alike through the CallABI.
+func (h *Hook) Reg(i int) (uint64, bool) {
+	rr, ok := h.e.be.(emu.RegFileReader)
+	if !ok {
+		return 0, false
 	}
-	regs, err := h.e.be.ReadGPRegs()
-	if err != nil {
-		return 0
+	regs, err := rr.ReadGPRegs()
+	if err != nil || i < 0 || i >= len(regs) {
+		return 0, false
 	}
-	return regs[i]
+	return regs[i], true
 }
 
 // SetArg sets integer argument register i — e.g. to rewrite an argument from

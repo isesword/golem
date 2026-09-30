@@ -88,7 +88,6 @@ func (b *bootBE) RegWrite(r emu.Reg, v uint64) error {
 	b.regs[r] = v
 	return nil
 }
-func (b *bootBE) ReadGPRegs() ([34]uint64, error) { return [34]uint64{}, nil }
 
 func (b *bootBE) MemMap(addr emu.GuestAddr, size uint64, _ int) error {
 	b.log("map", uint64(addr), size)

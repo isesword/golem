@@ -96,14 +96,12 @@ type MemWriteHookFunc func(b Backend, addr GuestAddr, size int, value int64)
 // assertions. The Unicorn2 purego wrapper implements the core plus every
 // capability defined today.
 type Backend interface {
-	// Registers
+	// Registers. Per-register access only — the WHOLE-FILE dump is the
+	// optional RegFileReader capability (P7.5c: it used to be a core method
+	// with an AArch64-baked [34]uint64 shape, which is exactly the kind of
+	// arch shape a frozen core must not carry).
 	RegRead(reg Reg) (uint64, error)
 	RegWrite(reg Reg, val uint64) error
-	// ReadGPRegs returns the whole general-purpose register file in one call:
-	// [0..30] = x0..x30, [31] = sp, [32] = pc, [33] = nzcv. Cheap enough to call
-	// per instruction (used by the full instruction tracer); individual RegReads
-	// would be far too slow across the purego boundary.
-	ReadGPRegs() ([34]uint64, error)
 
 	// Memory
 	MemMap(addr GuestAddr, size uint64, prot int) error

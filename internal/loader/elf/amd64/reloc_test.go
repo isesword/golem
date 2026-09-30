@@ -84,7 +84,6 @@ func (m *memBE) MemMapPtr(addr emu.GuestAddr, size uint64, prot int, host unsafe
 
 func (m *memBE) RegRead(emu.Reg) (uint64, error) { return 0, nil }
 func (m *memBE) RegWrite(emu.Reg, uint64) error  { return nil }
-func (m *memBE) ReadGPRegs() ([34]uint64, error) { return [34]uint64{}, nil }
 func (m *memBE) Start(emu.GuestAddr, emu.GuestAddr) error {
 	return nil
 }

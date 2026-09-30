@@ -173,11 +173,16 @@ func TestUnicornAMD64SyscallInsnTrap(t *testing.T) {
 }
 
 // TestUnicornAMD64ReadGPRegsUnsupported pins that an AMD64 engine refuses the
-// ARM64-shaped [34] register-file read with ErrUnsupported instead of
-// returning garbage in ARM slots.
+// ARM64 register-file shape with ErrUnsupported instead of returning garbage
+// in ARM slots (P7.5c: the dump is the RegFileReader capability; the shape is
+// arch business, never a core contract).
 func TestUnicornAMD64ReadGPRegsUnsupported(t *testing.T) {
 	be := newAMD64Backend(t)
-	if _, err := be.ReadGPRegs(); !errors.Is(err, ErrUnsupported) {
+	rr, ok := be.(RegFileReader)
+	if !ok {
+		t.Fatal("the AMD64 backend must implement RegFileReader (answering ErrUnsupported is its job)")
+	}
+	if _, err := rr.ReadGPRegs(); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("ReadGPRegs on AMD64: err = %v, want errors.Is(ErrUnsupported)", err)
 	}
 }

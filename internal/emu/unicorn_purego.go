@@ -547,16 +547,19 @@ func (b *unicornBackend) RegWrite(r Reg, val uint64) error {
 	return nil
 }
 
-func (b *unicornBackend) ReadGPRegs() ([34]uint64, error) {
-	var out [34]uint64
+// ReadGPRegs is the RegFileReader capability (P7.5c): AArch64 engines dump
+// their native file order (x0..x30, sp, pc, nzcv); other archs answer
+// ErrUnsupported loudly instead of borrowing the AArch64 shape.
+func (b *unicornBackend) ReadGPRegs() ([]uint64, error) {
 	if b.arch != ArchARM64 {
-		return out, errNoGPRegs(b.arch)
+		return nil, errNoGPRegs(b.arch)
 	}
-	var ptrs [34]unsafe.Pointer
+	out := make([]uint64, len(gpRegIDs))
+	var ptrs [len(gpRegIDs)]unsafe.Pointer
 	for i := range out {
 		ptrs[i] = unsafe.Pointer(&out[i])
 	}
-	if e := pRegRdBat(b.uc, unsafe.Pointer(&gpRegIDs[0]), unsafe.Pointer(&ptrs[0]), int32(34)); e != ucOK {
+	if e := pRegRdBat(b.uc, unsafe.Pointer(&gpRegIDs[0]), unsafe.Pointer(&ptrs[0]), int32(len(gpRegIDs))); e != ucOK {
 		return out, ucErr("read_gpregs", e)
 	}
 	return out, nil

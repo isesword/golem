@@ -32,7 +32,11 @@ func TestBackendRegTranslationViaArm64Consts(t *testing.T) {
 			t.Fatalf("RegRead(%d) = %#x, %v; want %#x", reg, got, err, val)
 		}
 		if gpIdx >= 0 {
-			gp, err := be.ReadGPRegs()
+			rr, ok := be.(emu.RegFileReader)
+			if !ok {
+				t.Fatal("the arm64 unicorn backend must implement RegFileReader")
+			}
+			gp, err := rr.ReadGPRegs()
 			if err != nil {
 				t.Fatal(err)
 			}

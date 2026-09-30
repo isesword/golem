@@ -76,8 +76,13 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 		t.Errorf("final X0 = %d, want %d", got, 5+adds)
 	}
 
-	// Batch GP register read must agree with the individually-read X0.
-	gp, err := be.ReadGPRegs()
+	// Batch GP register read must agree with the individually-read X0
+	// (RegFileReader capability, P7.5c).
+	rr, ok := be.(RegFileReader)
+	if !ok {
+		t.Fatal("the arm64 unicorn backend must implement RegFileReader")
+	}
+	gp, err := rr.ReadGPRegs()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,10 +13,9 @@ import (
 // coreOnlyBE implements ONLY the Backend core interface — no capabilities.
 type coreOnlyBE struct{}
 
-func (coreOnlyBE) RegRead(Reg) (uint64, error)                            { return 0, nil }
-func (coreOnlyBE) RegWrite(Reg, uint64) error                             { return nil }
-func (coreOnlyBE) ReadGPRegs() ([34]uint64, error)                        { return [34]uint64{}, nil }
-func (coreOnlyBE) MemMap(GuestAddr, uint64, int) error                    { return nil }
+func (coreOnlyBE) RegRead(Reg) (uint64, error)                             { return 0, nil }
+func (coreOnlyBE) RegWrite(Reg, uint64) error                              { return nil }
+func (coreOnlyBE) MemMap(GuestAddr, uint64, int) error                     { return nil }
 func (coreOnlyBE) MemUnmap(GuestAddr, uint64) error                       { return nil }
 func (coreOnlyBE) MemProtect(GuestAddr, uint64, int) error                { return nil }
 func (coreOnlyBE) MemWrite(GuestAddr, []byte) error                       { return nil }
@@ -46,6 +45,7 @@ func (fullCapsBE) HookMemWrite(GuestAddr, GuestAddr, MemWriteHookFunc) (HookHand
 func (fullCapsBE) SaveContext() (CPUContext, error) { return nil, nil }
 func (fullCapsBE) RestoreContext(CPUContext) error  { return nil }
 func (fullCapsBE) FlushCache() error                { return nil }
+func (fullCapsBE) ReadGPRegs() ([]uint64, error)    { return nil, nil }
 
 func TestCapabilityProbeCoreOnlyBackend(t *testing.T) {
 	var be Backend = coreOnlyBE{}
@@ -70,6 +70,9 @@ func TestCapabilityProbeCoreOnlyBackend(t *testing.T) {
 	if _, ok := be.(CacheInvalidator); ok {
 		t.Error("core-only backend must NOT satisfy CacheInvalidator")
 	}
+	if _, ok := be.(RegFileReader); ok {
+		t.Error("core-only backend must NOT satisfy RegFileReader")
+	}
 }
 
 func TestCapabilityProbeFullCapsBackend(t *testing.T) {
@@ -82,6 +85,7 @@ func TestCapabilityProbeFullCapsBackend(t *testing.T) {
 		"MemWriteHooker":    func() bool { _, ok := be.(MemWriteHooker); return ok }(),
 		"ContextManager":    func() bool { _, ok := be.(ContextManager); return ok }(),
 		"CacheInvalidator":  func() bool { _, ok := be.(CacheInvalidator); return ok }(),
+		"RegFileReader":     func() bool { _, ok := be.(RegFileReader); return ok }(),
 	} {
 		if !ok {
 			t.Errorf("full-caps backend must satisfy %s", name)
