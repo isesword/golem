@@ -101,7 +101,7 @@ func TestPrepareCallRegisters(t *testing.T) {
 	c := resolveCallABI(t)
 	b := &regRec{regs: map[emu.Reg]uint64{RSP: 0xC0002000}}
 	args := []uint64{1, 2, 3, 4, 5, 6}
-	if err := c.PrepareCall(b, arch.CallRequest{Entry: 0xAAAA, Return: 0xFFFFFF00, Args: args}); err != nil {
+	if err := c.PrepareCall(b, arch.CallRequest{Entry: 0xAAAA, Return: 0xFFFFFF00, Args: arch.WordArgs(args...)}); err != nil {
 		t.Fatal(err)
 	}
 	for i, v := range args {
@@ -129,7 +129,7 @@ func TestPrepareCallStackSpill(t *testing.T) {
 	c := resolveCallABI(t)
 	b := &regRec{regs: map[emu.Reg]uint64{RSP: 0xC0002000}}
 	args := []uint64{1, 2, 3, 4, 5, 6, 7, 8}
-	if err := c.PrepareCall(b, arch.CallRequest{Entry: 0xAAAA, Return: 0xFFFFFF00, Args: args}); err != nil {
+	if err := c.PrepareCall(b, arch.CallRequest{Entry: 0xAAAA, Return: 0xFFFFFF00, Args: arch.WordArgs(args...)}); err != nil {
 		t.Fatal(err)
 	}
 	rsp := b.regs[RSP]
@@ -172,7 +172,7 @@ func TestPrepareCallAlignmentOddSpill(t *testing.T) {
 	for _, origRSP := range []uint64{0xC0002000, 0xC0002010, 0xC0002008} {
 		b := &regRec{regs: map[emu.Reg]uint64{RSP: origRSP}}
 		args := []uint64{1, 2, 3, 4, 5, 6, 7} // one stack arg
-		if err := c.PrepareCall(b, arch.CallRequest{Entry: 0xAAAA, Return: 0xFFFFFF00, Args: args}); err != nil {
+		if err := c.PrepareCall(b, arch.CallRequest{Entry: 0xAAAA, Return: 0xFFFFFF00, Args: arch.WordArgs(args...)}); err != nil {
 			t.Fatal(err)
 		}
 		rsp := b.regs[RSP]

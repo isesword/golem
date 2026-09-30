@@ -1047,7 +1047,19 @@ func (e *Emulator) onSyscallTrap(b emu.Backend, _ emu.TrapKind) {
 // returning the call's result. The CallABI establishes the frame
 // (PrepareCall: register args + stack spill + return address) with the
 // sentinel as the return address, so emulation stops when the callee returns.
+//
+// This is the WORD convenience entry: every argument becomes
+// CallArg{Value, ArgWord} (the pre-P6 semantics). Callers with width/
+// alignment knowledge (64-bit arguments on 32-bit targets) use
+// CallFuncArgs.
 func (e *Emulator) CallFunc(addr uint64, args ...uint64) (uint64, error) {
+	return e.CallFuncArgs(addr, arch.WordArgs(args...)...)
+}
+
+// CallFuncArgs is the typed variant of CallFunc (P6, Architecture
+// Exception #1): each argument carries its ArgKind, which the target's
+// CallABI interprets (a no-op on 64-bit ABIs; load-bearing on 32-bit).
+func (e *Emulator) CallFuncArgs(addr uint64, args ...arch.CallArg) (uint64, error) {
 	if e.poisonErr != nil {
 		return 0, fmt.Errorf("emulator poisoned: %w", e.poisonErr)
 	}
@@ -1091,6 +1103,16 @@ func (e *Emulator) CallSymbol(name string, args ...uint64) (uint64, error) {
 		return 0, fmt.Errorf("symbol %q not found", name)
 	}
 	return e.CallFunc(addr, args...)
+}
+
+// CallSymbolArgs is the typed variant of CallSymbol (P6) — see
+// CallFuncArgs.
+func (e *Emulator) CallSymbolArgs(name string, args ...arch.CallArg) (uint64, error) {
+	addr, ok := e.Sym(name)
+	if !ok {
+		return 0, fmt.Errorf("symbol %q not found", name)
+	}
+	return e.CallFuncArgs(addr, args...)
 }
 
 // CallOffset calls a function at module base + offset — for non-exported entry

@@ -279,7 +279,7 @@ func TestAndroidAMD64AcceptanceChain(t *testing.T) {
 			t.Fatal(err)
 		}
 		entry := emu.GuestAddr(base + fn)
-		if err := callABI.PrepareCall(be, arch.CallRequest{Entry: entry, Return: sentinel, Args: args}); err != nil {
+		if err := callABI.PrepareCall(be, arch.CallRequest{Entry: entry, Return: sentinel, Args: arch.WordArgs(args...)}); err != nil {
 			t.Fatalf("%s: PrepareCall: %v", name, err)
 		}
 		if err := be.Start(entry, emu.GuestAddr(sentinel)); err != nil {

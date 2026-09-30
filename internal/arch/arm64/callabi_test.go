@@ -76,7 +76,7 @@ func TestPrepareCallRegisters(t *testing.T) {
 	c := resolveCallABI(t)
 	b := &regRec{regs: map[emu.Reg]uint64{SP: 0xC0002000}}
 	args := []uint64{1, 2, 3, 4, 5, 6, 7, 8}
-	if err := c.PrepareCall(b, arch.CallRequest{Entry: 0xAAAA, Return: 0xFFFFFF00, Args: args}); err != nil {
+	if err := c.PrepareCall(b, arch.CallRequest{Entry: 0xAAAA, Return: 0xFFFFFF00, Args: arch.WordArgs(args...)}); err != nil {
 		t.Fatal(err)
 	}
 	for i, v := range args {
@@ -103,7 +103,7 @@ func TestPrepareCallStackSpill(t *testing.T) {
 	c := resolveCallABI(t)
 	b := &regRec{regs: map[emu.Reg]uint64{SP: 0xC0002000}}
 	args := []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
-	if err := c.PrepareCall(b, arch.CallRequest{Entry: 0xAAAA, Return: 0xFFFFFF00, Args: args}); err != nil {
+	if err := c.PrepareCall(b, arch.CallRequest{Entry: 0xAAAA, Return: 0xFFFFFF00, Args: arch.WordArgs(args...)}); err != nil {
 		t.Fatal(err)
 	}
 	sp := b.regs[SP]

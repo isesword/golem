@@ -66,11 +66,11 @@ func (sysV64) ResultReg(i int) (emu.Reg, bool) {
 // Nothing below the new RSP is written: the 128-byte red zone of the frame
 // being created stays intact.
 func (sysV64) PrepareCall(b emu.Backend, req arch.CallRequest) error {
-	for i, v := range req.Args {
+	for i, a := range req.Args {
 		if i >= numArgRegs {
 			break
 		}
-		if err := b.RegWrite(argRegs[i], v); err != nil {
+		if err := b.RegWrite(argRegs[i], a.Value); err != nil {
 			return fmt.Errorf("amd64: PrepareCall: arg %d: %w", i, err)
 		}
 	}
@@ -78,7 +78,7 @@ func (sysV64) PrepareCall(b emu.Backend, req arch.CallRequest) error {
 	if err != nil {
 		return fmt.Errorf("amd64: PrepareCall: read RSP: %w", err)
 	}
-	var stackArgs []uint64
+	var stackArgs []arch.CallArg
 	if len(req.Args) > numArgRegs {
 		stackArgs = req.Args[numArgRegs:]
 	}
@@ -87,8 +87,8 @@ func (sysV64) PrepareCall(b emu.Backend, req arch.CallRequest) error {
 	newRSP := ((rsp - slots*8) &^ 15) - 8
 	frame := make([]byte, slots*8)
 	binary.LittleEndian.PutUint64(frame, uint64(req.Return))
-	for i, v := range stackArgs {
-		binary.LittleEndian.PutUint64(frame[8+i*8:], v)
+	for i, a := range stackArgs {
+		binary.LittleEndian.PutUint64(frame[8+i*8:], a.Value)
 	}
 	if err := b.MemWrite(emu.GuestAddr(newRSP), frame); err != nil {
 		return fmt.Errorf("amd64: PrepareCall: write %d stack slots at RSP %#x: %w", slots, newRSP, err)

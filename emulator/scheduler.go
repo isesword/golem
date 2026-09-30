@@ -184,7 +184,7 @@ func (e *Emulator) runFiberSlice(f *fiber) error {
 		if err := e.callABI.PrepareCall(e.be, arch.CallRequest{
 			Entry:  emu.GuestAddr(f.routine),
 			Return: sentinel,
-			Args:   []uint64{f.arg},
+			Args:   []arch.CallArg{{Value: f.arg, Kind: arch.ArgWord}},
 		}); err != nil {
 			return fmt.Errorf("fiber %d: PrepareCall: %w", f.id, err)
 		}

@@ -10,15 +10,70 @@ type CallResult struct {
 	Value2 uint64
 }
 
+// ArgKind is the width/alignment class of one call argument (P6,
+// Architecture Exception #1). It exists because the pre-P6 []uint64 could
+// not distinguish (uint32)1 from (uint64)1 — a distinction 32-bit ABIs
+// MUST make: AAPCS32 and the Linux EABI place a 64-bit argument in an
+// EVEN-NUMBERED register pair (r0:r1 or r2:r3), so a preceding 32-bit
+// argument changes where the pair lands.
+type ArgKind uint8
+
+const (
+	// ArgWord is one machine word of the TARGET's natural width: a single
+	// 64-bit slot on 64-bit ABIs, one 32-bit register/stack word (the low
+	// half of Value) on 32-bit ABIs. This is the pre-P6 []uint64 semantics —
+	// the default for callers with no width knowledge (plain integer args,
+	// guest register values forwarded verbatim).
+	ArgWord ArgKind = iota
+	// ArgU64 is an unsigned 64-bit integer. On 32-bit ABIs it occupies an
+	// even register pair / 8-byte stack slot; on 64-bit ABIs it is a single
+	// slot, bit-identical to ArgWord.
+	ArgU64
+	// ArgI64 is a signed 64-bit integer. Same placement as ArgU64; the
+	// distinction matters on the READ side (sign interpretation when a
+	// 32-bit guest retrieves it), not on placement.
+	ArgI64
+	// ArgPtr is a guest pointer of the target's width: one 64-bit slot on
+	// 64-bit ABIs, one 32-bit word on 32-bit ABIs. Placement matches
+	// ArgWord today; the kind exists so precision paths (JNI, marshalers)
+	// can state intent — and so a future ABI that boxes pointers has a
+	// place to hang the rule.
+	ArgPtr
+)
+
+// CallArg is one typed call argument: the value plus its width/alignment
+// class (P6, Architecture Exception #1 — see ArgKind). 64-bit ABIs
+// (AAPCS64, SysV AMD64) treat every kind as a single 64-bit slot, so typed
+// and untyped calls are bit-identical there; the kind becomes load-bearing
+// on 32-bit ABIs (AAPCS32, P6b).
+type CallArg struct {
+	Value uint64
+	Kind  ArgKind
+}
+
+// WordArgs maps plain 64-bit words to ArgWord CallArgs — the convenience
+// entry for callers with no width/alignment knowledge (exactly the pre-P6
+// []uint64 semantics).
+func WordArgs(args ...uint64) []CallArg {
+	if len(args) == 0 {
+		return nil
+	}
+	out := make([]CallArg, len(args))
+	for i, v := range args {
+		out[i] = CallArg{Value: v, Kind: ArgWord}
+	}
+	return out
+}
+
 // CallRequest is one host→guest function call to establish: the entry point,
 // the return address the callee hands control back to (a stop sentinel in
-// practice), and the integer arguments. PrepareCall builds the call frame on
-// the thread's EXISTING stack — it never allocates a stack and knows nothing
-// about the AddressSpace.
+// practice), and the typed integer arguments. PrepareCall builds the call
+// frame on the thread's EXISTING stack — it never allocates a stack and
+// knows nothing about the AddressSpace.
 type CallRequest struct {
 	Entry  emu.GuestAddr // function entry; becomes PC
 	Return emu.GuestAddr // return address (LR on ARM64; pushed on AMD64)
-	Args   []uint64      // integer arguments in order; excess spill to the stack
+	Args   []CallArg     // typed arguments in order; excess spill to the stack
 }
 
 // CallABI is the user-space function calling convention of one (ID, Variant)
@@ -36,6 +91,14 @@ type CallRequest struct {
 // CallABIIntrospector interface below (debugger / inline hooks), so a future
 // convention whose arguments do not map to plain registers is not forced to
 // invent fake ones.
+//
+// P6 (Architecture Exception #1) typed the arguments: PrepareCall consumes
+// []CallArg. Implementations for 64-bit conventions (AAPCS64, SysV AMD64)
+// place every ArgKind in one 64-bit slot — bit-identical to the pre-P6
+// behavior; a 32-bit convention (AAPCS32) interprets ArgWord/ArgPtr as one
+// 32-bit word and ArgU64/ArgI64 as an even register pair / 8-byte stack
+// slot. ReadArgs still reports plain words (the pair interpretation is the
+// reader's convention detail, P6b).
 type CallABI interface {
 	// PrepareCall establishes a call frame for req on the current thread's
 	// existing stack and registers:

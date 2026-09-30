@@ -41,13 +41,14 @@ func (aapcs64) ResultReg(i int) (emu.Reg, bool) {
 // PrepareCall establishes an AAPCS64 call frame on the current stack: args
 // 0..7 in X0..X7, args 8+ at [SP, #(i-8)*8] after decrementing SP by a
 // 16-aligned spill area (AAPCS64 keeps SP 16-aligned at public interfaces),
-// LR ← req.Return, PC ← req.Entry.
+// LR ← req.Return, PC ← req.Entry. Every ArgKind occupies one 64-bit slot
+// (P6: AAPCS64 has no sub-word or paired placement).
 func (aapcs64) PrepareCall(b emu.Backend, req arch.CallRequest) error {
-	for i, v := range req.Args {
+	for i, a := range req.Args {
 		if i >= numArgRegs {
 			break
 		}
-		if err := b.RegWrite(X0+emu.Reg(i), v); err != nil {
+		if err := b.RegWrite(X0+emu.Reg(i), a.Value); err != nil {
 			return fmt.Errorf("arm64: PrepareCall: arg %d: %w", i, err)
 		}
 	}
@@ -60,8 +61,8 @@ func (aapcs64) PrepareCall(b emu.Backend, req arch.CallRequest) error {
 		space := (uint64(len(spill))*8 + 15) &^ 15 // keep SP 16-aligned
 		sp -= space
 		raw := make([]byte, len(spill)*8)
-		for i, v := range spill {
-			binary.LittleEndian.PutUint64(raw[i*8:], v)
+		for i, a := range spill {
+			binary.LittleEndian.PutUint64(raw[i*8:], a.Value)
 		}
 		if err := b.MemWrite(emu.GuestAddr(sp), raw); err != nil {
 			return fmt.Errorf("arm64: PrepareCall: write %d stack args at SP %#x: %w", len(spill), sp, err)
