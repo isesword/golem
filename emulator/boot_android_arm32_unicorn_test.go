@@ -53,7 +53,8 @@ func TestBootAndroidARM32EndToEnd(t *testing.T) {
 		android.WithReplaceFns(map[string]interpose.HostFunc{
 			"host_magic": func(ctx interpose.CallContext) uint64 {
 				hostMagicRan++
-				return ctx.(*Hook).Arg(0) * 2
+				v, _ := ctx.(*Hook).Arg(0)
+				return v.Raw * 2
 			},
 		}),
 	)))

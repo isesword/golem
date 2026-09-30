@@ -57,7 +57,9 @@ func main() {
 
 	// Replace: swap the native add with a Go implementation (unidbg-style hook)
 	_ = e.ReplaceSymbol("add", func(h *emulator.Hook) uint64 {
-		return h.Arg(0)*10 + h.Arg(1) // a+b becomes a*10+b
+		a, _ := h.Arg(0)
+		b, _ := h.Arg(1)
+		return a.Raw*10 + b.Raw // a+b becomes a*10+b
 	})
 	add2, _ := e.CallSymbol("add", 2, 3)
 	fmt.Printf("add(2, 3) after Replace = %d  (Go hook: a*10+b)\n", int32(add2))

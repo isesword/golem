@@ -45,3 +45,40 @@ func TestHookReadRole(t *testing.T) {
 	var hc HookContext = h // compile-time: Hook satisfies the Portable facade
 	_ = hc
 }
+
+// TestHookSemanticGating pins the P9 context contract: entry-scoped
+// questions (Arg/ReturnAddress) answer at function-entry hooks and fail
+// with ErrContextUnavailable at instruction hooks — while ReadRole stays
+// available everywhere (it is CPU observation, not a call-context fact).
+func TestHookSemanticGating(t *testing.T) {
+	be := &jniStubBE{
+		regs:  map[emu.Reg]uint64{arm64.LR: 0xFFFFFF00, arm64.X0: 7},
+		guest: map[uint64][]byte{},
+		wrote: map[uint64][]byte{},
+	}
+	e := newTestEmulator(t, be)
+
+	entry := &Hook{e: e, kind: HookFunctionEntry}
+	if lr, err := entry.ReturnAddress(); err != nil || lr != 0xFFFFFF00 {
+		t.Errorf("entry ReturnAddress = %#x, %v; want 0xffffff00 (X30)", lr, err)
+	}
+	if v, err := entry.Arg(0); err != nil || v.Raw != 7 {
+		t.Errorf("entry Arg(0) = %+v, %v; want raw 7", v, err)
+	}
+
+	insn := &Hook{e: e, kind: HookInstruction}
+	if _, err := insn.ReturnAddress(); !errors.Is(err, ErrContextUnavailable) {
+		t.Errorf("instruction ReturnAddress err = %v, want ErrContextUnavailable", err)
+	}
+	if _, err := insn.Arg(0); !errors.Is(err, ErrContextUnavailable) {
+		t.Errorf("instruction Arg(0) err = %v, want ErrContextUnavailable", err)
+	}
+	if _, err := insn.ReadRole(RoleLR); err != nil {
+		t.Errorf("instruction ReadRole(LR) err = %v, want nil (CPU observation is kind-independent)", err)
+	}
+
+	// ReturnValue needs a function-EXIT context; none is installable yet.
+	if _, err := entry.ReturnValue(); !errors.Is(err, ErrContextUnavailable) {
+		t.Errorf("ReturnValue err = %v, want ErrContextUnavailable (no exit hooks yet)", err)
+	}
+}

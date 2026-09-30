@@ -56,7 +56,7 @@ func TestReplaceInterposesOnlyThatEngine(t *testing.T) {
 	}
 
 	// engine A interposes add: a*10+b
-	a.Replace(addrA, func(h *Hook) uint64 { return h.Arg(0)*10 + h.Arg(1) })
+	a.Replace(addrA, func(h *Hook) uint64 { return mustArg(h, 0)*10 + mustArg(h, 1) })
 
 	// Interposition writes NO guest memory: the range stays shared in A.
 	if !a.isShared(addrA, 8) {
@@ -113,7 +113,7 @@ func TestReplaceFnsPostBootExportPatch(t *testing.T) {
 		AssetRoot: "../assets",
 		Android: AndroidConfig{
 			ReplaceFns: map[string]func(h *Hook) uint64{
-				"add": func(h *Hook) uint64 { return h.Arg(0)*10 + h.Arg(1) },
+				"add": func(h *Hook) uint64 { return mustArg(h, 0)*10 + mustArg(h, 1) },
 			},
 		},
 	})

@@ -23,7 +23,7 @@ func TestWithPlatformConfigBootEquivalence(t *testing.T) {
 		android.WithReplaceFns(map[string]interpose.HostFunc{
 			"add": func(ctx interpose.CallContext) uint64 {
 				h := ctx.(*Hook)
-				return h.Arg(0)*10 + h.Arg(1)
+				return mustArg(h, 0)*10 + mustArg(h, 1)
 			},
 		}),
 	)))

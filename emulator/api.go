@@ -222,18 +222,62 @@ type Hook struct {
 // Emu returns the emulator, for memory access inside a Replace callback.
 func (h *Hook) Emu() *Emulator { return h.e }
 
-// Arg returns integer argument i (0-based) of the in-flight guest call, read
-// through the CallABI (register portion first, then the stack spill area —
-// valid at function entry, where interposition entry hooks fire).
-func (h *Hook) Arg(i int) uint64 {
+// Arg returns integer argument i (0-based) of the in-flight guest call as a
+// machine-word Value (Portable API, P9): read through the CallABI (register
+// portion first, then the stack spill area — the entry-state contract).
+//
+// Valid ONLY at function-entry hooks (ReplaceFns / ReplaceE / HookSymbol):
+// there the ABI defines what "argument i" is. At an instruction hook the
+// "argument registers" are just registers — answering would be a guess, so
+// it fails with ErrContextUnavailable (use Reg/RegRead for raw observation).
+func (h *Hook) Arg(i int) (Value, error) {
+	if h.kind != HookFunctionEntry {
+		return Value{}, fmt.Errorf("Arg(%d) at a %s hook — arguments are only defined at function entry: %w", i, h.kind, ErrContextUnavailable)
+	}
 	if i < 0 {
-		return 0
+		return Value{}, fmt.Errorf("Arg(%d): negative argument index", i)
 	}
 	args, err := h.e.callABI.ReadArgs(h.e.be, i+1)
-	if err != nil || len(args) <= i {
-		return 0
+	if err != nil {
+		return Value{}, fmt.Errorf("Arg(%d): %w", i, err)
 	}
-	return args[i]
+	if len(args) <= i {
+		return Value{}, fmt.Errorf("Arg(%d): only %d argument(s) readable: %w", i, len(args), ErrContextUnavailable)
+	}
+	return Value{Kind: Word, Raw: args[i]}, nil
+}
+
+// ReturnValue returns the value the in-flight call is RETURNING (Portable
+// API, P9). Only well-defined where the call has already PRODUCED its
+// result — a function-EXIT context. golem installs no exit hooks yet
+// (HookFunctionExit is reserved), so every context answerable today fails
+// with ErrContextUnavailable rather than reading pre-call register junk.
+func (h *Hook) ReturnValue() (Value, error) {
+	if h.kind != HookFunctionExit {
+		return Value{}, fmt.Errorf("ReturnValue at a %s hook — the result only exists at function exit: %w", h.kind, ErrContextUnavailable)
+	}
+	r, err := h.e.callABI.ReadResult(h.e.be)
+	if err != nil {
+		return Value{}, fmt.Errorf("ReturnValue: %w", err)
+	}
+	return Value{Kind: Word, Raw: r.Value}, nil
+}
+
+// ReturnAddress returns where the in-flight call will return to (Portable
+// API, P9) — per convention: X30 on ARM64, R14 on ARM32, [RSP] on AMD64.
+// Valid ONLY at function-entry hooks; an instruction hook fired mid-frame
+// cannot know the caller, so it answers ErrContextUnavailable (use
+// ReadRole(RoleLR) for the raw link-register value where the architecture
+// has one — that is a CPU observation, not a call-context fact).
+func (h *Hook) ReturnAddress() (uint64, error) {
+	if h.kind != HookFunctionEntry {
+		return 0, fmt.Errorf("ReturnAddress at a %s hook — the caller is only defined at function entry: %w", h.kind, ErrContextUnavailable)
+	}
+	v, err := h.e.callABI.ReadReturnAddress(h.e.be)
+	if err != nil {
+		return 0, fmt.Errorf("ReturnAddress: %w", err)
+	}
+	return uint64(v), nil
 }
 
 // Reg returns (value, ok) for register-file index i — AArch64 order: 0..30 =
@@ -408,26 +452,35 @@ func (e *Emulator) ReplaceSymbol(name string, fn ReplaceFunc) error {
 // (Replace uses the same capability since P2.5d — entry interception is an
 // execution hook too, no longer an SVC trap patch.)
 func (e *Emulator) HookAddr(addr uint64, fn func(h *Hook)) (func(), error) {
-	ih, ok := e.be.(emu.InstructionHooker)
-	if !ok {
-		return nil, e.capabilityUnavailable("HookAddr")
-	}
-	h, err := ih.HookCode(emu.GuestAddr(addr), emu.GuestAddr(addr), e.guardCode(func(b emu.Backend, a uint64, size uint32) {
-		fn(&Hook{e: e, kind: HookInstruction})
-	}))
-	if err != nil {
-		return nil, e.capabilityErr("HookAddr", err)
-	}
-	return func() { _ = h.Remove() }, nil
+	return e.hookAddrKind(addr, fn, HookInstruction)
 }
 
-// HookSymbol is HookAddr by exported symbol name.
+// HookSymbol is HookAddr by exported symbol name. Unlike HookAddr it marks
+// the context as FUNCTION-ENTRY (an exported function symbol's address IS
+// the entry — the P9 semantic questions Arg/ReturnAddress are answerable);
+// only hook function symbols with it, never data symbols.
 func (e *Emulator) HookSymbol(name string, fn func(h *Hook)) (func(), error) {
 	addr, ok := e.Sym(name)
 	if !ok {
 		return nil, fmt.Errorf("symbol %q not found", name)
 	}
-	return e.HookAddr(addr, fn)
+	return e.hookAddrKind(addr, fn, HookFunctionEntry)
+}
+
+// hookAddrKind is the shared per-address code-hook installer; kind labels
+// the P9 context the callback will observe.
+func (e *Emulator) hookAddrKind(addr uint64, fn func(h *Hook), kind HookKind) (func(), error) {
+	ih, ok := e.be.(emu.InstructionHooker)
+	if !ok {
+		return nil, e.capabilityUnavailable("HookAddr")
+	}
+	h, err := ih.HookCode(emu.GuestAddr(addr), emu.GuestAddr(addr), e.guardCode(func(b emu.Backend, a uint64, size uint32) {
+		fn(&Hook{e: e, kind: kind})
+	}))
+	if err != nil {
+		return nil, e.capabilityErr("HookAddr", err)
+	}
+	return func() { _ = h.Remove() }, nil
 }
 
 // HookRange installs a per-instruction hook over [start,end); fn gets the Hook

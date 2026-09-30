@@ -46,7 +46,7 @@ func TestNativeSo(t *testing.T) {
 		t.Fatalf("sum_into -> *out = %d, want 42", v)
 	}
 	// Replace swaps the native add for a Go implementation.
-	if err := e.ReplaceSymbol("add", func(h *Hook) uint64 { return h.Arg(0)*10 + h.Arg(1) }); err != nil {
+	if err := e.ReplaceSymbol("add", func(h *Hook) uint64 { return mustArg(h, 0)*10 + mustArg(h, 1) }); err != nil {
 		t.Fatal(err)
 	}
 	if r, _ := e.CallSymbol("add", 2, 3); int32(r) != 23 {
@@ -108,7 +108,7 @@ func TestInlineHook(t *testing.T) {
 	}
 	defer e.Close()
 
-	rm, err := e.HookSymbol("add", func(h *Hook) { h.SetArg(1, h.Arg(1)+100) })
+	rm, err := e.HookSymbol("add", func(h *Hook) { h.SetArg(1, mustArg(h, 1)+100) })
 	if e.Engine() != "unicorn" {
 		if err == nil {
 			t.Fatalf("expected HookAddr to error on %s engine", e.Engine())

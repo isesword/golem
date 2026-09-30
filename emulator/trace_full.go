@@ -57,7 +57,7 @@ type insnTracer struct {
 	base    uint64   // module base, for module-relative offsets
 	prev    []uint64 // register file as of the previous traced instruction
 	started bool
-	buf     []byte // reusable line scratch
+	buf     []byte   // reusable line scratch
 	names   []string // register names indexed by file order (arch-shaped)
 	pcIdx   int      // file index of pc (carried in the line prefix, not as a delta)
 	arm64   bool     // AArch64-specific opcode annotations (BL/BLR/SVC decode)

@@ -67,11 +67,23 @@ type HookContext interface {
 	PC() uint64
 	// SP is the stack pointer.
 	SP() uint64
+	// Arg returns integer argument i as a machine-word Value. Only
+	// answerable at function-entry hooks; elsewhere ErrContextUnavailable.
+	Arg(i int) (Value, error)
+	// ReturnValue returns the call's result. Only answerable at function-
+	// exit hooks (none installable yet); elsewhere ErrContextUnavailable.
+	ReturnValue() (Value, error)
+	// ReturnAddress returns the call's return address. Only answerable at
+	// function-entry hooks; elsewhere ErrContextUnavailable.
+	ReturnAddress() (uint64, error)
 	// ReadRole reads a register by ABI role. CPU-state observation: valid
 	// at any kind; an architecture without the role answers
 	// ErrUnsupportedRole.
 	ReadRole(role RegisterRole) (uint64, error)
 }
+
+// Hook satisfies the Portable facade.
+var _ HookContext = (*Hook)(nil)
 
 // Kind implements HookContext.
 func (h *Hook) Kind() HookKind { return h.kind }

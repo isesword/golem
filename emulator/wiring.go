@@ -6,8 +6,8 @@ package emulator
 // loader nor its subpackages may import emulator.
 import (
 	_ "github.com/isesword/golem/internal/loader/elf"       // FormatELF parser
-	_ "github.com/isesword/golem/internal/loader/elf/arm64" // (FormatELF, ArchARM64) relocator
 	_ "github.com/isesword/golem/internal/loader/elf/amd64" // (FormatELF, ArchAMD64) relocator (P5a)
+	_ "github.com/isesword/golem/internal/loader/elf/arm64" // (FormatELF, ArchARM64) relocator
 
 	// P5b: the Mach-O container — parser + (FormatMachO, ArchARM64)
 	// relocator. Darwin boots are proven end-to-end by the unicorn-tagged

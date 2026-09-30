@@ -46,7 +46,7 @@ func TestBootAndroidARM32RealBionicJNI(t *testing.T) {
 			// real /dev/log socket is out of scope.
 			"__android_log_print": func(ctx interpose.CallContext) uint64 {
 				h := ctx.(*Hook)
-				logCalls = append(logCalls, logCall{prio: h.Arg(0), tag: h.Arg(1)})
+				logCalls = append(logCalls, logCall{prio: mustArg(h, 0), tag: mustArg(h, 1)})
 				return 0
 			},
 		}),

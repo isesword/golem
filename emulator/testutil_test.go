@@ -65,8 +65,8 @@ func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 			Table:     pers.Table,
 			Codecs:    pers.Codecs,
 		},
-		sysFutex:         pers.Futex,
-		sysNanosleep:     pers.Nanosleep,
+		sysFutex:          pers.Futex,
+		sysNanosleep:      pers.Nanosleep,
 		sysClockNanosleep: pers.ClockNanosleep,
 	}
 	// P2.5d: the interpose components New wires (stub manager over the
@@ -81,4 +81,14 @@ func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 	)
 	e.cacheRoleRegs()
 	return e
+}
+
+// mustArg is the test-side Portable Arg read: every hook callback in this
+// suite fires at a function-entry context, so an error here is a test bug.
+func mustArg(h *Hook, i int) uint64 {
+	v, err := h.Arg(i)
+	if err != nil {
+		panic(err)
+	}
+	return v.Raw
 }

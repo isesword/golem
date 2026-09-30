@@ -14,10 +14,10 @@ import (
 type RegisterRole = arch.RegisterRole
 
 const (
-	RolePC RegisterRole = arch.RolePC // program counter
-	RoleSP RegisterRole = arch.RoleSP // stack pointer
-	RoleFP RegisterRole = arch.RoleFP // frame pointer (arm64 X29, arm32 R11, amd64 RBP)
-	RoleLR RegisterRole = arch.RoleLR // link register (arm64 X30, arm32 R14; AMD64: unsupported)
+	RolePC  RegisterRole = arch.RolePC  // program counter
+	RoleSP  RegisterRole = arch.RoleSP  // stack pointer
+	RoleFP  RegisterRole = arch.RoleFP  // frame pointer (arm64 X29, arm32 R11, amd64 RBP)
+	RoleLR  RegisterRole = arch.RoleLR  // link register (arm64 X30, arm32 R14; AMD64: unsupported)
 	RoleTLS RegisterRole = arch.RoleTLS // thread-pointer base (TPIDR_EL0 / TPIDRURW / FS base)
 )
 

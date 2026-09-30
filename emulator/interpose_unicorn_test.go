@@ -35,7 +35,7 @@ func TestInterposeEntryHookE2E(t *testing.T) {
 	hostRan := 0
 	if err := e.ReplaceE(addr, func(h *Hook) uint64 {
 		hostRan++
-		return h.Arg(0)*10 + h.Arg(1)
+		return mustArg(h, 0)*10 + mustArg(h, 1)
 	}); err != nil {
 		t.Fatal(err)
 	}

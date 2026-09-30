@@ -124,7 +124,7 @@ func TestReplaceDuplicateAddressFails(t *testing.T) {
 func TestInterposeDispatchWritesResultAndReturns(t *testing.T) {
 	be := &hookBE{}
 	e := newTestEmulator(t, be)
-	if err := e.ReplaceE(0x1000, func(h *Hook) uint64 { return h.Arg(0) + 41 }); err != nil {
+	if err := e.ReplaceE(0x1000, func(h *Hook) uint64 { return mustArg(h, 0) + 41 }); err != nil {
 		t.Fatal(err)
 	}
 	if len(be.cbs) != 1 {

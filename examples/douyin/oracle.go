@@ -362,7 +362,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 	// to see if Helios (or anything besides Medusa's 22) uses this white-box AES.
 	aesN := 0
 	_, _ = e.HookAddr(m.Base+0x243084, func(h *emulator.Hook) {
-		x0, x1 := h.Arg(0), h.Arg(1)
+		x0, x1 := reg(h, 0), reg(h, 1)
 		in, _ := h.Emu().ReadBytes(x1, 16)
 		rk0, _ := h.Emu().ReadBytes(x0+0xf0, 16)
 		rkL, _ := h.Emu().ReadBytes(x0+0xf0+160, 16)
@@ -373,7 +373,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 	// material (rand4 + "482431"), walk the FP chain to locate the Helios builder function.
 	heliosSeen := false
 	_, _ = e.HookAddr(m.Base+0x243ac0, func(h *emulator.Hook) {
-		blk, _ := h.Emu().ReadBytes(h.Arg(1), 32)
+		blk, _ := h.Emu().ReadBytes(reg(h, 1), 32)
 		fmt.Printf("[md5blk] blk=%x lr=%#x\n", blk, rel(reg(h, 30)))
 		if !heliosSeen && len(blk) >= 11 && string(blk[4:10]) == "482431" && blk[10] == 0x80 {
 			heliosSeen = true
@@ -483,7 +483,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 			fmt.Printf("[PRECIP] after-0x2c: ctx=%#x VMpc=%d body=%x\n", ctx, int32(rd8le(pcb)), bh4)
 			dumped13 = true
 		}
-		a1, a3 := h.Arg(0), h.Arg(2)
+		a1, a3 := reg(h, 0), reg(h, 2)
 		p1, _ := h.Emu().ReadBytes(a1+8, 8)
 		obj := rd8le(p1)
 		p2, _ := h.Emu().ReadBytes(obj, 8)
@@ -560,12 +560,12 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 	})
 	n := 0
 	_, _ = e.HookAddr(m.Base+0x2ab64c, func(h *emulator.Hook) {
-		x0 := h.Arg(0)
+		x0 := reg(h, 0)
 		ib, _ := h.Emu().ReadBytes(x0, 8)
 		ia := rd8le(ib)
 		body, _ := h.Emu().ReadBytes(0x4050a000, 8)
 		pbh, _ := h.Emu().ReadBytes(0x4052d000, 4)
-		pcb, _ := h.Emu().ReadBytes(h.Arg(1), 4)
+		pcb, _ := h.Emu().ReadBytes(reg(h, 1), 4)
 		pc := uint64(0)
 		if len(pcb) == 4 {
 			pc = uint64(pcb[0]) | uint64(pcb[1])<<8 | uint64(pcb[2])<<16 | uint64(pcb[3])<<24
@@ -573,7 +573,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		fmt.Printf("[vm #%d] ia=%#x pc=%#x body=%x pb=%x\n", n, rel(ia), pc, body, pbh)
 		// dump the cipher-core nested VM (0x4076b760) entry state on its first call (confirm GF mul + lift)
 		if ia == 0x4076b760 && !ccoreDumped {
-			base := h.Arg(1)
+			base := reg(h, 1)
 			x23 := base + 0x6050
 			dr := func(lo, hi uint64) []byte {
 				var b []byte
@@ -613,7 +613,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		}
 		// Medusa body-cipher stage 0x40751800 pc=0x4b1 (first body cipher after the 256x S-box build)
 		if ia == 0x40751800 && pc == 0x4b1 && !med751Dumped {
-			base := h.Arg(1)
+			base := reg(h, 1)
 			rf, _ := h.Emu().ReadBytes(base+0x6050, 8*256)
 			_ = os.WriteFile("med_rf.bin", rf, 0644)
 			_ = os.WriteFile("med_heap.bin", drm(0x40400000, 0x40c00000), 0644)
@@ -625,7 +625,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		// Capture the FIRST 4 body-cipher (0x40751800) invocations to lift each KEY:
 		// Medusa-body / Perseus-body / ... use the same program with different 19-byte keys.
 		if ia == 0x40751800 && pc == 0x4b1 && bcN < 4 {
-			base := h.Arg(1)
+			base := reg(h, 1)
 			suf := fmt.Sprintf("%d", bcN)
 			rf, _ := h.Emu().ReadBytes(base+0x6050, 8*256)
 			_ = os.WriteFile("bc"+suf+"_rf.bin", rf, 0644)
@@ -637,7 +637,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		}
 		// Medusa ph6 stage 0x40900000 (first occurrence) — the chained-boolean cipher
 		if ia == 0x40900000 && !medphDumped {
-			base := h.Arg(1)
+			base := reg(h, 1)
 			rf, _ := h.Emu().ReadBytes(base+0x6050, 8*256)
 			_ = os.WriteFile("medph_rf.bin", rf, 0644)
 			_ = os.WriteFile("medph_heap.bin", drm(0x40400000, 0x40c00000), 0644)
@@ -653,7 +653,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		}
 		// Helios cipher VM entry (instrArr 0x4050ac00) — capture clean entry rf+mem to lift it.
 		if ia == 0x4050ac00 && !helvmDumped {
-			base := h.Arg(1)
+			base := reg(h, 1)
 			rf, _ := h.Emu().ReadBytes(base+0x6050, 8*256)
 			_ = os.WriteFile("helvm_rf.bin", rf, 0644)
 			_ = os.WriteFile("helvm_heap.bin", drm(0x40400000, 0x40c00000), 0644)
@@ -665,7 +665,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		}
 		// Perseus ph6b (E_in assembler) instrArr 0x40900000 at pc=10047 (run_endtoend's STEP1 entry)
 		if ia == 0x40900000 && pc == 10047 && !pPhDumped {
-			base := h.Arg(1)
+			base := reg(h, 1)
 			rf, _ := h.Emu().ReadBytes(base+0x6050, 8*256)
 			_ = os.WriteFile("pph6b_rf.bin", rf, 0644)
 			_ = os.WriteFile("pph6b_heap.bin", drm(0x40400000, 0x40c00000), 0644)
@@ -676,7 +676,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		}
 		// Perseus ph7 (encrypt + base64 -> X-Perseus) instrArr 0x4075b800 (run_endtoend's STEP2)
 		if ia == 0x4075b800 && !ph7Dumped {
-			base := h.Arg(1)
+			base := reg(h, 1)
 			rf, _ := h.Emu().ReadBytes(base+0x6050, 8*256)
 			_ = os.WriteFile("pph7_rf.bin", rf, 0644)
 			_ = os.WriteFile("pph7_heap.bin", drm(0x40400000, 0x40c00000), 0644)
@@ -687,7 +687,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		}
 		// key-build VM (instrArr 0x40a8axxx) — capture entry to lift the per-run body-cipher key derivation.
 		if ia >= 0x40a8a000 && ia < 0x40a8c000 && !kvmDumped {
-			base := h.Arg(1)
+			base := reg(h, 1)
 			rf, _ := h.Emu().ReadBytes(base+0x6050, 8*256)
 			_ = os.WriteFile("kvm_rf.bin", rf, 0644)
 			_ = os.WriteFile("kvm_heap.bin", drm(0x40400000, 0x40c00000), 0644)
@@ -702,7 +702,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 		if ia == 0x4076b760 {
 			cvmN++
 			if !cvmDumped {
-				base := h.Arg(1)
+				base := reg(h, 1)
 				rf, _ := h.Emu().ReadBytes(base+0x6050, 8*256)
 				_ = os.WriteFile("cvm_rf.bin", rf, 0644)
 				_ = os.WriteFile("cvm_heap.bin", drm(0x40400000, 0x40c00000), 0644)
@@ -715,7 +715,7 @@ func installProbe(e *emulator.Emulator, m *emulator.Module) {
 			}
 		}
 		if n == dumpN {
-			base := h.Arg(1)
+			base := reg(h, 1)
 			x23 := base + 0x6050
 			dr := func(lo, hi uint64) []byte {
 				var b []byte

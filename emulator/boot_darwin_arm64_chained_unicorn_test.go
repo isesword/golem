@@ -56,7 +56,7 @@ func TestBootDarwinARM64ChainedEndToEnd(t *testing.T) {
 		darwin.WithReplaceFns(map[string]interpose.HostFunc{
 			"host_magic": func(ctx interpose.CallContext) uint64 {
 				hostMagicRan++
-				return ctx.(*Hook).Arg(0) * 2
+				return mustArg(ctx.(*Hook), 0) * 2
 			},
 		}),
 	)))
