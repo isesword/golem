@@ -137,6 +137,20 @@ type CallABI interface {
 	// (DESIGN.md §3.8): after WriteResult, the interceptor hands control
 	// back to the guest caller through ReturnFromCall.
 	ReturnFromCall(b emu.Backend) error
+
+	// ReadReturnAddress is the P9 OBSERVATION semantic — "where does the
+	// in-flight call return to", per convention:
+	//
+	//	ARM64:       X30 (LR)
+	//	ARM32:       R14 (LR, verbatim — bit0 may carry the Thumb state of
+	//	             the return site, exactly as ReturnFromCall consumes it)
+	//	AMD64 SysV:  [RSP] (8-byte little-endian read at the current SP)
+	//
+	// Valid at FUNCTION-ENTRY call state. At an arbitrary PC the read still
+	// succeeds (it is a register/stack observation), but the caller decides
+	// whether that value MEANS a return address — the facade gates this by
+	// hook kind and reports ErrContextUnavailable where it does not.
+	ReadReturnAddress(b emu.Backend) (emu.GuestAddr, error)
 }
 
 // CallABIIntrospector is an optional capability a CallABI may implement for

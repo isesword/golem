@@ -189,3 +189,21 @@ func (sysV64) ReturnFromCall(b emu.Backend) error {
 	}
 	return nil
 }
+
+// ReadReturnAddress (P9 observation semantics): at function entry (before
+// any prologue) the return address is the 8-byte little-endian word at
+// [RSP] — x86-64 keeps it on the stack, not in a register (invariant 13).
+func (sysV64) ReadReturnAddress(b emu.Backend) (emu.GuestAddr, error) {
+	sp, err := b.RegRead(RSP)
+	if err != nil {
+		return 0, fmt.Errorf("ReadReturnAddress: RSP: %w", err)
+	}
+	raw, err := b.MemRead(emu.GuestAddr(sp), 8)
+	if err != nil {
+		return 0, fmt.Errorf("ReadReturnAddress: [RSP=%#x]: %w", sp, err)
+	}
+	if len(raw) != 8 {
+		return 0, fmt.Errorf("ReadReturnAddress: [RSP=%#x]: short read %d", sp, len(raw))
+	}
+	return emu.GuestAddr(binary.LittleEndian.Uint64(raw)), nil
+}

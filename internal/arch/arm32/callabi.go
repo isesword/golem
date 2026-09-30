@@ -270,3 +270,11 @@ func setPCBX(b emu.Backend, addr uint64) error {
 	}
 	return nil
 }
+
+// ReadReturnAddress (P9 observation semantics): at function entry the
+// in-flight call returns to R14 — verbatim, bit0 may carry the return
+// site's Thumb state exactly as ReturnFromCall consumes it.
+func (aapcs32) ReadReturnAddress(b emu.Backend) (emu.GuestAddr, error) {
+	v, err := b.RegRead(LR)
+	return emu.GuestAddr(v), err
+}

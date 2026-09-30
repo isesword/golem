@@ -214,7 +214,10 @@ func (e *Emulator) ReadCString(addr uint64) (string, error) { return e.ReadCStr(
 // Hook is the context passed to a Replace callback: read the incoming args and
 // reach the emulator for memory access; the callback's return value becomes the
 // call's result (written back per the target's CallABI).
-type Hook struct{ e *Emulator }
+type Hook struct {
+	e    *Emulator
+	kind HookKind // where this hook fires — gates the P9 entry-scoped answers
+}
 
 // Emu returns the emulator, for memory access inside a Replace callback.
 func (h *Hook) Emu() *Emulator { return h.e }
@@ -367,7 +370,7 @@ func (e *Emulator) onInterpose(b emu.Backend, addr uint64, _ uint32) {
 	if !ok {
 		return // hook outlived its binding (cannot happen today; keep it benign)
 	}
-	ret := hf(&Hook{e})
+	ret := hf(&Hook{e: e, kind: HookFunctionEntry})
 	if err := e.callABI.WriteResult(b, arch.CallResult{Value: ret}); err != nil && e.cfg.Verbose {
 		fmt.Printf("[interpose] %#x: WriteResult: %v\n", addr, err)
 	}
@@ -410,7 +413,7 @@ func (e *Emulator) HookAddr(addr uint64, fn func(h *Hook)) (func(), error) {
 		return nil, e.capabilityUnavailable("HookAddr")
 	}
 	h, err := ih.HookCode(emu.GuestAddr(addr), emu.GuestAddr(addr), e.guardCode(func(b emu.Backend, a uint64, size uint32) {
-		fn(&Hook{e})
+		fn(&Hook{e: e, kind: HookInstruction})
 	}))
 	if err != nil {
 		return nil, e.capabilityErr("HookAddr", err)
@@ -436,7 +439,7 @@ func (e *Emulator) HookRange(start, end uint64, fn func(h *Hook, addr uint64)) (
 		return nil, e.capabilityUnavailable("HookRange")
 	}
 	h, err := ih.HookCode(emu.GuestAddr(start), emu.GuestAddr(end), e.guardCode(func(b emu.Backend, a uint64, size uint32) {
-		fn(&Hook{e}, a)
+		fn(&Hook{e: e, kind: HookInstruction}, a)
 	}))
 	if err != nil {
 		return nil, e.capabilityErr("HookRange", err)
@@ -453,7 +456,7 @@ func (e *Emulator) HookMemRead(start, end uint64, fn func(h *Hook, addr uint64, 
 		return nil, e.capabilityUnavailable("HookMemRead")
 	}
 	h, err := mh.HookMemRead(emu.GuestAddr(start), emu.GuestAddr(end), e.guardMemRead(func(b emu.Backend, addr uint64, size int) {
-		fn(&Hook{e}, addr, size)
+		fn(&Hook{e: e, kind: HookInstruction}, addr, size)
 	}))
 	if err != nil {
 		return nil, e.capabilityErr("HookMemRead", err)
@@ -470,7 +473,7 @@ func (e *Emulator) HookMemWrite(start, end uint64, fn func(h *Hook, addr uint64,
 		return nil, e.capabilityUnavailable("HookMemWrite")
 	}
 	h, err := mh.HookMemWrite(emu.GuestAddr(start), emu.GuestAddr(end), e.guardMemWrite(func(b emu.Backend, addr uint64, size int, value int64) {
-		fn(&Hook{e}, addr, size, value)
+		fn(&Hook{e: e, kind: HookInstruction}, addr, size, value)
 	}))
 	if err != nil {
 		return nil, e.capabilityErr("HookMemWrite", err)

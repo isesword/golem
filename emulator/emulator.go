@@ -535,7 +535,7 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 		// exist. Exported-symbol replacement happens in the post-boot second
 		// pass below, via ReplaceE.)
 		e.bindHostFn(name, e.guardHostFn(func(em *Emulator, b emu.Backend) {
-			ret := hf(&Hook{em})
+			ret := hf(&Hook{e: em, kind: HookFunctionEntry})
 			_ = em.callABI.WriteResult(b, arch.CallResult{Value: ret})
 		}))
 	} // libc functions we implement in Go (need no libc init)
@@ -979,7 +979,7 @@ func (e *Emulator) onStubTrap(b emu.Backend, _ emu.TrapKind) {
 	if desc, ok := e.stubMgr.Lookup(stub); ok && desc.Kind == arch.StubHostCall {
 		if name, cut := strings.CutPrefix(desc.Name, "host:"); cut {
 			if hf, ok := e.itab.LookupSymbol(name); ok {
-				hf(&Hook{e})
+				hf(&Hook{e: e, kind: HookFunctionEntry})
 				return
 			}
 		}

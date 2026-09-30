@@ -33,9 +33,10 @@ func (f fakeCallABI) PrepareCall(emu.Backend, CallRequest) error { return nil }
 func (f fakeCallABI) ReadArgs(emu.Backend, int) ([]uint64, error) {
 	return nil, nil
 }
-func (f fakeCallABI) WriteResult(emu.Backend, CallResult) error  { return nil }
-func (f fakeCallABI) ReadResult(emu.Backend) (CallResult, error) { return CallResult{}, nil }
-func (f fakeCallABI) ReturnFromCall(emu.Backend) error           { return nil }
+func (f fakeCallABI) WriteResult(emu.Backend, CallResult) error            { return nil }
+func (f fakeCallABI) ReadResult(emu.Backend) (CallResult, error)           { return CallResult{}, nil }
+func (f fakeCallABI) ReturnFromCall(emu.Backend) error                     { return nil }
+func (f fakeCallABI) ReadReturnAddress(emu.Backend) (emu.GuestAddr, error) { return 0, nil }
 
 type fakeStubEnc struct{ tag string }
 

@@ -143,3 +143,10 @@ func (aapcs64) ReturnFromCall(b emu.Backend) error {
 	}
 	return nil
 }
+
+// ReadReturnAddress (P9 observation semantics): at function entry the
+// in-flight call returns to X30.
+func (aapcs64) ReadReturnAddress(b emu.Backend) (emu.GuestAddr, error) {
+	v, err := b.RegRead(LR)
+	return emu.GuestAddr(v), err
+}

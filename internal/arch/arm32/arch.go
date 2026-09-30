@@ -2,6 +2,7 @@ package arm32
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/emu"
@@ -59,3 +60,25 @@ func (cpuArch) SetTLSBase(b emu.Backend, addr emu.GuestAddr) error {
 // Callers must not use NormalizeCodeAddr to decide execution state, and
 // must not feed it an address whose bit0 they still need.
 func (cpuArch) NormalizeCodeAddr(addr emu.GuestAddr) emu.GuestAddr { return addr &^ 1 }
+
+// ReadRole implements arch.RoleReader (P9): register roles by ABI meaning.
+// CPU-state observation — valid at any PC.
+func (cpuArch) ReadRole(b emu.Backend, role arch.RegisterRole) (uint64, error) {
+	switch role {
+	case arch.RolePC:
+		return b.RegRead(PC)
+	case arch.RoleSP:
+		return b.RegRead(SP)
+	case arch.RoleLR:
+		return b.RegRead(LR)
+	case arch.RoleFP:
+		return b.RegRead(R11)
+	case arch.RoleTLS:
+		return b.RegRead(TPIDRURW)
+	default:
+		return 0, fmt.Errorf("arch: role %s: %w", role, arch.ErrUnsupportedRole)
+	}
+}
+
+// arm32 implements the P9 role observer.
+var _ arch.RoleReader = cpuArch{}

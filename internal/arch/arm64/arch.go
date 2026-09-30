@@ -2,6 +2,7 @@ package arm64
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/emu"
@@ -55,3 +56,38 @@ func (cpuArch) SetTLSBase(b emu.Backend, addr emu.GuestAddr) error {
 // TCR_EL1.TBI, so guest code addresses are already canonical. PAC signature
 // recovery is explicitly out of scope here (DESIGN.md invariant 9).
 func (cpuArch) NormalizeCodeAddr(addr emu.GuestAddr) emu.GuestAddr { return addr }
+
+// ReadRole implements arch.RoleReader (P9): register roles by ABI meaning.
+// CPU-state observation — valid at any PC. RoleFP reads X29, which has no
+// abstract id (the frozen set is sparse), through the register-file dump.
+func (cpuArch) ReadRole(b emu.Backend, role arch.RegisterRole) (uint64, error) {
+	switch role {
+	case arch.RolePC:
+		return b.RegRead(PC)
+	case arch.RoleSP:
+		return b.RegRead(SP)
+	case arch.RoleLR:
+		return b.RegRead(LR)
+	case arch.RoleTLS:
+		return b.RegRead(TPIDR_EL0)
+	case arch.RoleFP:
+		rr, ok := b.(emu.RegFileReader)
+		if !ok {
+			return 0, fmt.Errorf("arch: arm64 RoleFP (X29) needs the RegFileReader capability: %w", arch.ErrUnsupportedRole)
+		}
+		regs, err := rr.ReadGPRegs()
+		if err != nil {
+			return 0, err
+		}
+		const fpIdx = 29 // AArch64 file order: [0..30]=x0..x30 → x29 at 29
+		if len(regs) <= fpIdx {
+			return 0, fmt.Errorf("arch: arm64 register file too short for X29: %w", arch.ErrUnsupportedRole)
+		}
+		return regs[fpIdx], nil
+	default:
+		return 0, fmt.Errorf("arch: role %s: %w", role, arch.ErrUnsupportedRole)
+	}
+}
+
+// arm64 implements the P9 role observer.
+var _ arch.RoleReader = cpuArch{}

@@ -2,6 +2,7 @@ package amd64
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/emu"
@@ -57,3 +58,25 @@ func (cpuArch) SetTLSBase(b emu.Backend, addr emu.GuestAddr) error {
 // code through non-canonical aliases. Upper-bound canonicalization (LA57,
 // 5-level paging) is out of scope — Caps pins 4-level paging.
 func (cpuArch) NormalizeCodeAddr(addr emu.GuestAddr) emu.GuestAddr { return addr }
+
+// ReadRole implements arch.RoleReader (P9): register roles by ABI meaning.
+// CPU-state observation — valid at any PC. RoleLR is deliberately
+// UNSUPPORTED: x86-64 has no link register (the return address lives on the
+// stack — the ABI-level answer is CallABI.ReadReturnAddress, not a role).
+func (cpuArch) ReadRole(b emu.Backend, role arch.RegisterRole) (uint64, error) {
+	switch role {
+	case arch.RolePC:
+		return b.RegRead(RIP)
+	case arch.RoleSP:
+		return b.RegRead(RSP)
+	case arch.RoleFP:
+		return b.RegRead(RBP)
+	case arch.RoleTLS:
+		return b.RegRead(FS_BASE)
+	default: // RoleLR and anything else: loud, never a silent zero
+		return 0, fmt.Errorf("arch: role %s: %w", role, arch.ErrUnsupportedRole)
+	}
+}
+
+// amd64 implements the P9 role observer.
+var _ arch.RoleReader = cpuArch{}
