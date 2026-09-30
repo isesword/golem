@@ -379,7 +379,7 @@ func (e *Emulator) interposeE(addr uint64, hf interpose.HostFunc) error {
 	// entry address, never a range. Installed BEFORE binding so a failed
 	// ReplaceE leaves no state at all (an unbound entry hook is a benign
 	// no-op: onInterpose's LookupAddress misses and the guest runs on).
-	hook, err := ih.HookCode(emu.GuestAddr(addr), emu.GuestAddr(addr), e.guardCode(e.onInterpose))
+	hook, err := ih.HookCode(emu.GuestAddr(addr), emu.GuestAddr(addr)+1, e.guardCode(e.onInterpose))
 	if err != nil {
 		return e.capabilityErr("Replace", err)
 	}
@@ -474,7 +474,7 @@ func (e *Emulator) hookAddrKind(addr uint64, fn func(h *Hook), kind HookKind) (f
 	if !ok {
 		return nil, e.capabilityUnavailable("HookAddr")
 	}
-	h, err := ih.HookCode(emu.GuestAddr(addr), emu.GuestAddr(addr), e.guardCode(func(b emu.Backend, a uint64, size uint32) {
+	h, err := ih.HookCode(emu.GuestAddr(addr), emu.GuestAddr(addr)+1, e.guardCode(func(b emu.Backend, a uint64, size uint32) {
 		fn(&Hook{e: e, kind: kind})
 	}))
 	if err != nil {
