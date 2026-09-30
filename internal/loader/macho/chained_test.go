@@ -513,3 +513,110 @@ func TestParseChainedFixtureARM64E(t *testing.T) {
 		}
 	}
 }
+
+// --- DYLD_CHAINED_PTR_64 (format 2, P5d) ------------------------------------
+//
+// Bit layouts per the SDK's fixup-chains.h — DIFFERENT from format 1:
+// rebase is target:36 | high8:8 | reserved:7 | next:12 (4-BYTE stride) with
+// bind at bit 63 (no auth bit — plain arm64 has no signed pointers); bind
+// is ordinal:24 | addend:8 UNSIGNED (0..255 — not format 1's signed 19-bit)
+// | reserved:19 | next:12 | bind.
+
+func chained64RebaseEntry(target36, high8, reserved uint64, next uint16) uint64 {
+	return target36&0xfffffffff | (high8&0xff)<<36 | (reserved&0x7f)<<44 | uint64(next&0xfff)<<51
+}
+
+func chained64BindEntry(ordinal uint32, addend, reserved uint64, next uint16) uint64 {
+	return uint64(ordinal&0xffffff) | (addend&0xff)<<24 | (reserved&0x7ffff)<<32 | uint64(next&0xfff)<<51 | 1<<63
+}
+
+// TestChainedWalk64RebaseBind pins the format 2 walk: the 4-byte-stride
+// next units, the 36-bit vmaddr rebase target, the 24-bit bind ordinal,
+// and a chain CROSSING a page boundary (START_NONE continuation).
+func TestChainedWalk64RebaseBind(t *testing.T) {
+	raw, off, size, segs := (&chainedSynth{
+		ptrFormat:  chainedPtr64,
+		pageStarts: []uint16{0x10, chainedPtrStartNone},
+		imports:    []string{"host_magic"},
+		entries: map[uint64]uint64{
+			0x4010: chained64RebaseEntry(0x1234, 0, 0, 2),        // next 2*4 -> 0x4018
+			0x4018: chained64BindEntry(0, 7, 0, 0x402),           // next 0x402*4 -> 0x5020 (cross-page)
+			0x5020: chained64RebaseEntry(0xfffffffff, 0, 0, 0),   // 36-bit max vmaddr, end
+		},
+	}).build()
+	rels, err := parseChainedFixups(raw, off, size, segs, synthImg())
+	if err != nil {
+		t.Fatalf("parseChainedFixups: %v", err)
+	}
+	if len(rels) != 3 {
+		t.Fatalf("relocs = %v, want exactly 3", rels)
+	}
+	wantRebase1 := loader.Reloc{Offset: 0x4010, Type: RelocRebasePointer, Addend: 0x1234}
+	if rels[0] != wantRebase1 {
+		t.Errorf("relocs[0] = %+v, want %+v (36-bit vmaddr target)", rels[0], wantRebase1)
+	}
+	wantBind := loader.Reloc{Offset: 0x4018, Type: RelocBindPointer, Sym: 1, Addend: 7}
+	if rels[1] != wantBind {
+		t.Errorf("relocs[1] = %+v, want %+v (24-bit ordinal, unsigned 8-bit addend)", rels[1], wantBind)
+	}
+	wantRebase2 := loader.Reloc{Offset: 0x5020, Type: RelocRebasePointer, Addend: 0xfffffffff}
+	if rels[2] != wantRebase2 {
+		t.Errorf("relocs[2] = %+v, want %+v (cross-page continuation, 36-bit max)", rels[2], wantRebase2)
+	}
+}
+
+// TestChained64BindAddendUnsigned pins the format 2 addend semantics: an
+// UNSIGNED 8-bit field (fixup-chains.h: "0 thru 255") — 255 must NOT
+// sign-extend the way format 1's 19-bit field does.
+func TestChained64BindAddendUnsigned(t *testing.T) {
+	raw, off, size, segs := (&chainedSynth{
+		ptrFormat:  chainedPtr64,
+		pageStarts: []uint16{0},
+		imports:    []string{"host_magic"},
+		entries: map[uint64]uint64{
+			0x4000: chained64BindEntry(0, 0, 0, 2), // next 2*4 -> 0x4008
+			0x4008: chained64BindEntry(0, 255, 0, 0),
+		},
+	}).build()
+	rels, err := parseChainedFixups(raw, off, size, segs, synthImg())
+	if err != nil {
+		t.Fatalf("parseChainedFixups: %v", err)
+	}
+	if len(rels) != 2 || rels[0].Addend != 0 || rels[1].Addend != 255 {
+		t.Fatalf("addends = (%d, %d), want (0, 255) — unsigned, no sign extension",
+			rels[0].Addend, rels[1].Addend)
+	}
+}
+
+// TestChained64LoudErrors: the format 2 shapes PACPolicyStrip/the guest
+// address model make no statement about — high8 (tagged pointers), the
+// reserved fields, and a 24-bit ordinal overflowing the imports table —
+// all fail loudly.
+func TestChained64LoudErrors(t *testing.T) {
+	cases := []struct {
+		name    string
+		entry   uint64
+		wantErr string
+	}{
+		{"rebase high8 (tagged pointer)", chained64RebaseEntry(0x1234, 1, 0, 0), "high8"},
+		{"rebase reserved", chained64RebaseEntry(0x1234, 0, 1, 0), "reserved"},
+		{"bind reserved", chained64BindEntry(0, 0, 1, 0), "reserved"},
+		{"bind ordinal 24-bit overflow", chained64BindEntry(0x100, 0, 0, 0), "ordinal"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, off, size, segs := (&chainedSynth{
+				ptrFormat:  chainedPtr64,
+				pageStarts: []uint16{0},
+				imports:    []string{"host_magic"},
+				entries:    map[uint64]uint64{0x4000: tc.entry},
+			}).build()
+			_, err := parseChainedFixups(raw, off, size, segs, synthImg())
+			if err == nil {
+				t.Fatalf("want a loud error containing %q", tc.wantErr)
+			} else if !contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error %q must contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}

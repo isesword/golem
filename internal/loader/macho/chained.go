@@ -11,16 +11,22 @@ package macho
 //	dyld_chained_import{,_addend,_addend64}         — the imports table
 //
 // Coverage policy (loud errors, never silent mis-loads):
-//   - pointer format: DYLD_CHAINED_PTR_ARM64E (1) only — the userland
-//     format current toolchains emit. KERNEL/FIRMWARE/32/64_OFFSET/
+//   - pointer formats: DYLD_CHAINED_PTR_ARM64E (1, P5c) and
+//     DYLD_CHAINED_PTR_64 (2, P5d — the format current toolchains emit for
+//     plain arm64 under -fixup_chains). KERNEL/FIRMWARE/32/64_OFFSET/
 //     USERLAND24/SHARED_CACHE and every other format is a loud
-//     "unsupported pointer format" error naming the value.
-//   - imports: DYLD_CHAINED_IMPORT (1) only; the ADDEND variants are loud
-//     errors. symbols_format must be 0 (uncompressed).
+//     "unsupported pointer format" error naming the value. The two formats
+//     differ in chain stride (8- vs 4-byte next units) and entry layout —
+//     see the decode functions.
+//   - imports: DYLD_CHAINED_IMPORT (1) only (both formats carry it); the
+//     ADDEND variants are loud errors. symbols_format must be 0
+//     (uncompressed).
 //   - page starts: single start per page; DYLD_CHAINED_PTR_START_MULTI
 //     (a 32-bit-format facility) is a loud error.
-//   - authenticated entries (auth bit set): P5c materializes them under the
-//     explicit PACPolicyStrip (see below) — decoded fully, never masked.
+//   - authenticated entries (auth bit set, format 1 only): P5c materializes
+//     them under the explicit PACPolicyStrip (see below) — decoded fully,
+//     never masked. Format 2 has no auth bit; a rebase with high8 != 0 is
+//     a tagged pointer outside the guest address model — a loud error.
 
 import (
 	"encoding/binary"
@@ -33,6 +39,7 @@ import (
 // Pointer-format and chain-start constants (fixup-chains.h).
 const (
 	chainedPtrARM64E = 1 // DYLD_CHAINED_PTR_ARM64E — stride 8, unauth target is vmaddr
+	chainedPtr64     = 2 // DYLD_CHAINED_PTR_64 — stride 4, rebase target is vmaddr (plain arm64)
 
 	chainedPtrStartNone  = 0xFFFF // DYLD_CHAINED_PTR_START_NONE
 	chainedPtrStartMulti = 0x8000 // DYLD_CHAINED_PTR_START_MULTI
@@ -118,8 +125,8 @@ func parseChainedFixups(raw []byte, dataoff, datasize uint32, segs []loader.Segm
 		if err != nil {
 			return nil, fmt.Errorf("segment %d starts: %w", i, err)
 		}
-		if ss.pointerFormat != chainedPtrARM64E {
-			return nil, fmt.Errorf("segment %d: unsupported chained pointer format %d (only DYLD_CHAINED_PTR_ARM64E=1)", i, ss.pointerFormat)
+		if ss.pointerFormat != chainedPtrARM64E && ss.pointerFormat != chainedPtr64 {
+			return nil, fmt.Errorf("segment %d: unsupported chained pointer format %d (only DYLD_CHAINED_PTR_ARM64E=1 / DYLD_CHAINED_PTR_64=2)", i, ss.pointerFormat)
 		}
 		// The starts' segment_offset addresses MEMORY (vmaddr space); it
 		// must be exactly this segment's image-relative vaddr — chained
@@ -216,17 +223,23 @@ func parseChainedSegStarts(b []byte) (chainedSegStarts, error) {
 	return ss, nil
 }
 
-// walkChainedSegment walks every page's chain in one segment (format
-// DYLD_CHAINED_PTR_ARM64E: 8-byte slots, 8-byte stride) and decodes each
-// entry. A chain may cross page boundaries (its page is then marked
-// START_NONE); the walk tracks the absolute in-segment offset, so crossing
-// needs no special case — only termination and bounds guards.
+// walkChainedSegment walks every page's chain in one segment and decodes
+// each entry. Stride and entry layout are per pointer format: format
+// DYLD_CHAINED_PTR_ARM64E (1) counts next in 8-byte units, format
+// DYLD_CHAINED_PTR_64 (2) in 4-byte units. A chain may cross page
+// boundaries (its page is then marked START_NONE); the walk tracks the
+// absolute in-segment offset, so crossing needs no special case — only
+// termination and bounds guards.
 func walkChainedSegment(raw, payload []byte, segs []loader.Segment, segIdx uint32, ss chainedSegStarts, imports []string, symIdx map[string]uint32) ([]loader.Reloc, error) {
 	seg := segs[segIdx]
 	var out []loader.Reloc
 	// Termination guard: a valid chain never revisits a slot, and slots are
 	// at most one per 4 bytes of segment memory (the smallest stride).
 	maxSteps := int(seg.MemSz/4) + 1
+	stride := uint64(8) // format 1: 8-byte next units
+	if ss.pointerFormat == chainedPtr64 {
+		stride = 4 // format 2: 4-byte next units
+	}
 	for page, start := range ss.pageStart {
 		if start == chainedPtrStartNone {
 			continue
@@ -247,7 +260,7 @@ func walkChainedSegment(raw, payload []byte, segs []loader.Segment, segIdx uint3
 			if fo < 0 || fo+8 > len(raw) {
 				return nil, fmt.Errorf("chain slot %#x outside the file image", slotVA)
 			}
-			r, next, err := decodeChainedEntryARM64E(binary.LittleEndian.Uint64(raw[fo:]), slotVA, imports, symIdx)
+			r, next, err := decodeChainedEntry(ss.pointerFormat, binary.LittleEndian.Uint64(raw[fo:]), slotVA, imports, symIdx)
 			if err != nil {
 				return nil, err
 			}
@@ -257,13 +270,56 @@ func walkChainedSegment(raw, payload []byte, segs []loader.Segment, segIdx uint3
 			if next == 0 {
 				break
 			}
-			off += uint64(next) * 8 // format 1: 8-byte stride
+			off += uint64(next) * stride
 			if off >= seg.MemSz {
 				return nil, fmt.Errorf("chain walks past segment end (offset %#x, segment %#x+%#x)", off, ss.segmentOffset, seg.MemSz)
 			}
 		}
 	}
 	return out, nil
+}
+
+// decodeChainedEntry dispatches one chain entry to the pointer format's
+// decoder. next is returned in the format's stride units (0 = chain end).
+func decodeChainedEntry(ptrFormat uint16, v, slotVA uint64, imports []string, symIdx map[string]uint32) (*loader.Reloc, uint16, error) {
+	if ptrFormat == chainedPtr64 {
+		return decodeChainedEntry64(v, slotVA, imports, symIdx)
+	}
+	return decodeChainedEntryARM64E(v, slotVA, imports, symIdx)
+}
+
+// decodeChainedEntry64 decodes one DYLD_CHAINED_PTR_64 chain entry (P5d;
+// fixup-chains.h: next:12 from bit 51 in 4-BYTE units, bind:1 bit 63 — no
+// auth bit, plain arm64 carries no signed pointers) into a Reloc.
+func decodeChainedEntry64(v, slotVA uint64, imports []string, symIdx map[string]uint32) (*loader.Reloc, uint16, error) {
+	next := uint16(v >> 51 & 0xfff)
+	if v>>63&1 == 0 {
+		// dyld_chained_ptr_64_rebase: target:36 (the unrelocated VMADDR —
+		// unlike the arm64e auth rebase's runtimeOffset), high8:8,
+		// reserved:7. The relocator adds the load bias, exactly the classic
+		// REBASE_TYPE_POINTER contract.
+		if r := v >> 44 & 0x7f; r != 0 {
+			return nil, 0, fmt.Errorf("rebase at %#x: reserved bits %#x != 0 (corrupt fixup?)", slotVA, r)
+		}
+		if h := v >> 36 & 0xff; h != 0 {
+			// "top 8 bits set to this (after slide added)" — a tagged
+			// pointer. The guest address model covers 48-bit canonical
+			// addresses only; tagging is the authenticated-pointer world,
+			// which plain arm64 never carries. Loud, never a silent mask.
+			return nil, 0, fmt.Errorf("rebase at %#x: high8 %#x != 0 (tagged pointer outside the guest address model)", slotVA, h)
+		}
+		return &loader.Reloc{Offset: slotVA, Type: RelocRebasePointer, Addend: int64(v & 0xfffffffff)}, next, nil
+	}
+	// dyld_chained_ptr_64_bind: ordinal:24, addend:8 UNSIGNED (0..255 —
+	// unlike format 1's signed 19-bit), reserved:19.
+	if r := v >> 32 & 0x7ffff; r != 0 {
+		return nil, 0, fmt.Errorf("bind at %#x: reserved bits %#x != 0 (corrupt fixup?)", slotVA, r)
+	}
+	sym, err := chainedBindSym(uint32(v&0xffffff), slotVA, imports, symIdx)
+	if err != nil {
+		return nil, 0, err
+	}
+	return &loader.Reloc{Offset: slotVA, Type: RelocBindPointer, Sym: sym, Addend: int64(v >> 24 & 0xff)}, next, nil
 }
 
 // decodeChainedEntryARM64E decodes one DYLD_CHAINED_PTR_ARM64E chain entry
@@ -283,7 +339,7 @@ func decodeChainedEntryARM64E(v, slotVA uint64, imports []string, symIdx map[str
 	case bind && !auth:
 		// dyld_chained_ptr_arm64e_bind: ordinal:16, addend:19 SIGNED
 		// (±256K — sign-extended), symbol via the imports table.
-		sym, err := chainedBindSym(uint16(v&0xffff), slotVA, imports, symIdx)
+		sym, err := chainedBindSym(uint32(v&0xffff), slotVA, imports, symIdx)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -306,7 +362,7 @@ func decodeChainedEntryARM64E(v, slotVA uint64, imports []string, symIdx map[str
 		// dyld_chained_ptr_arm64e_auth_bind: ordinal:16, diversity:16,
 		// addrDiv:1, key:2 — NO addend field. Under PACPolicyStrip the slot
 		// binds to the SymbolResolver's bare guest address.
-		sym, err := chainedBindSym(uint16(v&0xffff), slotVA, imports, symIdx)
+		sym, err := chainedBindSym(uint32(v&0xffff), slotVA, imports, symIdx)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -362,8 +418,10 @@ func pacStrip(diversity uint16, addrDiv, key uint8, what string, slotVA uint64) 
 // chainedBindSym maps a bind ordinal through the imports table to the
 // img.Syms index — a bound symbol missing from the symtab would silently
 // resolve to the null symbol, so fail loudly instead (same rule as the
-// classic bind stream).
-func chainedBindSym(ordinal uint16, slotVA uint64, imports []string, symIdx map[string]uint32) (uint32, error) {
+// classic bind stream). The ordinal is uint32 because the format 2 field
+// is 24 bits wide (format 1's is 16) — truncating it could wrap an
+// out-of-range value back INTO range.
+func chainedBindSym(ordinal uint32, slotVA uint64, imports []string, symIdx map[string]uint32) (uint32, error) {
 	if int(ordinal) >= len(imports) {
 		return 0, fmt.Errorf("bind at %#x: ordinal %d out of imports table (%d entries)", slotVA, ordinal, len(imports))
 	}
