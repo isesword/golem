@@ -1,17 +1,18 @@
-// Package kernel emulates the Linux ARM64 syscall interface reached via the
-// SVC instruction. The CPU backend's interrupt hook calls Dispatch, which
-// reads x8 (syscall number) + x0..x5 (args) and writes the result back to x0 —
-// exactly what unidbg's ARM64SyscallHandler does.
+// Package kernel emulates the semantics of the Linux syscall interface. The
+// transport half of the ABI — which register carries the syscall number,
+// which carry the arguments, how results and errors are encoded back — lives
+// behind the consumer-owned SyscallTransport interface (implemented by
+// platform/android for AArch64 Linux: x8 number, x0..x5 args, -errno results);
+// kernel code never touches a syscall register or a -errno literal.
 //
 // the target .so does not issue syscalls directly; the *bionic libc* we
 // emulate does, on its behalf. So the set that actually fires is "whatever
 // libc.so/libm.so touch during JNI_OnLoad + the target call" — a few dozen, not
-// the full table. Numbers below are the AArch64 (asm-generic) ABI.
+// the full table. The Android/AArch64 number table lives in platform/android.
 package kernel
 
 import (
 	crand "crypto/rand"
-	"encoding/binary"
 	"fmt"
 	"time"
 
@@ -23,74 +24,170 @@ import (
 // BrkBase is the guest program-break heap origin (clear of modules/mmap arena).
 const BrkBase = 0x30000000
 
-// AArch64 syscall numbers (asm-generic unistd). Only the ones unidbg's handler
-// implements / that bionic is likely to invoke on the call path are listed.
+// MaxGuestIO bounds every guest-supplied byte count that would become a
+// HOST allocation or copy (getrandom fill, writable-fd write capture, JNI
+// byte arrays). 64 MiB is far above any legitimate bionic/JNI traffic and
+// far below OOM territory. Policy (P7.6): a guest length never converts
+// directly into a host allocation size — over-cap requests fail loudly
+// (errno / JNI NULL / pending exception) instead of allocating.
+const MaxGuestIO = 64 << 20
+
+// Errno is a semantic syscall error, carried in Result.Errno (0 = success).
+// It is deliberately NOT a wire encoding: how an Errno reaches the guest
+// (Linux: x0 = -errno; Darwin: x0 = +errno + carry flag) is the transport's
+// business. The numeric values below are the Linux asm-generic assignments;
+// a Darwin transport must translate them to Darwin's numbering (P5b).
+type Errno int
+
 const (
-	SYS_getcwd            = 17
-	SYS_mkdirat           = 34
-	SYS_ioctl             = 29
-	SYS_faccessat         = 48
-	SYS_openat            = 56
-	SYS_close             = 57
-	SYS_pipe2             = 59
-	SYS_getdents64        = 61
-	SYS_lseek             = 62
-	SYS_read              = 63
-	SYS_write             = 64
-	SYS_writev            = 66
-	SYS_pread64           = 67
-	SYS_ppoll             = 73
-	SYS_readlinkat        = 78
-	SYS_newfstatat        = 79
-	SYS_fstat             = 80
-	SYS_exit              = 93
-	SYS_exit_group        = 94
-	SYS_set_tid_address   = 96
-	SYS_futex             = 98
-	SYS_set_robust_list   = 99
-	SYS_nanosleep         = 101
-	SYS_clock_gettime     = 113
-	SYS_gettimeofday      = 169
-	SYS_sched_yield       = 124
-	SYS_sched_getaffinity = 123
-	SYS_kill              = 129
-	SYS_rt_sigaction      = 134
-	SYS_rt_sigprocmask    = 135
-	SYS_rt_sigtimedwait   = 137
-	SYS_tgkill            = 131
-	SYS_uname             = 160
-	SYS_getpid            = 172
-	SYS_getppid           = 173
-	SYS_getuid            = 174
-	SYS_geteuid           = 175
-	SYS_gettid            = 178
-	SYS_sysinfo           = 179
-	SYS_brk               = 214
-	SYS_munmap            = 215
-	SYS_mremap            = 216
-	SYS_clone             = 220
-	SYS_mmap              = 222
-	SYS_mprotect          = 226
-	SYS_madvise           = 233
-	SYS_prctl             = 167
-	SYS_prlimit64         = 261
-	SYS_getrandom         = 278
-	SYS_statx             = 291
-	// sockets (bionic on android routes these as real syscalls)
-	SYS_socket  = 198
-	SYS_connect = 203
+	ENOSYS Errno = 38
+	EPERM  Errno = 1
+	EIO    Errno = 5
+	EBADF  Errno = 9
+	ENOENT Errno = 2
+	EINVAL Errno = 22
+	ERANGE Errno = 34
+	EFAULT Errno = 14
 )
 
-// errno values (negated on return per Linux convention).
-const (
-	ENOSYS = 38
-	EPERM  = 1
-	EIO    = 5
-	EBADF  = 9
-	ENOENT = 2
-	EINVAL = 22
-	ERANGE = 34
-)
+// Result is what a Handler produces: pure syscall semantics, no encoding
+// (DESIGN.md invariant 6). Value2 is reserved for dual-return-value ABIs —
+// the Darwin ARM64 syscall wrapper preserves x0/x1 + carry; Linux ignores
+// Value2 entirely (see the transport's EncodeResult).
+type Result struct {
+	Value  uint64
+	Value2 uint64
+	Errno  Errno // 0 = success
+}
+
+// SyscallFrame is the product of SyscallTransport.Decode: the syscall number
+// plus its arguments, with no register identities attached. Args has a fixed
+// capacity of 8 (not a slice — no allocation on the dispatch hot path); Linux
+// uses at most 6 today, Darwin's generic syscall shim has a 7-argument path,
+// so no Linux-specific arity is baked into the core abstraction. NArg records
+// how many slots the transport actually decoded; handlers don't have to
+// consume all of them.
+type SyscallFrame struct {
+	Num  uint64
+	Args [8]uint64
+	NArg uint8
+}
+
+// SyscallTransport is a consumer-owned interface (DESIGN.md invariant 6): the
+// syscall transport ABI conceptually belongs to the OS platform, but the
+// interface lives in kernel so the dependency stays platform → kernel → emu
+// without a cycle. platform/android implements Linux/AArch64 (x8 number,
+// x0..x5 args, -errno result); platform/darwin will implement x16 /
+// carry+errno / dual return values.
+type SyscallTransport interface {
+	Decode(b emu.Backend) (SyscallFrame, error)
+	EncodeResult(b emu.Backend, r Result) error
+}
+
+// Handler implements one syscall's semantics: it reads frame.Args, operates
+// on the Context, and returns a Result. It must never read the syscall number
+// register or argument registers itself, and never return a Linux -errno
+// encoding — only Result{Errno: ...} (DESIGN.md invariant 6).
+type Handler func(c *Context, f *SyscallFrame) Result
+
+// Table is one platform's syscall dispatch table: number -> handler, plus
+// trace names. It is an injectable instance (held by Context), not a package
+// global; platform/android builds the Android/AArch64 one.
+type Table struct {
+	Handlers map[uint64]Handler
+	Names    map[uint64]string
+}
+
+// Lookup resolves a syscall number to its handler.
+func (t *Table) Lookup(num uint64) (Handler, bool) {
+	h, ok := t.Handlers[num]
+	return h, ok
+}
+
+// Name returns the trace name for a syscall number ("" if unknown).
+func (t *Table) Name(num uint64) string { return t.Names[num] }
+
+// --- guest ABI structure semantics (encoded by StructCodecs) ---------------
+//
+// The types below are the SEMANTIC content of guest structs that handlers
+// read or write; their guest-memory layout (offsets, field widths, struct
+// size) is a platform/ABI implementation detail behind StructCodecs — the
+// QEMU thunk approach (DESIGN.md invariant 7). The set is exactly the structs
+// the current handlers touch; it grows only when a handler genuinely reads or
+// writes another guest ABI struct. Plain u32/u64 guest-memory accesses and
+// fixed-layout blobs (utsname's 6×65 bytes, cpumask bytes) are NOT ABI-layout
+// dependent and stay inline in the handlers.
+
+// Stat is the semantic content of `struct stat` (fstat/newfstatat).
+type Stat struct {
+	Mode uint32 // S_IF* | permission bits (Linux values, arch-independent)
+	Size uint64
+}
+
+// Statx is the semantic content of `struct statx`.
+type Statx struct {
+	Mask    uint32
+	Blksize uint32
+	Nlink   uint32
+	Mode    uint16
+	Size    uint64
+	Blocks  uint64
+}
+
+// Timespec is `struct timespec` (clock_gettime): seconds + nanoseconds.
+type Timespec struct {
+	Sec  int64
+	Nsec int64
+}
+
+// Timeval is `struct timeval` (gettimeofday): seconds + microseconds.
+type Timeval struct {
+	Sec  int64
+	Usec int64
+}
+
+// Sysinfo is the semantic content of `struct sysinfo` (LP64-layout dependent).
+type Sysinfo struct {
+	UptimeSec uint64
+	TotalRAM  uint64
+	FreeRAM   uint64
+	Procs     uint16
+	MemUnit   uint32
+}
+
+// Rlimit is one `struct rlimit` (prlimit64 old-value out): rlim_cur/max,
+// whose width follows the guest's unsigned long.
+type Rlimit struct {
+	Cur uint64
+	Max uint64
+}
+
+// Iovec is one `struct iovec` (writev): a guest pointer + length, both
+// pointer-width dependent.
+type Iovec struct {
+	Base uint64
+	Len  uint64
+}
+
+// StructCodecs encodes/decodes guest ABI structures (consumer-owned, like
+// SyscallTransport). dst/src buffers are sized by the caller via the
+// companion Size methods, so no layout constant ever appears in kernel code.
+type StructCodecs interface {
+	StatSize() int
+	EncodeStat(dst []byte, s Stat) error
+	StatxSize() int
+	EncodeStatx(dst []byte, s Statx) error
+	TimespecSize() int
+	EncodeTimespec(dst []byte, t Timespec) error
+	TimevalSize() int
+	EncodeTimeval(dst []byte, t Timeval) error
+	SysinfoSize() int
+	EncodeSysinfo(dst []byte, s Sysinfo) error
+	RlimitSize() int
+	EncodeRlimit(dst []byte, r Rlimit) error
+	IovecSize() int
+	DecodeIovec(src []byte) (Iovec, error)
+}
 
 // Context is the state a syscall handler operates on.
 type Context struct {
@@ -99,6 +196,12 @@ type Context struct {
 	VFS     *vfs.VFS
 	Pid     int
 	Verbose bool
+	// Transport, Table and Codecs are the injected platform personality:
+	// transport owns the syscall register ABI, the table owns number->handler,
+	// codecs own guest struct layouts. All three are required for Dispatch.
+	Transport SyscallTransport
+	Table     *Table
+	Codecs    StructCodecs
 	// Epoch, if non-zero, pins gettimeofday/clock_gettime to this fixed Unix time
 	// (seconds) instead of the host clock — for deterministic, reproducible runs
 	// (reverse-engineering: the same inputs must yield the same signature).
@@ -115,6 +218,13 @@ type Context struct {
 	// The emulator installs a profile-backed clock here when a device liveness
 	// profile is configured, so syscall-time and JNI-time agree.
 	Clock Clock
+	// Uname is the guest-visible utsname identity (P7.5b), supplied by the
+	// platform personality as pure data and injected at wiring time. The
+	// uname handler only encodes it — deciding WHO the guest is (sysname,
+	// machine, release) is platform business. nil = the platform bound no
+	// uname number into its table; if a table nevertheless binds uname, the
+	// handler fails loudly (EINVAL) instead of reporting a hardcoded lie.
+	Uname *UnameInfo
 
 	brkCur         uint64 // current program break (0 = uninitialized)
 	getrandomCalls uint64 // deterministic getrandom stream counter
@@ -202,7 +312,7 @@ func (c *Context) Restore(st State) {
 	// cleanly — sysBrk maps pages on growth, and re-mapping a still-mapped page
 	// fails, which would silently break the guest allocator on a reused instance.
 	if cur, tgt := c.BrkTop(), brkTopOf(st.brkCur); cur > tgt {
-		_ = c.B.MemUnmap(tgt, cur-tgt)
+		_ = c.B.MemUnmap(emu.GuestAddr(tgt), cur-tgt)
 	}
 	c.brkCur = st.brkCur
 	c.Exited = st.exited
@@ -247,112 +357,51 @@ func copyDirs(in map[string]bool) map[string]bool {
 	return out
 }
 
-// Handler implements one syscall. args are x0..x5. Return value goes to x0
-// (negative = -errno).
-type Handler func(c *Context, args [6]uint64) int64
-
-// table maps syscall number -> handler. Unimplemented numbers fall through to
-// a logged ENOSYS, which is how you discover the next syscall to implement when
-// bringing a new .so up.
-var table = map[uint64]Handler{
-	SYS_getpid:          func(c *Context, _ [6]uint64) int64 { return int64(c.Pid) },
-	SYS_getppid:         func(c *Context, _ [6]uint64) int64 { return 1 },
-	SYS_gettid:          func(c *Context, _ [6]uint64) int64 { return int64(c.Pid) },
-	SYS_getuid:          func(c *Context, _ [6]uint64) int64 { return 10000 },
-	SYS_geteuid:         func(c *Context, _ [6]uint64) int64 { return 10000 },
-	SYS_sched_yield:     func(c *Context, _ [6]uint64) int64 { return 0 },
-	SYS_set_tid_address: func(c *Context, _ [6]uint64) int64 { return int64(c.Pid) },
-	SYS_set_robust_list: func(c *Context, _ [6]uint64) int64 { return 0 },
-	SYS_rt_sigaction:    func(c *Context, _ [6]uint64) int64 { return 0 },
-	SYS_rt_sigprocmask:  func(c *Context, _ [6]uint64) int64 { return 0 },
-	SYS_prctl:           func(c *Context, _ [6]uint64) int64 { return 0 },
-	SYS_madvise:         func(c *Context, _ [6]uint64) int64 { return 0 },
-
-	SYS_mmap:     sysMmap,
-	SYS_munmap:   sysMunmap,
-	SYS_mprotect: sysMprotect,
-
-	SYS_exit:       sysExit,
-	SYS_exit_group: sysExit,
-
-	SYS_brk:               sysBrk,
-	SYS_openat:            sysOpenat,
-	SYS_close:             sysClose,
-	SYS_read:              sysRead,
-	SYS_write:             sysWrite,
-	SYS_writev:            sysWritev,
-	SYS_readlinkat:        sysReadlinkat,
-	SYS_newfstatat:        sysNewfstatat,
-	SYS_fstat:             sysFstat,
-	SYS_faccessat:         sysFaccessat,
-	SYS_mkdirat:           sysMkdirat,
-	SYS_lseek:             sysLseek,
-	SYS_getcwd:            sysGetcwd,
-	SYS_getdents64:        sysGetdents64,
-	SYS_clock_gettime:     sysClockGettime,
-	SYS_gettimeofday:      sysGettimeofday,
-	SYS_uname:             sysUname,
-	SYS_sysinfo:           sysSysinfo,
-	SYS_getrandom:         sysGetrandom,
-	SYS_prlimit64:         sysPrlimit64,
-	SYS_futex:             sysFutex,
-	SYS_ioctl:             sysIoctl,
-	SYS_statx:             sysStatx,
-	SYS_sched_getaffinity: sysSchedGetaffinity,
-}
-
-// Names is the reverse map for tracing.
-var Names = map[uint64]string{
-	SYS_getcwd: "getcwd", SYS_ioctl: "ioctl", SYS_faccessat: "faccessat",
-	SYS_openat: "openat", SYS_close: "close", SYS_getdents64: "getdents64",
-	SYS_lseek: "lseek", SYS_read: "read", SYS_write: "write", SYS_writev: "writev",
-	SYS_pread64: "pread64", SYS_ppoll: "ppoll", SYS_readlinkat: "readlinkat",
-	SYS_newfstatat: "newfstatat", SYS_fstat: "fstat", SYS_exit: "exit",
-	SYS_exit_group: "exit_group", SYS_set_tid_address: "set_tid_address",
-	SYS_futex: "futex", SYS_set_robust_list: "set_robust_list",
-	SYS_clock_gettime: "clock_gettime", SYS_uname: "uname", SYS_getpid: "getpid",
-	SYS_getppid: "getppid", SYS_getuid: "getuid", SYS_geteuid: "geteuid",
-	SYS_gettid: "gettid", SYS_sysinfo: "sysinfo", SYS_brk: "brk",
-	SYS_munmap: "munmap", SYS_mremap: "mremap", SYS_mmap: "mmap",
-	SYS_mprotect: "mprotect", SYS_madvise: "madvise", SYS_prctl: "prctl",
-	SYS_prlimit64: "prlimit64", SYS_getrandom: "getrandom", SYS_statx: "statx",
-	SYS_socket: "socket", SYS_connect: "connect", SYS_rt_sigaction: "rt_sigaction",
-	SYS_rt_sigprocmask: "rt_sigprocmask", SYS_sched_yield: "sched_yield",
-	SYS_sched_getaffinity: "sched_getaffinity", SYS_mkdirat: "mkdirat",
-	SYS_gettimeofday: "gettimeofday",
-}
-
-// Dispatch reads the syscall number + args from the backend, runs the handler,
-// and writes the result to x0. Register it via Backend.HookInterrupt.
+// Dispatch decodes the syscall frame from the backend through the injected
+// transport and services it (see DispatchFrame). Register it via
+// Backend.HookInterrupt / InstallTrap(TrapSyscall).
 //
 // Coverage policy (a deliberate design boundary): unimplemented syscalls
-// return -ENOSYS so gaps between the emulated kernel and a real one surface
-// in testing instead of being masked; todo() handlers optimistically return 0
-// for calls real kernels commonly answer with trivial success, and log under
-// Verbose. Every todo entry is a place the emulation may drift from a real
-// device — keep that list short.
+// return ENOSYS so gaps between the emulated kernel and a real one surface
+// in testing instead of being masked; trivial stub handlers optimistically
+// return 0 for calls real kernels commonly answer with trivial success, and
+// log under Verbose. Every stub entry is a place the emulation may drift from
+// a real device — keep that list short.
 func (c *Context) Dispatch() {
-	num, _ := c.B.RegRead(emu.RegX8)
-	var args [6]uint64
-	for i, r := range []emu.Reg{emu.RegX0, emu.RegX1, emu.RegX2, emu.RegX3, emu.RegX4, emu.RegX5} {
-		args[i], _ = c.B.RegRead(r)
+	frame, err := c.Transport.Decode(c.B)
+	if err != nil {
+		if c.Verbose {
+			fmt.Printf("[syscall] decode failed: %v\n", err)
+		}
+		return
 	}
-	h, ok := table[num]
-	var ret int64
+	c.DispatchFrame(&frame)
+}
+
+// DispatchFrame services an already-decoded syscall frame: table lookup
+// (unimplemented -> ENOSYS, logged under Verbose), handler, result encoding
+// through the transport. The emulator decodes once per trap and calls this
+// directly, so the scheduler's interception path shares the decode.
+func (c *Context) DispatchFrame(f *SyscallFrame) {
+	var res Result
+	h, ok := c.Table.Lookup(f.Num)
 	if !ok || h == nil {
 		if c.Verbose {
-			fmt.Printf("[syscall] UNIMPLEMENTED #%d (%s) args=%v\n", num, Names[num], args)
+			fmt.Printf("[syscall] UNIMPLEMENTED #%d (%s) args=%v\n", f.Num, c.Table.Name(f.Num), f.Args[:f.NArg])
 		}
-		ret = -ENOSYS
+		res = Result{Errno: ENOSYS}
 	} else {
-		ret = h(c, args)
+		res = h(c, f)
 	}
-	c.B.RegWrite(emu.RegX0, uint64(ret))
+	if err := c.Transport.EncodeResult(c.B, res); err != nil && c.Verbose {
+		fmt.Printf("[syscall] encode result for #%d failed: %v\n", f.Num, err)
+	}
 }
 
 const mapFixed = 0x10
 
-func sysMmap(c *Context, a [6]uint64) int64 {
+func SysMmap(c *Context, f *SyscallFrame) Result {
+	a := f.Args
 	// addr, length, prot, flags, fd, offset
 	hint := a[0]
 	length := pageUp(a[1])
@@ -363,40 +412,44 @@ func sysMmap(c *Context, a [6]uint64) int64 {
 		addr = hint &^ 0xfff
 		c.Mem.Munmap(addr, length) // drop any prior mapping under MAP_FIXED
 		_ = c.Mem.Map(addr, length, prot, "mmap-fixed")
-		c.B.MemUnmap(addr, length)
+		c.B.MemUnmap(emu.GuestAddr(addr), length)
 	} else {
 		addr = c.Mem.Mmap(length, prot, "mmap")
 	}
-	if err := c.B.MemMap(addr, length, prot|emu.ProtRead); err != nil {
-		return -ENOSYS
+	if err := c.B.MemMap(emu.GuestAddr(addr), length, prot|emu.ProtRead); err != nil {
+		return Result{Errno: ENOSYS}
 	}
-	return int64(addr)
+	return Result{Value: addr}
 }
 
-// sysWrite/sysWritev capture the .so's own log output (it logs to fd 1/2 and
+// SysWrite/SysWritev capture the .so's own log output (it logs to fd 1/2 and
 // to logd before bailing) — invaluable for seeing why it exits.
-func sysWrite(c *Context, a [6]uint64) int64 {
+func SysWrite(c *Context, f *SyscallFrame) Result {
+	a := f.Args
 	fd, buf, n := a[0], a[1], a[2]
 	// writable file fd -> store into the overlay
 	if f := c.fdTable()[int32(fd)]; f != nil && f.writable {
-		d, err := c.B.MemRead(buf, n)
-		if err != nil {
-			return -EBADF
+		if n > MaxGuestIO {
+			return Result{Errno: EINVAL} // P7.6: a guest count never sizes a host alloc
 		}
-		return int64(c.writeOverlay(f, d))
+		d, err := c.B.MemRead(emu.GuestAddr(buf), n)
+		if err != nil {
+			return Result{Errno: EBADF}
+		}
+		return Result{Value: uint64(c.writeOverlay(f, d))}
 	}
 	// otherwise it's stdout/stderr/log -> surface it only when tracing
 	if c.Verbose && n > 0 && n < 0x10000 {
-		if d, err := c.B.MemRead(buf, n); err == nil {
+		if d, err := c.B.MemRead(emu.GuestAddr(buf), n); err == nil {
 			fmt.Printf("[write fd=%d] %s\n", fd, string(d))
 		}
 	}
-	return int64(n)
+	return Result{Value: n}
 }
 
 // writeOverlay writes d into the writable overlay at the fd's position,
 // zero-filling gaps and advancing f.pos — the single implementation of the
-// pos semantics shared by sysWrite and sysWritev.
+// pos semantics shared by SysWrite and SysWritev.
 func (c *Context) writeOverlay(f *openFile, d []byte) int {
 	w := c.wstore()
 	cur := w[f.path]
@@ -412,39 +465,43 @@ func (c *Context) writeOverlay(f *openFile, d []byte) int {
 	return len(d)
 }
 
-func sysWritev(c *Context, a [6]uint64) int64 {
+func SysWritev(c *Context, f *SyscallFrame) Result {
+	a := f.Args
 	fd, iov, cnt := a[0], a[1], a[2]
 	wf := c.fdTable()[int32(fd)]
-	total := int64(0)
+	stride := uint64(c.Codecs.IovecSize())
+	total := uint64(0)
 	for i := uint64(0); i < cnt && i < 64; i++ {
-		ent, err := c.B.MemRead(iov+i*16, 16)
+		ent, err := c.B.MemRead(emu.GuestAddr(iov+i*stride), stride)
 		if err != nil {
 			break
 		}
-		base := binary.LittleEndian.Uint64(ent[0:])
-		ln := binary.LittleEndian.Uint64(ent[8:])
-		if ln == 0 || ln >= 0x10000 {
+		iv, err := c.Codecs.DecodeIovec(ent)
+		if err != nil {
+			break
+		}
+		if iv.Len == 0 || iv.Len >= 0x10000 {
 			continue
 		}
-		d, err := c.B.MemRead(base, ln)
+		d, err := c.B.MemRead(emu.GuestAddr(iv.Base), iv.Len)
 		if err != nil {
 			continue
 		}
-		if wf != nil && wf.writable { // honor the fd's position, like sysWrite
+		if wf != nil && wf.writable { // honor the fd's position, like SysWrite
 			c.writeOverlay(wf, d)
 		} else if c.Verbose {
 			fmt.Printf("[writev fd=%d] %s\n", fd, string(d))
 		}
-		total += int64(ln)
+		total += iv.Len
 	}
-	return total
+	return Result{Value: total}
 }
 
 // readCStr reads a NUL-terminated guest string (for path args).
 func (c *Context) readCStr(addr uint64) string {
 	var out []byte
 	for i := 0; i < 4096; i++ {
-		b, err := c.B.MemRead(addr+uint64(len(out)), 1)
+		b, err := c.B.MemRead(emu.GuestAddr(addr+uint64(len(out))), 1)
 		if err != nil || b[0] == 0 {
 			break
 		}
@@ -469,7 +526,8 @@ func (c *Context) wstore() map[string][]byte {
 	return c.wfiles
 }
 
-func sysOpenat(c *Context, a [6]uint64) int64 {
+func SysOpenat(c *Context, f *SyscallFrame) Result {
+	a := f.Args
 	path := c.readCStr(a[1])
 	flags := a[2]
 	t := c.fdTable()
@@ -489,7 +547,7 @@ func sysOpenat(c *Context, a [6]uint64) int64 {
 		if c.Verbose {
 			fmt.Printf("[openat:w] %q -> fd=%d\n", path, fd)
 		}
-		return int64(fd)
+		return Result{Value: uint64(fd)}
 	}
 
 	data, err := c.VFS.Read(path)
@@ -500,7 +558,7 @@ func sysOpenat(c *Context, a [6]uint64) int64 {
 			if c.Verbose {
 				fmt.Printf("[openat] %q -> ENOENT\n", path)
 			}
-			return -ENOENT
+			return Result{Errno: ENOENT}
 		}
 	}
 	c.nextFd++
@@ -508,7 +566,7 @@ func sysOpenat(c *Context, a [6]uint64) int64 {
 	if c.Verbose {
 		fmt.Printf("[openat] %q -> fd=%d (%d bytes)\n", path, fd, len(data))
 	}
-	return int64(fd)
+	return Result{Value: uint64(fd)}
 }
 
 func (c *Context) fileData(f *openFile) []byte {
@@ -518,35 +576,36 @@ func (c *Context) fileData(f *openFile) []byte {
 	return f.data
 }
 
-func sysRead(c *Context, a [6]uint64) int64 {
-	f := c.fdTable()[int32(a[0])]
-	if f == nil {
-		return -EBADF
+func SysRead(c *Context, f *SyscallFrame) Result {
+	a := f.Args
+	fp := c.fdTable()[int32(a[0])]
+	if fp == nil {
+		return Result{Errno: EBADF}
 	}
-	data := c.fileData(f)
+	data := c.fileData(fp)
 	n := int64(a[2])
-	if rem := int64(len(data)) - f.pos; n > rem {
+	if rem := int64(len(data)) - fp.pos; n > rem {
 		n = rem
 	}
 	if n <= 0 {
-		return 0
+		return Result{}
 	}
-	c.B.MemWrite(a[1], data[f.pos:f.pos+n])
-	f.pos += n
-	return n
+	c.B.MemWrite(emu.GuestAddr(a[1]), data[fp.pos:fp.pos+n])
+	fp.pos += n
+	return Result{Value: uint64(n)}
 }
 
-func sysClose(c *Context, a [6]uint64) int64 {
-	fd := int32(a[0])
+func SysClose(c *Context, f *SyscallFrame) Result {
+	fd := int32(f.Args[0])
 	if _, ok := c.fdTable()[fd]; !ok {
-		return -EBADF // real kernels reject closing an unopened fd
+		return Result{Errno: EBADF} // real kernels reject closing an unopened fd
 	}
 	delete(c.fdTable(), fd)
-	return 0
+	return Result{}
 }
 
-func sysMkdirat(c *Context, a [6]uint64) int64 {
-	path := c.readCStr(a[1])
+func SysMkdirat(c *Context, f *SyscallFrame) Result {
+	path := c.readCStr(f.Args[1])
 	if c.dirs == nil {
 		c.dirs = map[string]bool{}
 	}
@@ -554,74 +613,78 @@ func sysMkdirat(c *Context, a [6]uint64) int64 {
 	if c.Verbose {
 		fmt.Printf("[mkdirat] %q -> 0\n", path)
 	}
-	return 0
+	return Result{}
 }
 
-func sysLseek(c *Context, a [6]uint64) int64 {
-	f := c.fdTable()[int32(a[0])]
-	if f == nil {
-		return -EBADF
+func SysLseek(c *Context, f *SyscallFrame) Result {
+	a := f.Args
+	fp := c.fdTable()[int32(a[0])]
+	if fp == nil {
+		return Result{Errno: EBADF}
 	}
 	off, whence := int64(a[1]), a[2]
 	switch whence {
 	case 0: // SEEK_SET
-		f.pos = off
+		fp.pos = off
 	case 1: // SEEK_CUR
-		f.pos += off
+		fp.pos += off
 	case 2: // SEEK_END
-		f.pos = int64(len(c.fileData(f))) + off
+		fp.pos = int64(len(c.fileData(fp))) + off
 	default: // SEEK_DATA/HOLE etc. unmodeled
-		return -EINVAL
+		return Result{Errno: EINVAL}
 	}
-	if f.pos < 0 {
-		f.pos = 0 // don't leave the fd positioned at a negative offset
-		return -EINVAL
+	if fp.pos < 0 {
+		fp.pos = 0 // don't leave the fd positioned at a negative offset
+		return Result{Errno: EINVAL}
 	}
-	return f.pos
+	return Result{Value: uint64(fp.pos)}
 }
 
-func sysFaccessat(c *Context, a [6]uint64) int64 {
-	path := c.readCStr(a[1])
+func SysFaccessat(c *Context, f *SyscallFrame) Result {
+	path := c.readCStr(f.Args[1])
 	if c.VFS.Exists(path) || c.dirs[path] {
-		return 0
+		return Result{}
 	}
 	if _, ok := c.wstore()[path]; ok {
-		return 0
+		return Result{}
 	}
-	return -ENOENT
+	return Result{Errno: ENOENT}
 }
 
-// writeStat fills a Linux arm64 `struct stat` (128 bytes).
-func writeStat(c *Context, addr uint64, size int64, isDir bool) {
-	var st [128]byte
+// writeStat fills the guest `struct stat` at addr through the injected codec
+// (kernel owns the semantic content — mode bits and size; the codec owns the
+// asm-generic LP64 layout and derived fields like st_blocks).
+func (c *Context) writeStat(addr uint64, size uint64, isDir bool) {
 	mode := uint32(0x81a4) // S_IFREG|0644
 	if isDir {
 		mode = 0x41ed // S_IFDIR|0755
 	}
-	binary.LittleEndian.PutUint32(st[16:], mode)                   // st_mode
-	binary.LittleEndian.PutUint64(st[48:], uint64(size))           // st_size
-	binary.LittleEndian.PutUint32(st[56:], 0x1000)                 // st_blksize
-	binary.LittleEndian.PutUint64(st[64:], uint64((size+511)/512)) // st_blocks
-	c.B.MemWrite(addr, st[:])
-}
-
-func sysFstat(c *Context, a [6]uint64) int64 {
-	f := c.fdTable()[int32(a[0])]
-	if f == nil {
-		return -EBADF
+	buf := make([]byte, c.Codecs.StatSize())
+	if err := c.Codecs.EncodeStat(buf, Stat{Mode: mode, Size: size}); err != nil {
+		return
 	}
-	writeStat(c, a[1], int64(len(c.fileData(f))), false)
-	return 0
+	c.B.MemWrite(emu.GuestAddr(addr), buf)
 }
 
-func sysNewfstatat(c *Context, a [6]uint64) int64 {
+func SysFstat(c *Context, f *SyscallFrame) Result {
+	a := f.Args
+	fp := c.fdTable()[int32(a[0])]
+	if fp == nil {
+		return Result{Errno: EBADF}
+	}
+	c.writeStat(a[1], uint64(len(c.fileData(fp))), false)
+	return Result{}
+}
+
+func SysNewfstatat(c *Context, f *SyscallFrame) Result {
+	a := f.Args
 	path := c.readCStr(a[1])
 	if c.dirs[path] {
-		writeStat(c, a[2], 4096, true)
+		c.writeStat(a[2], 4096, true)
 		if c.Verbose {
 			fmt.Printf("[newfstatat] %q -> dir\n", path)
 		}
-		return 0
+		return Result{}
 	}
 	var size int64 = -1
 	if data, err := c.VFS.Read(path); err == nil {
@@ -633,47 +696,48 @@ func sysNewfstatat(c *Context, a [6]uint64) int64 {
 		if c.Verbose {
 			fmt.Printf("[newfstatat] %q -> ENOENT\n", path)
 		}
-		return -ENOENT
+		return Result{Errno: ENOENT}
 	}
-	writeStat(c, a[2], size, false)
+	c.writeStat(a[2], uint64(size), false)
 	if c.Verbose {
 		fmt.Printf("[newfstatat] %q -> size=%d\n", path, size)
 	}
-	return 0
+	return Result{}
 }
 
-func sysFutex(c *Context, a [6]uint64) int64 {
+func SysFutex(c *Context, f *SyscallFrame) Result {
+	a := f.Args
 	op := a[1] & 0x7f
 	if c.Verbose {
 		name := map[uint64]string{0: "WAIT", 1: "WAKE", 9: "WAKE_OP", 6: "WAIT_BITSET", 7: "WAKE_BITSET"}[op]
 		fmt.Printf("[futex] uaddr=0x%x op=%d(%s) val=%d\n", a[0], op, name, a[2])
 	}
-	return 0
+	return Result{}
 }
 
-func sysExit(c *Context, a [6]uint64) int64 {
+func SysExit(c *Context, f *SyscallFrame) Result {
 	c.Exited = true
-	c.ExitCode = int(int32(a[0]))
+	c.ExitCode = int(int32(f.Args[0]))
 	fmt.Printf("[syscall] exit_group(%d) — guest requested exit; stopping\n", c.ExitCode)
 	_ = c.B.Stop()
-	return 0
+	return Result{}
 }
 
-func sysBrk(c *Context, a [6]uint64) int64 {
+func SysBrk(c *Context, f *SyscallFrame) Result {
 	if c.brkCur == 0 {
 		c.brkCur = BrkBase
 	}
-	want := a[0]
+	want := f.Args[0]
 	if want == 0 || want < BrkBase {
-		return int64(c.brkCur)
+		return Result{Value: c.brkCur}
 	}
 	if hi, lo := pageUp(want), pageUp(c.brkCur); hi > lo {
-		if err := c.B.MemMap(lo, hi-lo, emu.ProtRead|emu.ProtWrite); err != nil {
-			return int64(c.brkCur)
+		if err := c.B.MemMap(emu.GuestAddr(lo), hi-lo, emu.ProtRead|emu.ProtWrite); err != nil {
+			return Result{Value: c.brkCur}
 		}
 	}
 	c.brkCur = want
-	return int64(want)
+	return Result{Value: want}
 }
 
 // Clock is the guest's time source. All time-serving syscalls derive from one
@@ -733,7 +797,8 @@ func (c *Context) SinceBoot() time.Duration {
 	return 0
 }
 
-func sysClockGettime(c *Context, a [6]uint64) int64 {
+func SysClockGettime(c *Context, f *SyscallFrame) Result {
+	a := f.Args
 	var sec, nsec int64
 	switch a[0] {
 	case clockMonotonic, clockMonotonicRaw, clockMonotonicCoarse, clockBoottime:
@@ -745,23 +810,25 @@ func sysClockGettime(c *Context, a [6]uint64) int64 {
 		now := c.Now()
 		sec, nsec = now.Unix(), int64(now.Nanosecond())
 	}
-	var b [16]byte
-	binary.LittleEndian.PutUint64(b[0:], uint64(sec))
-	binary.LittleEndian.PutUint64(b[8:], uint64(nsec))
-	c.B.MemWrite(a[1], b[:])
-	return 0
+	buf := make([]byte, c.Codecs.TimespecSize())
+	if err := c.Codecs.EncodeTimespec(buf, Timespec{Sec: sec, Nsec: nsec}); err != nil {
+		return Result{Errno: EINVAL}
+	}
+	c.B.MemWrite(emu.GuestAddr(a[1]), buf)
+	return Result{}
 }
 
-func sysGettimeofday(c *Context, a [6]uint64) int64 {
+func SysGettimeofday(c *Context, f *SyscallFrame) Result {
 	now := c.Now()
-	var b [16]byte
-	binary.LittleEndian.PutUint64(b[0:], uint64(now.Unix()))
-	binary.LittleEndian.PutUint64(b[8:], uint64(now.Nanosecond()/1000)) // usec
-	c.B.MemWrite(a[0], b[:])
-	return 0
+	buf := make([]byte, c.Codecs.TimevalSize())
+	if err := c.Codecs.EncodeTimeval(buf, Timeval{Sec: now.Unix(), Usec: int64(now.Nanosecond() / 1000)}); err != nil {
+		return Result{Errno: EINVAL}
+	}
+	c.B.MemWrite(emu.GuestAddr(f.Args[0]), buf)
+	return Result{}
 }
 
-// sysGetrandom fills the buffer. Two modes:
+// SysGetrandom fills the buffer. Two modes:
 //   - TrueRandom set: crypto/rand — for security-sensitive guests whose
 //     key material must not be predictable.
 //   - default (deterministic): a mixed-parameter LCG stream. Deterministic
@@ -770,92 +837,107 @@ func sysGettimeofday(c *Context, a [6]uint64) int64 {
 //     same bytes. NOTE: even the deterministic stream is trivially
 //     distinguishable from real entropy — guests that sample it for
 //     anti-emulation checks will see through it; set TrueRandom for those.
-func sysGetrandom(c *Context, a [6]uint64) int64 {
+func SysGetrandom(c *Context, f *SyscallFrame) Result {
+	a := f.Args
 	n := a[1]
+	if n > MaxGuestIO {
+		return Result{Errno: EINVAL} // P7.6: a guest count never sizes a host alloc
+	}
 	buf := make([]byte, n)
 	if c.TrueRandom {
 		if _, err := crand.Read(buf); err != nil {
-			return -EIO
+			return Result{Errno: EIO}
 		}
-		c.B.MemWrite(a[0], buf)
-		return int64(n)
+		c.B.MemWrite(emu.GuestAddr(a[0]), buf)
+		return Result{Value: n}
 	}
 	seed := uint64(a[0]) ^ uint64(a[1])<<8 ^ uint64(a[2])<<16 ^ a[3]<<24 ^ a[4]<<32 ^ a[5]<<40 ^ c.getrandomCalls<<56
 	c.getrandomCalls++
-	x := seed
-	for i := range buf {
-		x += 0x9E3779B97F4A7C15
-		x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9
-		x = (x ^ (x >> 27)) * 0x94D049BB133111EB
-		x ^= x >> 31
-		buf[i] = byte(x >> 56)
-	}
-	c.B.MemWrite(a[0], buf)
-	return int64(n)
+	DeterministicRandom(seed, buf)
+	c.B.MemWrite(emu.GuestAddr(a[0]), buf)
+	return Result{Value: n}
 }
 
-func sysMunmap(c *Context, a [6]uint64) int64 {
+func SysMunmap(c *Context, f *SyscallFrame) Result {
+	a := f.Args
 	c.Mem.Munmap(a[0], a[1])
-	c.B.MemUnmap(a[0], pageUp(a[1]))
-	return 0
+	c.B.MemUnmap(emu.GuestAddr(a[0]), pageUp(a[1]))
+	return Result{}
 }
 
-func sysMprotect(c *Context, a [6]uint64) int64 {
+func SysMprotect(c *Context, f *SyscallFrame) Result {
+	a := f.Args
 	// Page-granular protect on the backend; mem.Space bookkeeping is best-effort
 	// (bionic protects sub-ranges of larger mappings, e.g. thread stack guards).
 	_ = c.Mem.Protect(a[0], a[1], int(a[2]))
-	if err := c.B.MemProtect(a[0]&^0xfff, pageUp(a[1]), int(a[2])); err != nil {
-		return -EPERM
+	if err := c.B.MemProtect(emu.GuestAddr(a[0]&^0xfff), pageUp(a[1]), int(a[2])); err != nil {
+		return Result{Errno: EPERM}
 	}
-	return 0
-}
-
-// todo is an optimistic stub: returns 0 (success) for syscalls real kernels
-// commonly answer trivially. Logged under Verbose so drift from a real device
-// stays visible; replace with real implementations when behavior matters.
-func todo(name string) Handler {
-	return func(c *Context, _ [6]uint64) int64 {
-		if c.Verbose {
-			fmt.Printf("[syscall] TODO %s -> stub 0\n", name)
-		}
-		return 0
-	}
+	return Result{}
 }
 
 func pageUp(x uint64) uint64 { return (x + 0xfff) &^ 0xfff }
 
-// sysUname fills `struct utsname` (6 × 65-byte NUL-padded fields) with Android-ish
-// values so libc's uname()-based checks succeed.
-func sysUname(c *Context, a [6]uint64) int64 {
+// UnameInfo is the platform-supplied utsname identity (P7.5b): per-arch
+// personality data selected at Bind time (e.g. Android: aarch64 / armv7l /
+// x86_64), injected into Context by the composition root. The utsname LAYOUT
+// is identical on every Linux architecture (fixed 65-byte fields), so the
+// handler stays layout-independent — but the IDENTITY is platform business,
+// never a kernel-side constant.
+type UnameInfo struct {
+	Sysname    string
+	Nodename   string
+	Release    string
+	Version    string
+	Machine    string
+	Domainname string
+}
+
+// SysUname fills `struct utsname` (6 × 65-byte NUL-padded fields) from the
+// platform-supplied identity (Context.Uname). A platform that binds uname
+// without configuring an identity is a wiring bug: fail loudly (EINVAL)
+// rather than fabricate values.
+func SysUname(c *Context, f *SyscallFrame) Result {
+	if c.Uname == nil {
+		return Result{Errno: EINVAL} // loud: uname bound without a platform identity
+	}
+	u := c.Uname
 	var buf [6 * 65]byte
 	set := func(i int, s string) { copy(buf[i*65:i*65+64], s) }
-	set(0, "Linux")
-	set(1, "localhost")
-	set(2, "4.14.117-golem")
-	set(3, "#1 SMP PREEMPT")
-	set(4, "aarch64")
-	set(5, "localdomain")
-	c.B.MemWrite(a[0], buf[:])
-	return 0
+	set(0, u.Sysname)
+	set(1, u.Nodename)
+	set(2, u.Release)
+	set(3, u.Version)
+	set(4, u.Machine)
+	set(5, u.Domainname)
+	if err := c.B.MemWrite(emu.GuestAddr(f.Args[0]), buf[:]); err != nil {
+		return Result{Errno: EFAULT}
+	}
+	return Result{}
 }
 
-// sysSysinfo fills a plausible `struct sysinfo` (LP64 layout) — enough RAM for
-// libc heuristics; uptime comes from the guest clock so it agrees with
+// SysSysinfo fills a plausible `struct sysinfo` — enough RAM for libc
+// heuristics; uptime comes from the guest clock so it agrees with
 // clock_gettime(CLOCK_BOOTTIME) (0 in pinned-Epoch mode).
-func sysSysinfo(c *Context, a [6]uint64) int64 {
-	var st [128]byte
-	put := func(off int, v uint64) { binary.LittleEndian.PutUint64(st[off:], v) }
-	put(0, uint64(c.SinceBoot()/time.Second))  // uptime (s)
-	put(32, 4*1024*1024*1024)                  // totalram
-	put(40, 2*1024*1024*1024)                  // freeram
-	binary.LittleEndian.PutUint16(st[80:], 64) // procs
-	binary.LittleEndian.PutUint32(st[104:], 1) // mem_unit (bytes)
-	c.B.MemWrite(a[0], st[:])
-	return 0
+func SysSysinfo(c *Context, f *SyscallFrame) Result {
+	buf := make([]byte, c.Codecs.SysinfoSize())
+	err := c.Codecs.EncodeSysinfo(buf, Sysinfo{
+		UptimeSec: uint64(c.SinceBoot() / time.Second),
+		TotalRAM:  4 * 1024 * 1024 * 1024,
+		FreeRAM:   2 * 1024 * 1024 * 1024,
+		Procs:     64,
+		MemUnit:   1, // bytes
+	})
+	if err != nil {
+		return Result{Errno: EINVAL}
+	}
+	c.B.MemWrite(emu.GuestAddr(f.Args[0]), buf)
+	return Result{}
 }
 
-// sysReadlinkat resolves the handful of /proc symlinks libc reads at startup.
-func sysReadlinkat(c *Context, a [6]uint64) int64 {
+// SysReadlinkat resolves the handful of /proc symlinks libc reads at startup.
+func SysReadlinkat(c *Context, f *SyscallFrame) Result {
+	a := f.Args
 	path := c.readCStr(a[1])
 	var target string
 	switch path {
@@ -867,74 +949,81 @@ func sysReadlinkat(c *Context, a [6]uint64) int64 {
 		if c.Verbose {
 			fmt.Printf("[readlinkat] %q -> ENOENT\n", path)
 		}
-		return -ENOENT
+		return Result{Errno: ENOENT}
 	}
 	n := uint64(len(target))
 	if n > a[3] {
 		n = a[3]
 	}
-	c.B.MemWrite(a[2], []byte(target)[:n])
-	return int64(n)
+	c.B.MemWrite(emu.GuestAddr(a[2]), []byte(target)[:n])
+	return Result{Value: n}
 }
 
-// sysGetdents64 reports an empty directory (end-of-stream). A real enumeration
+// SysGetdents64 reports an empty directory (end-of-stream). A real enumeration
 // of the VFS could go here; empty is correct and safe for callers that iterate.
-func sysGetdents64(c *Context, a [6]uint64) int64 { return 0 }
+func SysGetdents64(c *Context, f *SyscallFrame) Result { return Result{} }
 
-// sysGetcwd writes the current working directory (root) including the NUL.
-func sysGetcwd(c *Context, a [6]uint64) int64 {
+// SysGetcwd writes the current working directory (root) including the NUL.
+func SysGetcwd(c *Context, f *SyscallFrame) Result {
+	a := f.Args
 	cwd := []byte("/\x00")
 	if uint64(len(cwd)) > a[1] {
-		return -ERANGE
+		return Result{Errno: ERANGE}
 	}
-	c.B.MemWrite(a[0], cwd)
-	return int64(len(cwd))
+	c.B.MemWrite(emu.GuestAddr(a[0]), cwd)
+	return Result{Value: uint64(len(cwd))}
 }
 
-// sysPrlimit64 returns sensible RLIMITs (stack 8 MiB, files 1024, else infinity).
-func sysPrlimit64(c *Context, a [6]uint64) int64 {
+// SysPrlimit64 returns sensible RLIMITs (stack 8 MiB, files 1024, else infinity).
+func SysPrlimit64(c *Context, f *SyscallFrame) Result {
+	a := f.Args
 	if old := a[3]; old != 0 {
-		cur, max := ^uint64(0), ^uint64(0) // RLIM_INFINITY
+		rl := Rlimit{Cur: ^uint64(0), Max: ^uint64(0)} // RLIM_INFINITY
 		switch a[1] {
 		case 3: // RLIMIT_STACK
-			cur, max = 8*1024*1024, 8*1024*1024
+			rl.Cur, rl.Max = 8*1024*1024, 8*1024*1024
 		case 7: // RLIMIT_NOFILE
-			cur, max = 1024, 4096
+			rl.Cur, rl.Max = 1024, 4096
 		}
-		var b [16]byte
-		binary.LittleEndian.PutUint64(b[0:], cur)
-		binary.LittleEndian.PutUint64(b[8:], max)
-		c.B.MemWrite(old, b[:])
+		buf := make([]byte, c.Codecs.RlimitSize())
+		if err := c.Codecs.EncodeRlimit(buf, rl); err != nil {
+			return Result{Errno: EINVAL}
+		}
+		c.B.MemWrite(emu.GuestAddr(old), buf)
 	}
-	return 0
+	return Result{}
 }
 
-// sysIoctl is a permissive no-op (success); the sign path issues no meaningful
+// SysIoctl is a permissive no-op (success); the sign path issues no meaningful
 // ioctls. Logged under -v so a load-bearing one is noticeable.
-func sysIoctl(c *Context, a [6]uint64) int64 {
+func SysIoctl(c *Context, f *SyscallFrame) Result {
 	if c.Verbose {
-		fmt.Printf("[ioctl] fd=%d req=0x%x -> 0\n", a[0], a[1])
+		fmt.Printf("[ioctl] fd=%d req=0x%x -> 0\n", f.Args[0], f.Args[1])
 	}
-	return 0
+	return Result{}
 }
 
-// sysSchedGetaffinity reports up to 8 online CPUs and returns the mask byte count.
-func sysSchedGetaffinity(c *Context, a [6]uint64) int64 {
+// SysSchedGetaffinity reports up to 8 online CPUs and returns the mask byte
+// count. The mask is a plain byte blob (no layout dependence), not a codec
+// struct.
+func SysSchedGetaffinity(c *Context, f *SyscallFrame) Result {
+	a := f.Args
 	n := a[1] // cpusetsize
 	if n == 0 {
-		return -EINVAL
+		return Result{Errno: EINVAL}
 	}
 	if n > 8 {
 		n = 8
 	}
 	mask := make([]byte, n)
 	mask[0] = 0xFF // CPUs 0..7 online
-	c.B.MemWrite(a[2], mask)
-	return int64(n)
+	c.B.MemWrite(emu.GuestAddr(a[2]), mask)
+	return Result{Value: n}
 }
 
-// sysStatx fills a minimal `struct statx` (like newfstatat, statx ABI).
-func sysStatx(c *Context, a [6]uint64) int64 {
+// SysStatx fills a minimal `struct statx` (like newfstatat, statx ABI).
+func SysStatx(c *Context, f *SyscallFrame) Result {
+	a := f.Args
 	path := c.readCStr(a[1])
 	var size int64 = -1
 	isDir := c.dirs[path]
@@ -952,19 +1041,24 @@ func sysStatx(c *Context, a [6]uint64) int64 {
 		if c.Verbose {
 			fmt.Printf("[statx] %q -> ENOENT\n", path)
 		}
-		return -ENOENT
+		return Result{Errno: ENOENT}
 	}
-	var st [256]byte
 	mode := uint16(0x81a4) // S_IFREG|0644
 	if isDir {
 		mode = 0x41ed // S_IFDIR|0755
 	}
-	binary.LittleEndian.PutUint32(st[0:], 0x7ff)                   // stx_mask (basic)
-	binary.LittleEndian.PutUint32(st[4:], 0x1000)                  // stx_blksize
-	binary.LittleEndian.PutUint32(st[16:], 1)                      // stx_nlink
-	binary.LittleEndian.PutUint16(st[28:], mode)                   // stx_mode
-	binary.LittleEndian.PutUint64(st[40:], uint64(size))           // stx_size
-	binary.LittleEndian.PutUint64(st[48:], uint64((size+511)/512)) // stx_blocks
-	c.B.MemWrite(a[4], st[:])
-	return 0
+	buf := make([]byte, c.Codecs.StatxSize())
+	err := c.Codecs.EncodeStatx(buf, Statx{
+		Mask:    0x7ff, // STATX_BASIC_STATS
+		Blksize: 0x1000,
+		Nlink:   1,
+		Mode:    mode,
+		Size:    uint64(size),
+		Blocks:  uint64((size + 511) / 512),
+	})
+	if err != nil {
+		return Result{Errno: EINVAL}
+	}
+	c.B.MemWrite(emu.GuestAddr(a[4]), buf)
+	return Result{}
 }

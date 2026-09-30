@@ -114,22 +114,33 @@ var gpRegIDs = func() (ids [34]int32) {
 	return ids
 }()
 
+// regMap translates an abstract emu.Reg to its UC_ARM64_REG_* id.
+//
+// P0 known exception: the ARM64 register ids now live in internal/arch/arm64,
+// but emu cannot import that package — arm64 imports emu (for emu.Reg), so
+// importing it back would be an import cycle. The switch therefore keys on
+// the id NUMBERS arch/arm64 assigns (X0..X10=0..10, X23=11, SP=12, PC=13,
+// LR=14, NZCV=15, TPIDR_EL0=16, X16=17); arch/arm64's TestFrozenRegIDs pins
+// those numbers, so any drift fails tests loudly instead of corrupting
+// registers.
 func regMap(r Reg) int32 {
 	switch r {
-	case RegX0, RegX1, RegX2, RegX3, RegX4, RegX5, RegX6, RegX7, RegX8, RegX9, RegX10:
+	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10: // arm64.X0 .. arm64.X10
 		return ucRegX(int(r))
-	case RegX23:
+	case 11: // arm64.X23
 		return ucRegX(23)
-	case RegSP:
+	case 12: // arm64.SP
 		return ucRegSP
-	case RegPC:
+	case 13: // arm64.PC
 		return ucRegPC
-	case RegLR:
+	case 14: // arm64.LR
 		return ucRegLR
-	case RegNZCV:
+	case 15: // arm64.NZCV
 		return ucRegNZCV
-	case RegTPIDR_EL0:
+	case 16: // arm64.TPIDR_EL0
 		return ucRegTPIDR
+	case 17: // arm64.X16 (P5b: Darwin syscall-number register)
+		return ucRegX(16)
 	default:
 		return ucRegInvalid
 	}
@@ -147,6 +158,7 @@ var (
 	pRegRead   func(uc unsafe.Pointer, regid int32, val unsafe.Pointer) int32                       // uc_reg_read
 	pRegWrite  func(uc unsafe.Pointer, regid int32, val unsafe.Pointer) int32                       // uc_reg_write
 	pRegRdBat  func(uc unsafe.Pointer, regs unsafe.Pointer, vals unsafe.Pointer, count int32) int32 // uc_reg_read_batch (void** vals)
+	pRegWrBat  func(uc unsafe.Pointer, regs unsafe.Pointer, vals unsafe.Pointer, count int32) int32 // uc_reg_write_batch (void** vals) — P9.5a
 	pMemMap    func(uc unsafe.Pointer, addr uint64, size uint64, prot uint32) int32
 	pMemMapPtr func(uc unsafe.Pointer, addr uint64, size uint64, prot uint32, ptr unsafe.Pointer) int32 // uc_mem_map_ptr
 	pMemUnmap  func(uc unsafe.Pointer, addr uint64, size uint64) int32
@@ -189,7 +201,8 @@ func loadUnicorn() error {
 		"uc_close":          &pClose,
 		"uc_reg_read":       &pRegRead,
 		"uc_reg_write":      &pRegWrite,
-		"uc_reg_read_batch": &pRegRdBat,
+		"uc_reg_read_batch":  &pRegRdBat,
+		"uc_reg_write_batch": &pRegWrBat,
 		"uc_mem_map":        &pMemMap,
 		"uc_mem_map_ptr":    &pMemMapPtr,
 		"uc_mem_unmap":      &pMemUnmap,
@@ -228,11 +241,20 @@ func loadUnicorn() error {
 	tryRegister("uc_context_restore", &pCtxRestore)
 	tryRegister("uc_context_free", &pCtxFree)
 
-	// Static C→Go trampolines. Three, total, for the process lifetime — hook
+	// Static C→Go trampolines. Four, total, for the process lifetime — hook
 	// identity rides in user_data (the cbid), never in the trampoline.
 	codeTramp = purego.NewCallback(goCodeHook)
 	intrTramp = purego.NewCallback(goIntrHook)
 	memTramp = purego.NewCallback(goMemHook)
+	insnTramp = purego.NewCallback(goInsnHook)
+
+	// Fixed-arity declarations of uc_hook_add's variadic tail for UC_HOOK_INSN
+	// (the instruction id). Both bind the same symbol; hookAddInsn picks the
+	// host-ABI correct one (see unicorn_amd64.go).
+	if sym, err := findSymbol(handle, "uc_hook_add"); err == nil {
+		purego.RegisterFunc(&pHookAddInsn, sym)
+		purego.RegisterFunc(&pHookAddInsnPad, sym)
+	}
 	return nil
 }
 
@@ -287,11 +309,12 @@ var (
 	codeTramp uintptr
 	intrTramp uintptr
 	memTramp  uintptr
+	insnTramp uintptr
 )
 
 func goCodeHook(uc uintptr, addr uint64, size uint64, user uintptr) uintptr {
 	if e := lookupCB(uint64(user)); e != nil && e.code != nil {
-		e.code(e.be, addr, uint32(size))
+		e.code(e.be, GuestAddr(addr), uint32(size)) // raw C addr → GuestAddr at the trampoline boundary
 	}
 	return 0
 }
@@ -312,17 +335,17 @@ func goMemHook(uc uintptr, typ uint64, addr uint64, size uint64, value int64, us
 		return 0
 	}
 	if e.memrd != nil { // valid-read hook (ranged); return value ignored by unicorn
-		e.memrd(e.be, addr, int(int32(size)))
+		e.memrd(e.be, GuestAddr(addr), int(int32(size))) // raw C addr → GuestAddr
 		return 0
 	}
 	if e.memwr != nil { // valid-write hook (ranged); value = bytes being written
-		e.memwr(e.be, addr, int(int32(size)), value)
+		e.memwr(e.be, GuestAddr(addr), int(int32(size)), value) // raw C addr → GuestAddr
 		return 0
 	}
 	if e.mem == nil {
 		return 0
 	}
-	if e.mem(e.be, int(int32(typ)), addr, int(int32(size)), value) {
+	if e.mem(e.be, int(int32(typ)), GuestAddr(addr), int(int32(size)), value) { // raw C addr → GuestAddr
 		return 1
 	}
 	return 0
@@ -340,9 +363,10 @@ type hookReg struct {
 	be    *unicornBackend
 	code  CodeHookFunc
 	intr  InterruptHookFunc
-	mem   func(Backend, int, uint64, int, int64) bool
-	memrd func(Backend, uint64, int)
-	memwr func(Backend, uint64, int, int64)
+	insn  func(be Backend) // UC_HOOK_INSN (AMD64: the syscall instruction)
+	mem   MemInvalidHookFunc
+	memrd MemReadHookFunc
+	memwr MemWriteHookFunc
 }
 
 func registerCB(h *hookReg) uint64 {
@@ -363,21 +387,78 @@ func lookupCB(id uint64) *hookReg {
 
 func init() { Register("unicorn", newUnicornBackend) }
 
+// The unicorn backend implements the Backend core plus every capability
+// interface defined today (DESIGN.md invariant 14: facts, not promises — a
+// drift here fails the build).
+var (
+	_ Backend             = (*unicornBackend)(nil)
+	_ InstructionHooker   = (*unicornBackend)(nil)
+	_ InterruptHooker     = (*unicornBackend)(nil)
+	_ InvalidMemHooker    = (*unicornBackend)(nil)
+	_ MemReadHooker       = (*unicornBackend)(nil)
+	_ MemWriteHooker      = (*unicornBackend)(nil)
+	_ ContextManager      = (*unicornBackend)(nil)
+	_ CacheInvalidator    = (*unicornBackend)(nil)
+	_ CodeCacheController = (*unicornBackend)(nil)
+)
+
 type unicornBackend struct {
 	uc       unsafe.Pointer
 	cbs      []uint64
+	arch     Arch   // the guest architecture this engine was created for
 	pageSize uint64 // unicorn's guest page size (4 KiB on aarch64 — NOT the host page size)
+
+	traps    []*trapReg // InstallTrap registrations, dispatched from trapHook
+	trapHook HookHandle // lazily-installed UC_HOOK_INTR serving InstallTrap
+
+	insnTraps []*trapReg // AMD64: TrapSyscall registrations served by UC_HOOK_INSN
+	insnHook  HookHandle // lazily-installed UC_HOOK_INSN(UC_X86_INS_SYSCALL)
 }
 
-func newUnicornBackend() (Backend, error) {
+func newUnicornBackend(a Arch) (Backend, error) {
+	var ucArch, ucMode int32
+	switch a {
+	case ArchARM64:
+		ucArch, ucMode = ucArchARM64, ucModeARM
+	case ArchARM:
+		// UC_MODE_ARM is the RESET state; Thumb entry is by the start
+		// address bit0 (unicorn_arm.go header) — no per-run mode needed here.
+		ucArch, ucMode = ucArchARM, ucModeARM
+	case ArchAMD64:
+		ucArch, ucMode = ucArchX86, ucMode64
+	default:
+		return nil, fmt.Errorf("emu: unicorn backend: arch %s: %w", a, ErrUnsupported)
+	}
 	if err := ensureLoaded(); err != nil {
 		return nil, err
 	}
 	var uc unsafe.Pointer
-	if e := pOpen(ucArchARM64, ucModeARM, unsafe.Pointer(&uc)); e != ucOK {
+	if e := pOpen(ucArch, ucMode, unsafe.Pointer(&uc)); e != ucOK {
 		return nil, ucErr("uc_open", e)
 	}
-	b := &unicornBackend{uc: uc, pageSize: 4096}
+	b := &unicornBackend{uc: uc, arch: a, pageSize: 4096}
+	if a == ArchARM {
+		// ARMv7 RESET leaves VFP/NEON disabled (cp10/cp11 inaccessible); a
+		// real Linux kernel enables them lazily on first use, and bionic
+		// assumes they are on. Without this, the first VLDR/NEON
+		// instruction raises Undefined → UC_ERR_INSN_INVALID (P8: exposed
+		// by real third-party ARMv7 libraries — Termux libsqlite3 hit a
+		// VLDR inside sqlite3_open→sqlite3_config's dispatch tail). Live
+		// probe pinned the semantics: THIS unicorn build gates VFP on
+		// FPEXC.EN (bit30), not CPACR — write both (CPACR = the
+		// architectural switch, FPEXC = the one that actually works here),
+		// engine-internal like the Windows PREALLOC default.
+		var fpexc uint64 = 1 << 30
+		if e := pRegWrite(uc, ucArmRegFPEXC, unsafe.Pointer(&fpexc)); e != ucOK {
+			pClose(uc)
+			return nil, ucErr("arm fpexc enable", e)
+		}
+		var cpacr uint64 = 0x00F00000
+		if e := pRegWrite(uc, ucArmRegC1C02, unsafe.Pointer(&cpacr)); e != ucOK {
+			pClose(uc)
+			return nil, ucErr("arm cpacr enable", e)
+		}
+	}
 	if runtime.GOOS == "windows" {
 		if err := b.applyWindowsDefaults(); err != nil {
 			pClose(uc)
@@ -459,35 +540,63 @@ func SetTCGBufferSize(b Backend, size uint32) error {
 	return nil
 }
 
+// toUCReg translates an abstract emu.Reg to this engine's UC register id,
+// dispatching on the engine's guest architecture. The mappings key on the
+// frozen id NUMBERS of internal/arch/arm64 (regMap), internal/arch/amd64
+// (regMapAMD64) and internal/arch/arm32 (regMapARM32) — emu cannot import
+// those packages (import cycle); their TestFrozenRegIDs pin the numbers on
+// the other side.
+func (b *unicornBackend) toUCReg(r Reg) int32 {
+	switch b.arch {
+	case ArchAMD64:
+		return regMapAMD64(r)
+	case ArchARM:
+		return regMapARM32(r)
+	}
+	return regMap(r)
+}
+
 func (b *unicornBackend) RegRead(r Reg) (uint64, error) {
 	var v uint64
-	if e := pRegRead(b.uc, regMap(r), unsafe.Pointer(&v)); e != ucOK {
+	if e := pRegRead(b.uc, b.toUCReg(r), unsafe.Pointer(&v)); e != ucOK {
 		return 0, ucErr("reg_read", e)
 	}
 	return v, nil
 }
 
 func (b *unicornBackend) RegWrite(r Reg, val uint64) error {
-	if e := pRegWrite(b.uc, regMap(r), unsafe.Pointer(&val)); e != ucOK {
+	if e := pRegWrite(b.uc, b.toUCReg(r), unsafe.Pointer(&val)); e != ucOK {
 		return ucErr("reg_write", e)
 	}
 	return nil
 }
 
-func (b *unicornBackend) ReadGPRegs() ([34]uint64, error) {
-	var out [34]uint64
+// ReadGPRegs is the RegFileReader capability: AArch64 dumps x0..x30, sp, pc,
+// nzcv; ARM32 dumps r0..r12, sp, lr, pc, cpsr (P8, real-library validation);
+// AMD64 answers ErrUnsupported loudly instead of borrowing either shape.
+func (b *unicornBackend) ReadGPRegs() ([]uint64, error) {
+	var ids []int32
+	switch b.arch {
+	case ArchARM64:
+		ids = gpRegIDs[:]
+	case ArchARM:
+		ids = arm32RegIDs[:]
+	default:
+		return nil, errNoGPRegs(b.arch)
+	}
+	out := make([]uint64, len(ids))
 	var ptrs [34]unsafe.Pointer
 	for i := range out {
 		ptrs[i] = unsafe.Pointer(&out[i])
 	}
-	if e := pRegRdBat(b.uc, unsafe.Pointer(&gpRegIDs[0]), unsafe.Pointer(&ptrs[0]), int32(34)); e != ucOK {
+	if e := pRegRdBat(b.uc, unsafe.Pointer(&ids[0]), unsafe.Pointer(&ptrs[0]), int32(len(ids))); e != ucOK {
 		return out, ucErr("read_gpregs", e)
 	}
 	return out, nil
 }
 
-func (b *unicornBackend) MemMap(addr, size uint64, prot int) error {
-	if e := pMemMap(b.uc, addr, size, uint32(prot)); e != ucOK {
+func (b *unicornBackend) MemMap(addr GuestAddr, size uint64, prot int) error {
+	if e := pMemMap(b.uc, uint64(addr), size, uint32(prot)); e != ucOK { // GuestAddr→raw at the purego boundary
 		return ucErr("mem_map", e)
 	}
 	return nil
@@ -505,63 +614,64 @@ func (b *unicornBackend) MemMap(addr, size uint64, prot int) error {
 //     queried via uc_ctl — the loader's segments are 4 KiB granular);
 //   - the host pointer aligns to the HOST page size (16 KiB on darwin/arm64),
 //     which syscall.Mmap allocations satisfy.
-func (b *unicornBackend) MemMapPtr(addr, size uint64, prot int, host unsafe.Pointer) error {
+func (b *unicornBackend) MemMapPtr(addr GuestAddr, size uint64, prot int, host unsafe.Pointer) error {
 	if host == nil {
 		return fmt.Errorf("emu: mem_map_ptr: nil host pointer (use MemMap for engine-owned memory)")
 	}
 	gmask := b.pageSize - 1
-	if b.pageSize == 0 || addr&gmask != 0 || size == 0 || size&gmask != 0 {
-		return fmt.Errorf("emu: mem_map_ptr: guest addr %#x and size %#x must be aligned to the unicorn page size %d", addr, size, b.pageSize)
+	a := uint64(addr) // GuestAddr→raw for alignment math and the C call
+	if b.pageSize == 0 || a&gmask != 0 || size == 0 || size&gmask != 0 {
+		return fmt.Errorf("emu: mem_map_ptr: guest addr %#x and size %#x must be aligned to the unicorn page size %d", a, size, b.pageSize)
 	}
 	hmask := uintptr(os.Getpagesize() - 1)
 	if uintptr(host)&hmask != 0 {
 		return fmt.Errorf("emu: mem_map_ptr: host pointer %p is not page-aligned (host page size %d)", host, os.Getpagesize())
 	}
-	if e := pMemMapPtr(b.uc, addr, size, uint32(prot), host); e != ucOK {
+	if e := pMemMapPtr(b.uc, a, size, uint32(prot), host); e != ucOK {
 		return ucErr("mem_map_ptr", e)
 	}
 	return nil
 }
 
-func (b *unicornBackend) MemUnmap(addr, size uint64) error {
-	if e := pMemUnmap(b.uc, addr, size); e != ucOK {
+func (b *unicornBackend) MemUnmap(addr GuestAddr, size uint64) error {
+	if e := pMemUnmap(b.uc, uint64(addr), size); e != ucOK { // GuestAddr→raw at the purego boundary
 		return ucErr("mem_unmap", e)
 	}
 	return nil
 }
 
-func (b *unicornBackend) MemProtect(addr, size uint64, prot int) error {
-	if e := pMemProt(b.uc, addr, size, uint32(prot)); e != ucOK {
+func (b *unicornBackend) MemProtect(addr GuestAddr, size uint64, prot int) error {
+	if e := pMemProt(b.uc, uint64(addr), size, uint32(prot)); e != ucOK { // GuestAddr→raw at the purego boundary
 		return ucErr("mem_protect", e)
 	}
 	return nil
 }
 
-func (b *unicornBackend) MemWrite(addr uint64, data []byte) error {
+func (b *unicornBackend) MemWrite(addr GuestAddr, data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
-	if e := pMemWrite(b.uc, addr, unsafe.Pointer(&data[0]), uint64(len(data))); e != ucOK {
+	if e := pMemWrite(b.uc, uint64(addr), unsafe.Pointer(&data[0]), uint64(len(data))); e != ucOK { // GuestAddr→raw
 		return ucErr("mem_write", e)
 	}
 	return nil
 }
 
-func (b *unicornBackend) MemRead(addr uint64, size uint64) ([]byte, error) {
+func (b *unicornBackend) MemRead(addr GuestAddr, size uint64) ([]byte, error) {
 	if size == 0 {
 		return nil, nil
 	}
 	buf := make([]byte, size)
-	if e := pMemRead(b.uc, addr, unsafe.Pointer(&buf[0]), size); e != ucOK {
+	if e := pMemRead(b.uc, uint64(addr), unsafe.Pointer(&buf[0]), size); e != ucOK { // GuestAddr→raw
 		return nil, ucErr("mem_read", e)
 	}
 	return buf, nil
 }
 
-func (b *unicornBackend) addHook(htype int32, begin, end uint64, fn *hookReg) (HookHandle, error) {
+func (b *unicornBackend) addHook(htype int32, begin, end GuestAddr, fn *hookReg) (HookHandle, error) {
 	id := registerCB(fn)
 	var hh uint64
-	if e := pHookAdd(b.uc, &hh, htype, trampFor(htype), uintptr(id), begin, end); e != ucOK {
+	if e := pHookAdd(b.uc, &hh, htype, trampFor(htype), uintptr(id), uint64(begin), uint64(end)); e != ucOK { // GuestAddr→raw
 		unregisterCB(id)
 		return nil, ucErr("hook_add", e)
 	}
@@ -584,7 +694,7 @@ func trampFor(htype int32) uintptr {
 	}
 }
 
-func (b *unicornBackend) HookCode(start, end uint64, fn CodeHookFunc) (HookHandle, error) {
+func (b *unicornBackend) HookCode(start, end GuestAddr, fn CodeHookFunc) (HookHandle, error) {
 	return b.addHook(hkCode, start, end, &hookReg{be: b, code: fn})
 }
 
@@ -593,27 +703,87 @@ func (b *unicornBackend) HookInterrupt(fn InterruptHookFunc) (HookHandle, error)
 	return b.addHook(hkIntr, 1, 0, &hookReg{be: b, intr: fn})
 }
 
-func (b *unicornBackend) HookMemInvalid(fn func(Backend, int, uint64, int, int64) bool) (HookHandle, error) {
+// ---- InstallTrap: generic trap dispatch over the single interrupt hook ------
+
+// trapReg is one InstallTrap registration.
+type trapReg struct {
+	kind TrapKind
+	h    TrapHandler
+}
+
+// InstallTrap adapts the generic trap interface onto the engine's trap
+// channels. Runtime kind discrimination is deliberately NOT done via stub
+// instruction bytes (P1 design decision: not a cross-arch contract).
+// Trampoline identity is decided by address — PC in the stub region resolves
+// via interpose.StubManager metadata; anything else is a guest syscall.
+//
+// Channel selection is an engine+arch implementation detail (the Backend
+// contract stays arch-neutral):
+//   - ARM64: every SVC fires UC_HOOK_INTR; all kinds share that hook
+//     (installed lazily on first use), each handler receiving the kind it was
+//     REGISTERED under — behavior identical to HookInterrupt registrations.
+//   - AMD64: host stubs (`int3`) fire UC_HOOK_INTR and take the same path;
+//     the guest `syscall` instruction is NOT an interrupt, so TrapSyscall is
+//     served by UC_HOOK_INSN(UC_X86_INS_SYSCALL) instead (unicorn_amd64.go) —
+//     the real guest-syscall channel, kept strictly separate from host stubs.
+func (b *unicornBackend) InstallTrap(kind TrapKind, h TrapHandler) (HookHandle, error) {
+	if b.arch == ArchAMD64 && kind == TrapSyscall {
+		return b.installInsnTrap(kind, h)
+	}
+	if b.trapHook == nil {
+		hh, err := b.HookInterrupt(func(bk Backend, _ uint32) {
+			for _, tr := range b.traps {
+				tr.h(bk, tr.kind)
+			}
+		})
+		if err != nil {
+			return nil, err
+		}
+		b.trapHook = hh
+	}
+	tr := &trapReg{kind: kind, h: h}
+	b.traps = append(b.traps, tr)
+	return &trapHandle{b: b, tr: tr}, nil
+}
+
+// trapHandle removes one InstallTrap registration. The underlying interrupt
+// hook stays (inert once traps is empty) — Close releases it via b.cbs.
+type trapHandle struct {
+	b  *unicornBackend
+	tr *trapReg
+}
+
+func (h *trapHandle) Remove() error {
+	for i, tr := range h.b.traps {
+		if tr == h.tr {
+			h.b.traps = append(h.b.traps[:i], h.b.traps[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
+func (b *unicornBackend) HookMemInvalid(fn MemInvalidHookFunc) (HookHandle, error) {
 	return b.addHook(hkMemInvalid, 1, 0, &hookReg{be: b, mem: fn})
 }
 
-func (b *unicornBackend) HookMemRead(start, end uint64, fn func(Backend, uint64, int)) (HookHandle, error) {
+func (b *unicornBackend) HookMemRead(start, end GuestAddr, fn MemReadHookFunc) (HookHandle, error) {
 	return b.addHook(hkMemRead, start, end, &hookReg{be: b, memrd: fn})
 }
 
-func (b *unicornBackend) HookMemWrite(start, end uint64, fn func(Backend, uint64, int, int64)) (HookHandle, error) {
+func (b *unicornBackend) HookMemWrite(start, end GuestAddr, fn MemWriteHookFunc) (HookHandle, error) {
 	return b.addHook(hkMemWrite, start, end, &hookReg{be: b, memwr: fn})
 }
 
-func (b *unicornBackend) Start(begin, until uint64) error {
-	if e := pStart(b.uc, begin, until, 0, 0); e != ucOK {
+func (b *unicornBackend) Start(begin, until GuestAddr) error {
+	if e := pStart(b.uc, uint64(begin), uint64(until), 0, 0); e != ucOK { // GuestAddr→raw
 		return ucErr("emu_start", e)
 	}
 	return nil
 }
 
-func (b *unicornBackend) StartCount(begin, until, count uint64) error {
-	if e := pStart(b.uc, begin, until, 0, count); e != ucOK {
+func (b *unicornBackend) StartCount(begin, until GuestAddr, count uint64) error {
+	if e := pStart(b.uc, uint64(begin), uint64(until), 0, count); e != ucOK { // GuestAddr→raw
 		return ucErr("emu_start", e)
 	}
 	return nil
@@ -679,6 +849,14 @@ func (b *unicornBackend) FlushCache() error {
 	return nil
 }
 
+// FlushCodeCache implements CodeCacheController (P3.5). Unicorn exposes only
+// a WHOLE-cache TB flush (UC_CTL_TB_FLUSH has no ranged form), so the range
+// is accepted for the contract and the entire cache is invalidated — correct
+// (a superset of the affected range), just coarser than the caller's hint.
+func (b *unicornBackend) FlushCodeCache(start, end GuestAddr) error {
+	return b.FlushCache()
+}
+
 func (b *unicornBackend) Close() error {
 	for _, id := range b.cbs {
 		unregisterCB(id)
@@ -701,6 +879,43 @@ func (h *ucHook) Remove() error {
 	unregisterCB(h.id)
 	if e := pHookDel(h.b.uc, h.hh); e != ucOK {
 		return ucErr("hook_del", e)
+	}
+	return nil
+}
+
+// WriteRegs implements the RegBatchWriter capability (P9.5a): one
+// host↔engine crossing for the whole write set. On engines whose unicorn
+// build lacks uc_reg_write_batch (the binding stays nil) it degrades
+// internally to a per-register loop — bit-for-bit the same writes, just
+// slower.
+func (b *unicornBackend) WriteRegs(writes []RegWrite) error {
+	if len(writes) == 0 {
+		return nil
+	}
+	if len(writes) > 16 || pRegWrBat == nil {
+		// Oversized batches and engines whose unicorn lacks the symbol: the
+		// identical per-register loop — zero new allocations, bit-for-bit
+		// the same writes, just slower.
+		for _, w := range writes {
+			if err := b.RegWrite(w.Reg, w.Value); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	// Stack arrays: the batch path adds NO heap allocation. The arrays do
+	// escape to C (unavoidable), but as one escape-set instead of one
+	// escaping value per register.
+	var ids [16]int32
+	var vals [16]uint64
+	var ptrs [16]unsafe.Pointer
+	for i, w := range writes {
+		ids[i] = b.toUCReg(w.Reg)
+		vals[i] = w.Value
+		ptrs[i] = unsafe.Pointer(&vals[i])
+	}
+	if e := pRegWrBat(b.uc, unsafe.Pointer(&ids[0]), unsafe.Pointer(&ptrs[0]), int32(len(writes))); e != ucOK {
+		return ucErr("reg_write_batch", e)
 	}
 	return nil
 }

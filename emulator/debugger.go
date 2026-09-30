@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/isesword/golem/internal/arch/arm64"
 	"github.com/isesword/golem/internal/emu"
 )
 
@@ -36,7 +37,11 @@ type Debugger struct {
 // NewDebugger attaches a debugger (installs the per-instruction hook).
 func (e *Emulator) NewDebugger() (*Debugger, error) {
 	d := &Debugger{e: e, bps: map[uint64]bool{}, In: os.Stdin, Out: os.Stdout}
-	h, err := e.be.HookCode(1, 0, e.guardCode(func(b emu.Backend, addr uint64, size uint32) { // begin>end => global
+	ih, ok := e.be.(emu.InstructionHooker)
+	if !ok {
+		return nil, e.capabilityUnavailable("NewDebugger")
+	}
+	h, err := ih.HookCode(1, 0, e.guardCode(func(b emu.Backend, addr uint64, size uint32) { // begin>end => global
 		if d.step || d.bps[addr] {
 			d.repl(addr)
 		}
@@ -115,12 +120,12 @@ func (d *Debugger) repl(pc uint64) {
 func (d *Debugger) printRegs() {
 	rd := func(r emu.Reg) uint64 { v, _ := d.e.be.RegRead(r); return v }
 	for i := 0; i <= 10; i++ {
-		fmt.Fprintf(d.Out, "X%-2d=0x%016x  ", i, rd(emu.RegX0+emu.Reg(i)))
+		fmt.Fprintf(d.Out, "X%-2d=0x%016x  ", i, rd(arm64.X0+emu.Reg(i)))
 		if i%4 == 3 {
 			fmt.Fprintln(d.Out)
 		}
 	}
-	fmt.Fprintf(d.Out, "\nSP =0x%016x  LR =0x%016x  PC =0x%016x\n", rd(emu.RegSP), rd(emu.RegLR), rd(emu.RegPC))
+	fmt.Fprintf(d.Out, "\nSP =0x%016x  LR =0x%016x  PC =0x%016x\n", rd(d.e.spReg), rd(arm64.LR), rd(d.e.pcReg))
 }
 
 func (d *Debugger) printMem(f []string) {
@@ -139,7 +144,7 @@ func (d *Debugger) printMem(f []string) {
 			n = v
 		}
 	}
-	data, err := d.e.be.MemRead(addr, n)
+	data, err := d.e.be.MemRead(emu.GuestAddr(addr), n)
 	if err != nil {
 		fmt.Fprintf(d.Out, "read error: %v\n", err)
 		return

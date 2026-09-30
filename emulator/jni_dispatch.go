@@ -6,7 +6,9 @@ import (
 	"unicode/utf16"
 
 	"github.com/isesword/golem/dvm"
+	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/emu"
+	"github.com/isesword/golem/internal/kernel"
 )
 
 func le64(b []byte) uint64 { return binary.LittleEndian.Uint64(b) }
@@ -40,7 +42,7 @@ type fieldRef struct {
 // exhausted they come from __stack. (MS.b's args are all GP, so FP/__vr is
 // unused here.)
 func (e *Emulator) decodeVaList(vaPtr uint64, n int) []uint64 {
-	hdr, err := e.be.MemRead(vaPtr, 32)
+	hdr, err := e.be.MemRead(emu.GuestAddr(vaPtr), 32)
 	if err != nil {
 		return make([]uint64, n)
 	}
@@ -51,12 +53,12 @@ func (e *Emulator) decodeVaList(vaPtr uint64, n int) []uint64 {
 	stackPos := stack
 	for i := 0; i < n; i++ {
 		if grOffs < 0 {
-			if v, err := e.be.MemRead(uint64(int64(grTop)+grOffs), 8); err == nil {
+			if v, err := e.be.MemRead(emu.GuestAddr(uint64(int64(grTop)+grOffs)), 8); err == nil { // GuestAddr 转换：va_list 指针算术仍为 uint64
 				out[i] = le64(v)
 			}
 			grOffs += 8
 		} else {
-			if v, err := e.be.MemRead(stackPos, 8); err == nil {
+			if v, err := e.be.MemRead(emu.GuestAddr(stackPos), 8); err == nil {
 				out[i] = le64(v)
 			}
 			stackPos += 8
@@ -131,11 +133,14 @@ func jniLabel(idx int) string {
 	return fmt.Sprintf("JNIEnv[%d]", idx)
 }
 
-// arg reads JNIEnv-call argument n (n=1 is the first real arg; X0 is JNIEnv*).
+// jarg reads JNIEnv-call argument n (n=1 is the first real arg; argument 0 is
+// the JNIEnv* itself) through the CallABI's ReadArgs.
 func (e *Emulator) jarg(b emu.Backend, n int) uint64 {
-	regs := []emu.Reg{emu.RegX0, emu.RegX1, emu.RegX2, emu.RegX3, emu.RegX4, emu.RegX5, emu.RegX6, emu.RegX7}
-	v, _ := b.RegRead(regs[n])
-	return v
+	args := e.hostArgs(b, n+1)
+	if args == nil {
+		return 0
+	}
+	return args[n]
 }
 
 // handleJNI dispatches a JNIEnv function call (by table index) to the dvm layer.
@@ -322,7 +327,7 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 			clsName = cls.Name
 		}
 		for i := uint64(0); i < count && i < 256; i++ {
-			ent, _ := b.MemRead(methods+i*24, 24)
+			ent, _ := b.MemRead(emu.GuestAddr(methods+i*24), 24)
 			namePtr := le64(ent[0:])
 			sigPtr := le64(ent[8:])
 			fnPtr := le64(ent[16:])
@@ -355,7 +360,7 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 		s := e.gstr(e.jarg(b, 1))
 		ret = e.WriteScratch(append([]byte(s), 0))
 		if cp := e.jarg(b, 2); cp != 0 {
-			_ = e.be.MemWrite(cp, []byte{1})
+			_ = e.be.MemWrite(emu.GuestAddr(cp), []byte{1})
 		}
 	case jniReleaseStringUTFChrs:
 		ret = 0
@@ -401,21 +406,28 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 			}
 		}
 	case jniNewByteArray:
-		ret = uint64(dvm.NewByteArray(e.vm, make([]byte, e.jarg(b, 1))))
+		// P7.6: a guest-supplied length never sizes a host allocation —
+		// over-cap refuses with JNI NULL (the JNI contract's own failure
+		// answer for NewByteArray), never a giant make().
+		if ln := e.jarg(b, 1); ln > kernel.MaxGuestIO {
+			ret = 0
+		} else {
+			ret = uint64(dvm.NewByteArray(e.vm, make([]byte, ln)))
+		}
 	case jniGetByteArrayElements: // (jarray, jboolean* isCopy) -> jbyte*
 		data := e.gbytes(e.jarg(b, 1))
 		p := e.WriteScratch(data)
 		e.arrayPins[p] = pinEntry{ref: dvm.Ref(int32(e.jarg(b, 1))), gen: e.pinGen}
 		ret = p
 		if cp := e.jarg(b, 2); cp != 0 {
-			_ = e.be.MemWrite(cp, []byte{1})
+			_ = e.be.MemWrite(emu.GuestAddr(cp), []byte{1})
 		}
 	case jniRelByteArrayElements: // (jarray, jbyte* elems, jint mode) — copy back unless JNI_ABORT
 		arr, ptr, mode := e.jarg(b, 1), e.jarg(b, 2), e.jarg(b, 3)
 		if mode != 2 { // 2 = JNI_ABORT
 			if o := e.vm.Deref(dvm.Ref(int32(arr))); o != nil {
 				if bs, ok := o.Value.([]byte); ok {
-					if d, err := e.be.MemRead(ptr, uint64(len(bs))); err == nil {
+					if d, err := e.be.MemRead(emu.GuestAddr(ptr), uint64(len(bs))); err == nil {
 						copy(bs, d)
 					}
 				}
@@ -425,15 +437,26 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 	case jniGetByteArrayRegion: // (jarray, start, len, buf)
 		data := e.gbytes(e.jarg(b, 1))
 		start, ln, buf := e.jarg(b, 2), e.jarg(b, 3), e.jarg(b, 4)
-		if int(start+ln) <= len(data) {
-			_ = e.be.MemWrite(buf, data[start:start+ln])
+		// P7.6: uint64-safe bounds — the old int(start+ln) WRAPPED for huge
+		// guest values (2^63+2^63 → 0) and sliced out of range. Out of
+		// range = pending exception, like ART's
+		// ArrayIndexOutOfBoundsException — never a silent skip.
+		if start > uint64(len(data)) || ln > uint64(len(data))-start {
+			e.pendingExc = true
+			break
 		}
+		_ = e.be.MemWrite(emu.GuestAddr(buf), data[start:start+ln])
 	case jniSetByteArrayRegion: // (jarray, start, len, buf)
 		o := e.vm.Deref(dvm.Ref(int32(e.jarg(b, 1))))
 		start, ln, buf := e.jarg(b, 2), e.jarg(b, 3), e.jarg(b, 4)
 		if o != nil {
-			if bs, ok := o.Value.([]byte); ok && int(start+ln) <= len(bs) {
-				if d, err := e.be.MemRead(buf, ln); err == nil {
+			if bs, ok := o.Value.([]byte); ok {
+				// P7.6: uint64-safe bounds (same wrap as Get); the guard
+				// also bounds the MemRead host allocation below, since ln
+				// is guest-controlled and bs is already ≤ MaxGuestIO.
+				if start > uint64(len(bs)) || ln > uint64(len(bs))-start {
+					e.pendingExc = true
+				} else if d, err := e.be.MemRead(emu.GuestAddr(buf), ln); err == nil {
 					copy(bs[start:], d)
 				}
 			}
@@ -490,7 +513,7 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 	case 165: // GetStringChars (jstring, isCopy*) -> jchar* (UTF-16LE)
 		ret = e.WriteScratch(append(utf16le(e.gstr(e.jarg(b, 1))), 0, 0))
 		if cp := e.jarg(b, 2); cp != 0 {
-			_ = e.be.MemWrite(cp, []byte{1})
+			_ = e.be.MemWrite(emu.GuestAddr(cp), []byte{1})
 		}
 	case 166: // ReleaseStringChars
 		ret = 0
@@ -498,13 +521,13 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 		r := []rune(e.gstr(e.jarg(b, 1)))
 		start, ln, buf := int(e.jarg(b, 2)), int(e.jarg(b, 3)), e.jarg(b, 4)
 		if start >= 0 && start+ln <= len(r) {
-			_ = e.be.MemWrite(buf, utf16le(string(r[start:start+ln])))
+			_ = e.be.MemWrite(emu.GuestAddr(buf), utf16le(string(r[start:start+ln])))
 		}
 	case 221: // GetStringUTFRegion(str, start, len, buf) -> UTF-8 into buf
 		r := []rune(e.gstr(e.jarg(b, 1)))
 		start, ln, buf := int(e.jarg(b, 2)), int(e.jarg(b, 3)), e.jarg(b, 4)
 		if start >= 0 && start+ln <= len(r) {
-			_ = e.be.MemWrite(buf, append([]byte(string(r[start:start+ln])), 0))
+			_ = e.be.MemWrite(emu.GuestAddr(buf), append([]byte(string(r[start:start+ln])), 0))
 		}
 
 	case jniGetJavaVM:
@@ -534,7 +557,7 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 			fmt.Printf("[JNI] %-24s -> 0x%x\n", jniLabel(idx), ret)
 		}
 	}
-	_ = b.RegWrite(emu.RegX0, ret)
+	_ = e.callABI.WriteResult(b, arch.CallResult{Value: ret})
 }
 
 // callStatic handles CallStaticObjectMethod[V] by dispatching to the Jni
@@ -567,7 +590,7 @@ func (e *Emulator) callStaticInfo(b emu.Backend, isV bool) (*dvm.Class, string, 
 		p := e.jarg(b, 3)
 		if p != 0 {
 			for i := 0; i < 8; i++ {
-				w, err := e.be.MemRead(p+uint64(i)*8, 8)
+				w, err := e.be.MemRead(emu.GuestAddr(p+uint64(i)*8), 8)
 				if err != nil {
 					break
 				}
@@ -644,7 +667,7 @@ func (e *Emulator) callInstanceInfo(b emu.Backend, isV bool) (*dvm.Object, strin
 		p := e.jarg(b, 3)
 		if p != 0 {
 			for i := 0; i < 8; i++ {
-				w, err := e.be.MemRead(p+uint64(i)*8, 8)
+				w, err := e.be.MemRead(emu.GuestAddr(p+uint64(i)*8), 8)
 				if err != nil {
 					break
 				}

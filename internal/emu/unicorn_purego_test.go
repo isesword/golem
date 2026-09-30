@@ -8,7 +8,7 @@ import "testing"
 // nesting (RegRead/MemRead from INSIDE a code hook), demand mapping from a
 // mem-invalid hook, batch GP reads, and context save/restore.
 func TestUnicornPuregoSmoke(t *testing.T) {
-	be, err := New()
+	be, err := NewNamed("", ArchARM64)
 	if err != nil {
 		t.Skipf("no backend: %v", err)
 	}
@@ -32,12 +32,12 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 		b[1] = byte(insn >> 8)
 		b[2] = byte(insn >> 16)
 		b[3] = byte(insn >> 24)
-		if err := be.MemWrite(base+uint64(i*4), b[:]); err != nil {
+		if err := be.MemWrite(GuestAddr(base+uint64(i*4)), b[:]); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	if err := be.RegWrite(RegX0, 5); err != nil {
+	if err := be.RegWrite(regX0, 5); err != nil {
 		t.Fatal(err)
 	}
 
@@ -45,9 +45,13 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 	// mid-emulation — the nesting path every real consumer depends on.
 	hookFires := 0
 	sawX0 := []uint64{}
-	h, err := be.HookCode(base, base+uint64(adds*4-1), func(b Backend, addr uint64, size uint32) {
+	ih, ok := be.(InstructionHooker) // capability probe (P2.5a)
+	if !ok {
+		t.Fatal("backend lacks the InstructionHooker capability")
+	}
+	h, err := ih.HookCode(base, base+GuestAddr(adds*4-1), func(b Backend, addr GuestAddr, size uint32) {
 		hookFires++
-		if v, err := b.RegRead(RegX0); err == nil {
+		if v, err := b.RegRead(regX0); err == nil {
 			sawX0 = append(sawX0, v)
 		}
 		if _, err := b.MemRead(base, 4); err != nil {
@@ -58,7 +62,7 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := be.Start(base, base+uint64(adds*4)); err != nil {
+	if err := be.Start(base, base+GuestAddr(adds*4)); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.Remove(); err != nil {
@@ -68,12 +72,17 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 	if hookFires != adds {
 		t.Errorf("code hook fired %d times, want %d", hookFires, adds)
 	}
-	if got, _ := be.RegRead(RegX0); got != 5+adds {
+	if got, _ := be.RegRead(regX0); got != 5+adds {
 		t.Errorf("final X0 = %d, want %d", got, 5+adds)
 	}
 
-	// Batch GP register read must agree with the individually-read X0.
-	gp, err := be.ReadGPRegs()
+	// Batch GP register read must agree with the individually-read X0
+	// (RegFileReader capability, P7.5c).
+	rr, ok := be.(RegFileReader)
+	if !ok {
+		t.Fatal("the arm64 unicorn backend must implement RegFileReader")
+	}
+	gp, err := rr.ReadGPRegs()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +100,11 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	const wantVal = uint64(0xDEADBEEFCAFEBABE)
-	mh, err := be.HookMemInvalid(func(b Backend, typ int, addr uint64, size int, value int64) bool {
+	inv, ok := be.(InvalidMemHooker) // capability probe (P2.5a)
+	if !ok {
+		t.Fatal("backend lacks the InvalidMemHooker capability")
+	}
+	mh, err := inv.HookMemInvalid(func(b Backend, typ int, addr GuestAddr, size int, value int64) bool {
 		if err := b.MemMap(addr&^0xFFF, 0x1000, ProtRead|ProtWrite); err != nil {
 			return false
 		}
@@ -105,35 +118,43 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer mh.Remove()
-	if err := be.RegWrite(RegX2, dataPage); err != nil {
+	if err := be.RegWrite(regX2, dataPage); err != nil {
 		t.Fatal(err)
 	}
 	if err := be.Start(base+0x100, base+0x104); err != nil {
 		t.Fatalf("demand-map run failed: %v", err)
 	}
-	if got, _ := be.RegRead(RegX1); got != wantVal {
+	if got, _ := be.RegRead(regX1); got != wantVal {
 		t.Errorf("X1 after demand-mapped load = %#x, want %#x", got, wantVal)
 	}
 
 	// Context save/restore round-trip.
-	ctx, err := be.SaveContext()
+	cm, ok := be.(ContextManager) // capability probe (P2.5a)
+	if !ok {
+		t.Fatal("backend lacks the ContextManager capability")
+	}
+	ctx, err := cm.SaveContext()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := be.RegWrite(RegX0, 0x1234); err != nil {
+	if err := be.RegWrite(regX0, 0x1234); err != nil {
 		t.Fatal(err)
 	}
-	if err := be.RestoreContext(ctx); err != nil {
+	if err := cm.RestoreContext(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := ctx.Free(); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := be.RegRead(RegX0); got != 5+adds {
+	if got, _ := be.RegRead(regX0); got != 5+adds {
 		t.Errorf("X0 after restore = %#x, want %d", got, 5+adds)
 	}
 
-	if err := be.FlushCache(); err != nil {
+	ci, ok := be.(CacheInvalidator) // capability probe (P2.5a)
+	if !ok {
+		t.Fatal("backend lacks the CacheInvalidator capability")
+	}
+	if err := ci.FlushCache(); err != nil {
 		t.Fatal(err)
 	}
 }

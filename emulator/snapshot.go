@@ -32,6 +32,11 @@ type Snapshot struct {
 	kstate      kernel.State    // brk / exit latch / fds / FS overlay
 	vmstate     dvm.VMState     // JNI object-handle table
 	nextFiberID int
+	// The AddressSpace module/stub bump cursors (e.as) are deliberately NOT
+	// captured: restore does not roll back module/stub VA allocation — the
+	// same semantics the pre-P2.5c module/stub cursor fields had (they lived
+	// outside the snapshot too). Modules loaded and stubs emitted after the
+	// snapshot keep their addresses across a Restore.
 }
 
 type memWrite struct {
@@ -59,10 +64,11 @@ func pageUp(x uint64) uint64   { return (x + 0xfff) &^ 0xfff }
 //   - the brk heap [BrkBase, BrkTop),
 //   - the mmap arena (host scratch + guest mmap, the only Space-tracked set).
 func (e *Emulator) writableGuestRanges() []memRange {
+	l := e.layout
 	rs := []memRange{
-		{stackBase, stackSize, emu.ProtRead | emu.ProtWrite},
-		{tlsBase, tlsSize, emu.ProtRead | emu.ProtWrite},
-		{stubBase, stubSize, emu.ProtAll},
+		{l.StackBase, l.StackSize, emu.ProtRead | emu.ProtWrite},
+		{l.TLSBase, l.TLSSize, emu.ProtRead | emu.ProtWrite},
+		{l.StubBase, l.StubSize, emu.ProtAll},
 	}
 	for _, m := range e.modules {
 		for _, s := range m.Img.Segments {
@@ -99,13 +105,17 @@ func (e *Emulator) writableGuestRanges() []memRange {
 // setup, then Restore before each reused call. The returned Snapshot owns a
 // backend CPU context; release it with Free when the emulator is discarded.
 func (e *Emulator) Snapshot() (*Snapshot, error) {
-	cpu, err := e.be.SaveContext()
+	cm, ok := e.be.(emu.ContextManager)
+	if !ok { // capability probe: engine cannot snapshot CPU state
+		return nil, fmt.Errorf("snapshot: save cpu: %w (engine %q)", emu.ErrUnsupported, e.engine)
+	}
+	cpu, err := cm.SaveContext()
 	if err != nil {
 		return nil, fmt.Errorf("snapshot: save cpu: %w", err)
 	}
 	var writable []memWrite
 	for _, r := range e.writableGuestRanges() {
-		data, err := e.be.MemRead(r.addr, r.size)
+		data, err := e.be.MemRead(emu.GuestAddr(r.addr), r.size)
 		if err != nil {
 			continue // unmapped hole (e.g. a gap between segments) — nothing to restore
 		}
@@ -137,6 +147,11 @@ func (e *Emulator) Restore(snap *Snapshot) error {
 	if snap == nil {
 		return fmt.Errorf("restore: nil snapshot")
 	}
+	// Poisoned = untrustworthy address space; rebuilding a snapshot on top of
+	// it would launder the inconsistency into "restored" state (P7.5b).
+	if e.poisonErr != nil {
+		return fmt.Errorf("emulator poisoned: %w", e.poisonErr)
+	}
 	// 1) Unmap arena regions the guest mapped after the snapshot (scratch allocs,
 	//    guest mmaps) so the address space matches the snapshot again.
 	snapSet := make(map[uint64]uint64, len(snap.layout))
@@ -145,7 +160,7 @@ func (e *Emulator) Restore(snap *Snapshot) error {
 	}
 	for _, r := range e.mem.Regions() {
 		if sz, ok := snapSet[r.Addr]; !ok || sz != r.Size {
-			_ = e.be.MemUnmap(r.Addr, r.Size)
+			_ = e.be.MemUnmap(emu.GuestAddr(r.Addr), r.Size)
 		}
 	}
 	// 2) Restore the arena allocator table + cursor. If the cursor's chunk was
@@ -169,16 +184,20 @@ func (e *Emulator) Restore(snap *Snapshot) error {
 	// 4) Restore writable memory bytes: stack, TLS, stubs, .data/.bss, brk, arena.
 	//    Re-map defensively if a region was unmapped or split mid-call.
 	for _, w := range snap.writable {
-		if err := e.be.MemWrite(w.addr, w.data); err != nil {
-			_ = e.be.MemMap(w.addr, uint64(len(w.data)), w.prot)
-			if err := e.be.MemWrite(w.addr, w.data); err != nil {
+		if err := e.be.MemWrite(emu.GuestAddr(w.addr), w.data); err != nil {
+			_ = e.be.MemMap(emu.GuestAddr(w.addr), uint64(len(w.data)), w.prot)
+			if err := e.be.MemWrite(emu.GuestAddr(w.addr), w.data); err != nil {
 				return fmt.Errorf("restore: write 0x%x: %w", w.addr, err)
 			}
 		}
 	}
 	// 5) Restore the CPU register file (incl. SP → a fresh, dirty-free stack top,
 	//    TPIDR, PSTATE). CallFunc overwrites X0..X7/LR/PC for the next call.
-	if err := e.be.RestoreContext(snap.cpu); err != nil {
+	cm, ok := e.be.(emu.ContextManager)
+	if !ok { // capability probe: engine cannot restore CPU state
+		return fmt.Errorf("restore: cpu: %w (engine %q)", emu.ErrUnsupported, e.engine)
+	}
+	if err := cm.RestoreContext(snap.cpu); err != nil {
 		return fmt.Errorf("restore: cpu: %w", err)
 	}
 	// 6) Restore JNI object handles and reset per-run scheduler / JNI scratch.

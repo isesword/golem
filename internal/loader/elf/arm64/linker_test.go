@@ -1,13 +1,19 @@
-package loader
+// End-to-end linker test, moved from internal/loader in P3: parses a real
+// AArch64 ELF via the loader facade (parser registered by loader/elf) and
+// applies it through the (FormatELF, ArchARM64) Relocator registered by this
+// package. Assertions are unchanged from the pre-P3 test.
+package arm64_test
 
 import (
-	"debug/elf"
+	debugelf "debug/elf"
 	"encoding/binary"
 	"os"
 	"testing"
 	"unsafe"
 
 	"github.com/isesword/golem/internal/emu"
+	"github.com/isesword/golem/internal/loader"
+	_ "github.com/isesword/golem/internal/loader/elf" // FormatELF parser registration
 )
 
 // memBE is an in-memory emu.Backend (sparse pages) for testing the linker
@@ -33,29 +39,32 @@ func (m *memBE) page(a uint64) []byte {
 	}
 	return pgm
 }
-func (m *memBE) MemMap(addr, size uint64, _ int) error {
-	for a := addr &^ 0xfff; a < addr+size; a += 0x1000 {
+func (m *memBE) MemMap(addr emu.GuestAddr, size uint64, _ int) error {
+	a0 := uint64(addr) // GuestAddr→raw：fake 的页表算术用 uint64
+	for a := a0 &^ 0xfff; a < a0+size; a += 0x1000 {
 		m.page(a)
 	}
 	return nil
 }
-func (m *memBE) MemWrite(addr uint64, data []byte) error {
+func (m *memBE) MemWrite(addr emu.GuestAddr, data []byte) error {
+	a0 := uint64(addr) // GuestAddr→raw
 	for i, b := range data {
-		a := addr + uint64(i)
+		a := a0 + uint64(i)
 		m.page(a)[a&0xfff] = b
 	}
 	return nil
 }
-func (m *memBE) MemRead(addr, size uint64) ([]byte, error) {
+func (m *memBE) MemRead(addr emu.GuestAddr, size uint64) ([]byte, error) {
+	a0 := uint64(addr) // GuestAddr→raw
 	out := make([]byte, size)
 	for i := range out {
-		a := addr + uint64(i)
+		a := a0 + uint64(i)
 		out[i] = m.page(a)[a&0xfff]
 	}
 	return out, nil
 }
-func (m *memBE) MemUnmap(uint64, uint64) error        { return nil }
-func (m *memBE) MemProtect(uint64, uint64, int) error { return nil }
+func (m *memBE) MemUnmap(emu.GuestAddr, uint64) error        { return nil }
+func (m *memBE) MemProtect(emu.GuestAddr, uint64, int) error { return nil }
 
 // ptrRange is one uc_mem_map_ptr-style alias: guest [addr, addr+size) reads
 // and writes hit the caller's host buffer directly (zero-copy).
@@ -64,11 +73,11 @@ type ptrRange struct {
 	buf        []byte
 }
 
-// MemMapPtr registers an ALIAS to the caller's host buffer, so Plan.ApplyShared
+// MemMapPtr registers an ALIAS to the caller's host buffer, so Plan.Apply
 // memory images are observable through this stub just like real unicorn.
-func (m *memBE) MemMapPtr(addr, size uint64, prot int, host unsafe.Pointer) error {
+func (m *memBE) MemMapPtr(addr emu.GuestAddr, size uint64, prot int, host unsafe.Pointer) error {
 	buf := unsafe.Slice((*byte)(host), size)
-	m.ptrs = append(m.ptrs, ptrRange{addr, size, buf})
+	m.ptrs = append(m.ptrs, ptrRange{uint64(addr), size, buf}) // GuestAddr→raw for the alias range
 	return nil
 }
 
@@ -82,53 +91,47 @@ func (m *memBE) ptrPage(pg uint64) ([]byte, bool) {
 }
 
 // (page() consults m.ptrs directly; ptrPage kept for direct range probes in tests.)
-func (m *memBE) RegRead(emu.Reg) (uint64, error)         { return 0, nil }
-func (m *memBE) RegWrite(emu.Reg, uint64) error          { return nil }
-func (m *memBE) ReadGPRegs() ([34]uint64, error)         { return [34]uint64{}, nil }
-func (m *memBE) Start(uint64, uint64) error              { return nil }
-func (m *memBE) StartCount(uint64, uint64, uint64) error { return nil }
-func (m *memBE) Stop() error                             { return nil }
-func (m *memBE) SaveContext() (emu.CPUContext, error)    { return nil, nil }
-func (m *memBE) RestoreContext(emu.CPUContext) error     { return nil }
-func (m *memBE) FlushCache() error                       { return nil }
-func (m *memBE) Close() error                            { return nil }
-func (m *memBE) HookCode(uint64, uint64, emu.CodeHookFunc) (emu.HookHandle, error) {
-	return nil, nil
+//
+// P2.5a: Backend's core interface is frozen — hooks/context/cache are
+// capability interfaces the linker never touches, so the fake carries none.
+func (m *memBE) RegRead(emu.Reg) (uint64, error) { return 0, nil }
+func (m *memBE) RegWrite(emu.Reg, uint64) error  { return nil }
+func (m *memBE) Start(emu.GuestAddr, emu.GuestAddr) error {
+	return nil
 }
-func (m *memBE) HookInterrupt(emu.InterruptHookFunc) (emu.HookHandle, error) { return nil, nil }
-func (m *memBE) HookMemInvalid(func(emu.Backend, int, uint64, int, int64) bool) (emu.HookHandle, error) {
-	return nil, nil
-}
-func (m *memBE) HookMemRead(uint64, uint64, func(emu.Backend, uint64, int)) (emu.HookHandle, error) {
-	return nil, nil
-}
-func (m *memBE) HookMemWrite(uint64, uint64, func(emu.Backend, uint64, int, int64)) (emu.HookHandle, error) {
+func (m *memBE) StartCount(emu.GuestAddr, emu.GuestAddr, uint64) error { return nil }
+func (m *memBE) Stop() error                                           { return nil }
+func (m *memBE) Close() error                                          { return nil }
+func (m *memBE) InstallTrap(emu.TrapKind, emu.TrapHandler) (emu.HookHandle, error) {
 	return nil, nil
 }
 
 // A real AArch64 shared object bundled with the repo (AOSP bionic), so the
 // linker is exercised against genuine RELATIVE/JUMP_SLOT/GLOB_DAT relocations
 // and libc imports — no proprietary target needed.
-const targetSO = "../../assets/android/sdk23/lib64/libz.so"
+const targetSO = "../../../../assets/android/sdk23/lib64/libz.so"
 
 func TestLinkerAppliesRealSo(t *testing.T) {
 	if _, err := os.Stat(targetSO); err != nil {
 		t.Skipf("bundled .so not present: %v", err)
 	}
-	img, err := Parse(targetSO)
+	img, err := loader.Parse(targetSO)
 	if err != nil {
 		t.Fatal(err)
 	}
 	be := newMemBE()
 	const base = uint64(0x12340000)
 	stub := uint64(0xee0000)
-	resolve := func(name string) (uint64, bool) { stub += 0x10; return stub, true }
+	resolve := loader.ResolverFunc(func(req loader.ResolveRequest) (loader.ResolvedSymbol, error) {
+		stub += 0x10
+		return loader.ResolvedSymbol{Addr: emu.GuestAddr(stub), Kind: loader.SymbolUnresolvedStub}, nil
+	})
 	if err := img.Apply(be, base, resolve); err != nil {
 		t.Fatal(err)
 	}
 
 	// (a) segment content landed: ELF magic at base+0.
-	hdr, _ := be.MemRead(base, 4)
+	hdr, _ := be.MemRead(emu.GuestAddr(base), 4)
 	if hdr[0] != 0x7f || hdr[1] != 'E' || hdr[2] != 'L' || hdr[3] != 'F' {
 		t.Fatalf("ELF magic not mapped at base: %x", hdr)
 	}
@@ -136,8 +139,8 @@ func TestLinkerAppliesRealSo(t *testing.T) {
 	// (b) a RELATIVE reloc resolved to base+addend.
 	checked := 0
 	for _, r := range img.Relocs {
-		if r.Type == elf.R_AARCH64_RELATIVE {
-			got, _ := be.MemRead(base+r.Offset, 8)
+		if debugelf.R_AARCH64(r.Type) == debugelf.R_AARCH64_RELATIVE {
+			got, _ := be.MemRead(emu.GuestAddr(base+r.Offset), 8)
 			want := base + uint64(r.Addend)
 			if binary.LittleEndian.Uint64(got) != want {
 				t.Fatalf("RELATIVE @0x%x = 0x%x, want 0x%x",
@@ -156,8 +159,8 @@ func TestLinkerAppliesRealSo(t *testing.T) {
 
 	// (c) a JUMP_SLOT import points at a resolver-provided stub (non-zero).
 	for _, r := range img.Relocs {
-		if r.Type == elf.R_AARCH64_JUMP_SLOT {
-			got, _ := be.MemRead(base+r.Offset, 8)
+		if debugelf.R_AARCH64(r.Type) == debugelf.R_AARCH64_JUMP_SLOT {
+			got, _ := be.MemRead(emu.GuestAddr(base+r.Offset), 8)
 			if binary.LittleEndian.Uint64(got) == 0 {
 				t.Fatalf("JUMP_SLOT @0x%x not resolved", r.Offset)
 			}

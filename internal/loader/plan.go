@@ -30,7 +30,13 @@ type Plan struct {
 	Relocs []RelocOp
 
 	img    *Image   // symbol table for per-engine resolution; keeps raw alive
-	shared [][]byte // backing buffers for shareable maps (keeps them alive)
+	shared [][]byte // backing buffers for shareable maps (keeps them alive) —
+	// PARALLEL to Maps (nil for non-shareable entries): apply/SharedBuffer
+	// index it by Maps index. It used to be compacted (shareable entries
+	// only), which panicked the moment a shareable map followed a
+	// non-shareable one — ELF images happened to order text before data, so
+	// the mis-indexing stayed latent until Mach-O's __LINKEDIT (read-only,
+	// shareable) followed __DATA (writable) in P5b.
 }
 
 // MapOp is one segment mapping.
@@ -42,75 +48,94 @@ type MapOp struct {
 	Content   []byte // file image placed at the map start (zero tail for .bss); nil = pure anon
 }
 
-// RelocOp is one relocation, kept symbolic until Apply.
+// RelocOp is one relocation, kept symbolic until Apply. Type is the raw
+// format-specific relocation code (see Reloc.Type).
 type RelocOp struct {
 	Target uint64 // image-relative address to patch
-	Type   elf.R_AARCH64
+	Type   uint32
 	SymIdx uint32
 	Addend int64
 }
 
 // Apply executes the plan against a backend: maps segments (shareable ones
 // via MemMapPtr from the plan's shared host buffers), applies every
-// relocation with per-engine symbol resolution, and re-protects segments to
-// their final permissions.
-func (p *Plan) Apply(be emu.Backend, base uint64, resolve Resolver) error {
-	return p.apply(be, base, resolve, true)
+// relocation with per-engine symbol resolution through the SymbolResolver
+// (P3.5), and finalizes the image (re-protects segments to their declared
+// permissions). The full load lifecycle (DESIGN.md §3.9, invariant 11):
+//
+//	Map image → Relocate/bind → FinalizeImage (RW→RX) → runtime
+func (p *Plan) Apply(be emu.Backend, base uint64, res SymbolResolver) error {
+	return p.apply(be, base, res, true)
 }
 
 // ApplyPrivate is the opt-out path: everything anonymous, per-engine memory
 // exactly like pre-sharing semantics (Config.NoSharedModules).
-func (p *Plan) ApplyPrivate(be emu.Backend, base uint64, resolve Resolver) error {
-	return p.apply(be, base, resolve, false)
+func (p *Plan) ApplyPrivate(be emu.Backend, base uint64, res SymbolResolver) error {
+	return p.apply(be, base, res, false)
 }
 
-func (p *Plan) apply(be emu.Backend, base uint64, resolve Resolver, share bool) error {
+func (p *Plan) apply(be emu.Backend, base uint64, res SymbolResolver, share bool) error {
 	for i := range p.Maps {
 		m := &p.Maps[i]
 		if m.Shareable && share {
 			buf := p.shared[i]
-			if err := be.MemMapPtr(base+m.Addr, m.Size, m.Prot, unsafe.Pointer(&buf[0])); err != nil {
+			if err := be.MemMapPtr(emu.GuestAddr(base+m.Addr), m.Size, m.Prot, unsafe.Pointer(&buf[0])); err != nil {
 				return fmt.Errorf("map shared seg @0x%x: %w", base+m.Addr, err)
 			}
 			continue
 		}
-		if err := be.MemMap(base+m.Addr, m.Size, emu.ProtRead|emu.ProtWrite|emu.ProtExec); err != nil {
+		if err := be.MemMap(emu.GuestAddr(base+m.Addr), m.Size, emu.ProtRead|emu.ProtWrite|emu.ProtExec); err != nil {
 			return fmt.Errorf("map seg @0x%x: %w", base+m.Addr, err)
 		}
 		if len(m.Content) > 0 {
-			if err := be.MemWrite(base+m.Addr, m.Content); err != nil {
+			if err := be.MemWrite(emu.GuestAddr(base+m.Addr), m.Content); err != nil {
 				return fmt.Errorf("write seg @0x%x: %w", base+m.Addr, err)
 			}
 		}
 	}
-	for i := range p.Relocs {
-		r := &p.Relocs[i]
-		target := base + r.Target
-		switch r.Type {
-		case elf.R_AARCH64_RELATIVE:
-			if err := put64(be, target, base+uint64(r.Addend)); err != nil {
+	if len(p.Relocs) > 0 {
+		// Relocation SEMANTICS live in the (Format, Arch) Relocator
+		// (loader/elf/arm64, registered via init); the plan owns only the
+		// memory layout (maps, shareability, protections). Symbol resolution
+		// goes through the SymbolResolver contract (P3.5) — the Relocator
+		// never sees anything but guest addresses.
+		rc, err := p.relocator()
+		if err != nil {
+			return err
+		}
+		for i := range p.Relocs {
+			r := &p.Relocs[i]
+			rel := Reloc{Offset: r.Target, Type: r.Type, Sym: r.SymIdx, Addend: r.Addend}
+			if err := rc.Apply(be, p.img, rel, base, res); err != nil {
 				return err
 			}
-		case elf.R_AARCH64_GLOB_DAT, elf.R_AARCH64_JUMP_SLOT, elf.R_AARCH64_ABS64:
-			val, err := p.symValue(r.SymIdx, base, resolve)
-			if err != nil {
-				return err
-			}
-			if err := put64(be, target, val+uint64(r.Addend)); err != nil {
-				return err
-			}
-		default:
-			return fmt.Errorf("unhandled reloc type %s at 0x%x", r.Type, r.Target)
 		}
 	}
-	// Re-protect to declared permissions. Shareable maps created via
-	// MemMapPtr were already at their final protection (nothing wrote them).
+	return p.finalizeImage(be, base, share)
+}
+
+// FinalizeImage is the explicit load-lifecycle boundary of DESIGN.md §3.9 /
+// invariant 11: after it, guest executable mappings are IMMUTABLE — no
+// emulator/interpose/runtime code may write them (host replacement happens
+// via link-time symbol binding, GOT/PLT redirection, or backend execution
+// hooks, never via code patching). Load-time writes (segment content,
+// relocations, rebasing, binding) are legal only BEFORE this point.
+//
+// The re-protection itself has always been the last step of plan application;
+// P3.5 names the boundary so it can be called — and tested — on its own.
+// Shareable maps created via MemMapPtr were already at their final protection
+// (nothing wrote them), so they are skipped.
+func (p *Plan) FinalizeImage(be emu.Backend, base uint64) error {
+	return p.finalizeImage(be, base, true)
+}
+
+func (p *Plan) finalizeImage(be emu.Backend, base uint64, share bool) error {
 	for i := range p.Maps {
 		m := &p.Maps[i]
 		if m.Shareable && share {
 			continue
 		}
-		if err := be.MemProtect(base+m.Addr, m.Size, m.Prot); err != nil {
+		if err := be.MemProtect(emu.GuestAddr(base+m.Addr), m.Size, m.Prot); err != nil {
 			return fmt.Errorf("protect seg @0x%x: %w", base+m.Addr, err)
 		}
 	}
@@ -165,9 +190,12 @@ func (img *Image) Plan() (*Plan, error) {
 			}
 			copy(buf, m.Content)
 			m.Content = buf
+			p.Maps = append(p.Maps, m)
 			p.shared = append(p.shared, buf)
+		} else {
+			p.Maps = append(p.Maps, m)
+			p.shared = append(p.shared, nil) // parallel to Maps (see Plan.shared)
 		}
-		p.Maps = append(p.Maps, m)
 	}
 	for _, r := range img.Relocs {
 		p.Relocs = append(p.Relocs, RelocOp{Target: r.Offset, Type: r.Type, SymIdx: r.Sym, Addend: r.Addend})
@@ -184,7 +212,7 @@ func (p *Plan) SharedBuffer(i int) (unsafe.Pointer, uint64, error) {
 	if i < 0 || i >= len(p.Maps) || !p.Maps[i].Shareable {
 		return nil, 0, fmt.Errorf("loader: map %d is not shareable", i)
 	}
-	if i < len(p.shared) {
+	if i < len(p.shared) && p.shared[i] != nil {
 		buf := p.shared[i]
 		return unsafe.Pointer(&buf[0]), uint64(len(buf)), nil
 	}
@@ -196,10 +224,14 @@ func (p *Plan) SharedBuffer(i int) (unsafe.Pointer, uint64, error) {
 	return nil, 0, fmt.Errorf("loader: map %d has no shared buffer or content", i)
 }
 
-// symValue resolves a relocation's symbol per engine: defined symbols =>
-// base+value, imported (undef) => via the resolver.
-func (p *Plan) symValue(sym uint32, base uint64, resolve Resolver) (uint64, error) {
-	return p.img.symValue(sym, base, resolve)
+// relocator resolves the (Format, Arch) Relocator for this plan's image.
+// Called only when the plan actually carries relocations; plans built by
+// hand in tests (no img, no relocs) never reach it.
+func (p *Plan) relocator() (Relocator, error) {
+	if p.img == nil {
+		return nil, fmt.Errorf("loader: plan has relocations but no image (relocator unavailable)")
+	}
+	return ResolveRelocator(p.img.Format, p.img.Arch)
 }
 
 // CompileOnce returns a cached, immutable Image for path (keyed by

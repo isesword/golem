@@ -3,7 +3,9 @@ package emulator
 import (
 	"fmt"
 
+	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/emu"
+	"github.com/isesword/golem/internal/kernel"
 )
 
 // This file is golem's cooperative thread scheduler — the green-thread runtime
@@ -45,13 +47,13 @@ const (
 	yieldSleep
 )
 
-// AArch64 syscall numbers the scheduler intercepts to drive switching.
+// The syscall numbers the scheduler intercepts to drive switching come from
+// the platform personality selected at boot (e.sysFutex / e.sysNanosleep /
+// e.sysClockNanosleep — set from android.SyscallPersonalityFor); only the
+// futex op bits stay local (they are scheduler policy, not table data).
 const (
-	sysNRfutex          = 98
-	sysNRnanosleep      = 101
-	sysNRclockNanosleep = 115
-	futexOpWait         = 0
-	futexOpWake         = 1
+	futexOpWait = 0
+	futexOpWake = 1
 )
 
 // fiber is one guest thread spawned via pthread_create.
@@ -108,12 +110,16 @@ func (e *Emulator) RunThreads() (int, error) {
 		return 0, nil
 	}
 	// Preserve the main thread's full register state across the fiber slices.
-	mainCtx, err := e.be.SaveContext()
+	cm, ok := e.be.(emu.ContextManager)
+	if !ok { // capability probe: engine cannot snapshot at all
+		return 0, fmt.Errorf("scheduler: save main context: %w (engine %q)", emu.ErrUnsupported, e.engine)
+	}
+	mainCtx, err := cm.SaveContext()
 	if err != nil {
 		return 0, fmt.Errorf("scheduler: save main context: %w", err)
 	}
 	defer func() {
-		_ = e.be.RestoreContext(mainCtx)
+		_ = cm.RestoreContext(mainCtx)
 		_ = mainCtx.Free()
 	}()
 
@@ -169,14 +175,31 @@ func (e *Emulator) runFiberSlice(f *fiber) error {
 
 	startPC := f.routine
 	if !f.started {
-		if err := e.be.RegWrite(emu.RegSP, f.sp); err != nil {
+		// First slice: set up a plain function call (routine(arg)) through the
+		// CallABI — PrepareCall builds the frame (arg registers, return
+		// address = sentinel) on the fiber's own stack.
+		if err := e.be.RegWrite(e.spReg, f.sp); err != nil {
 			return err
 		}
-		_ = e.be.RegWrite(emu.RegX0, f.arg)
-		_ = e.be.RegWrite(emu.RegLR, sentinel)
+		if err := e.callABI.PrepareCall(e.be, arch.CallRequest{
+			Entry:  emu.GuestAddr(f.routine),
+			Return: sentinel,
+			Args:   []arch.CallArg{{Value: f.arg, Kind: arch.ArgWord}},
+		}); err != nil {
+			return fmt.Errorf("fiber %d: PrepareCall: %w", f.id, err)
+		}
 		f.started = true
 	} else {
-		if err := e.be.RestoreContext(f.ctx); err != nil { // can't resume -> drop it
+		// Capability probe: an engine without ContextManager cannot resume —
+		// same degradation as a failed RestoreContext (drop the fiber).
+		cm, ok := e.be.(emu.ContextManager)
+		if !ok {
+			_ = f.ctx.Free()
+			f.ctx = nil
+			f.state = fsParked
+			return nil
+		}
+		if err := cm.RestoreContext(f.ctx); err != nil { // can't resume -> drop it
 			_ = f.ctx.Free()
 			f.ctx = nil
 			f.state = fsParked
@@ -184,10 +207,10 @@ func (e *Emulator) runFiberSlice(f *fiber) error {
 		}
 		_ = f.ctx.Free()
 		f.ctx = nil
-		startPC, _ = e.be.RegRead(emu.RegPC)
+		startPC, _ = e.be.RegRead(e.pcReg)
 	}
 
-	if err := e.be.Start(startPC, sentinel); err != nil {
+	if err := e.be.Start(emu.GuestAddr(startPC), emu.GuestAddr(sentinel)); err != nil {
 		if e.cfg.Verbose {
 			fmt.Printf("[sched] fiber %d fault: %v\n", f.id, err)
 		}
@@ -204,12 +227,17 @@ func (e *Emulator) runFiberSlice(f *fiber) error {
 		return fmt.Errorf("guest exit_group(%d) in fiber %d", code, f.id)
 	}
 
-	if pc, _ := e.be.RegRead(emu.RegPC); pc == sentinel {
+	if pc, _ := e.be.RegRead(e.pcReg); pc == sentinel {
 		f.state = fsDone
 		return nil
 	}
 	// Yielded mid-execution — snapshot so we can resume from exactly here.
-	ctx, err := e.be.SaveContext()
+	cm, ok := e.be.(emu.ContextManager)
+	if !ok { // capability probe: backend can't snapshot -> single-slice only
+		f.state = fsParked
+		return nil
+	}
+	ctx, err := cm.SaveContext()
 	if err != nil {
 		f.state = fsParked // backend can't snapshot -> single-slice only
 		return nil
@@ -240,26 +268,43 @@ func (e *Emulator) wakeFutex(uaddr uint64) int {
 // (wake fibers / park the caller) and nanosleep (yield). Returns true if it
 // handled the syscall (so the kernel layer is skipped). futex WAKE is honored on
 // any thread; WAIT/sleep only suspend a fiber (the main thread never blocks).
-func (e *Emulator) handleSchedSyscall(b emu.Backend, num uint64) bool {
-	switch num {
-	case sysNRfutex:
-		uaddr, _ := b.RegRead(emu.RegX0)
-		op, _ := b.RegRead(emu.RegX1)
+//
+// P2: the frame arrives pre-decoded by the platform syscall transport
+// (onSyscallTrap decodes once per trap), and results are written back through
+// the same transport — no syscall-register identities (X8/X0/X1) appear here
+// anymore. The interception SEMANTICS are unchanged: the scheduler answers
+// these syscalls itself and the kernel table never sees them.
+//
+// P7.5b: an UNBOUND intercept number (0 — the platform personality's way of
+// saying "this platform intercepts nothing here", e.g. Darwin has no
+// futex/nanosleep fibers) NEVER matches. Before this guard, a guest issuing
+// syscall number 0 (BSD's indirect-syscall register value) on such a
+// platform entered the futex case and got a fabricated success; now it
+// falls through to the kernel table and fails loudly (ENOSYS). Unsupported
+// semantics loud-fail; they are never silently eaten by a zero value.
+func (e *Emulator) handleSchedSyscall(b emu.Backend, f *kernel.SyscallFrame) bool {
+	encode := func(res kernel.Result) {
+		_ = e.kctx.Transport.EncodeResult(b, res)
+	}
+	switch {
+	case e.sysFutex != 0 && f.Num == e.sysFutex:
+		uaddr, op := f.Args[0], f.Args[1]
 		switch op & 0x7f {
 		case futexOpWake:
-			_ = b.RegWrite(emu.RegX0, uint64(e.wakeFutex(uaddr)))
+			encode(kernel.Result{Value: uint64(e.wakeFutex(uaddr))})
 		case futexOpWait:
-			_ = b.RegWrite(emu.RegX0, 0) // resume as if woken
+			encode(kernel.Result{}) // resume as if woken
 			if e.curFiber != nil {
 				e.yieldReason, e.yieldAddr = yieldFutexWait, uaddr
 				_ = b.Stop()
 			}
 		default:
-			_ = b.RegWrite(emu.RegX0, 0)
+			encode(kernel.Result{})
 		}
 		return true
-	case sysNRnanosleep, sysNRclockNanosleep:
-		_ = b.RegWrite(emu.RegX0, 0)
+	case e.sysNanosleep != 0 && f.Num == e.sysNanosleep,
+		e.sysClockNanosleep != 0 && f.Num == e.sysClockNanosleep:
+		encode(kernel.Result{})
 		if e.curFiber != nil {
 			e.yieldReason = yieldSleep
 			_ = b.Stop()

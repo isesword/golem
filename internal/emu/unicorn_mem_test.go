@@ -72,7 +72,7 @@ func TestUnicornMemory(t *testing.T) {
 
 	// ---- phase 1: purego load (dlopen libunicorn + bindings + trampolines) --
 	s0 := take("P0 baseline")
-	be0, err := New()
+	be0, err := NewNamed("", ArchARM64)
 	if err != nil {
 		t.Skipf("no backend: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestUnicornMemory(t *testing.T) {
 		}
 		// 3× ADD X0,X0,#1 (0x91000400) + RET (0xD65F03C0)
 		for i := 0; i < 3; i++ {
-			if err := b.MemWrite(codeBase+uint64(i*4), []byte{0x00, 0x04, 0x00, 0x91}); err != nil {
+			if err := b.MemWrite(GuestAddr(codeBase+uint64(i*4)), []byte{0x00, 0x04, 0x00, 0x91}); err != nil {
 				return err
 			}
 		}
@@ -108,12 +108,12 @@ func TestUnicornMemory(t *testing.T) {
 		if err := b.MemWrite(codeBase+0x104, []byte{0xC0, 0x03, 0x5F, 0xD6}); err != nil {
 			return err
 		}
-		if err := b.RegWrite(RegX0, 5); err != nil {
+		if err := b.RegWrite(regX0, 5); err != nil {
 			return err
 		}
 		// 3 starts × 3 adds (X0 reset per pass), firing the code hook each insn
 		for i := 0; i < 3; i++ {
-			if err := b.RegWrite(RegX0, 5); err != nil {
+			if err := b.RegWrite(regX0, 5); err != nil {
 				return err
 			}
 			if err := b.Start(codeBase, codeBase+12); err != nil {
@@ -121,7 +121,11 @@ func TestUnicornMemory(t *testing.T) {
 			}
 		}
 		// demand-map: LDR from unmapped page, hook maps it inside the callback
-		mh, err := b.HookMemInvalid(func(b Backend, typ int, addr uint64, size int, value int64) bool {
+		inv, ok := b.(InvalidMemHooker) // capability probe (P2.5a)
+		if !ok {
+			return fmt.Errorf("backend lacks the InvalidMemHooker capability")
+		}
+		mh, err := inv.HookMemInvalid(func(b Backend, typ int, addr GuestAddr, size int, value int64) bool {
 			if err := b.MemMap(addr&^0xFFF, 0x1000, ProtRead|ProtWrite); err != nil {
 				return false
 			}
@@ -131,17 +135,17 @@ func TestUnicornMemory(t *testing.T) {
 			return err
 		}
 		defer mh.Remove()
-		if err := b.RegWrite(RegX2, dataPage); err != nil {
+		if err := b.RegWrite(regX2, dataPage); err != nil {
 			return err
 		}
 		if err := b.Start(codeBase+0x100, codeBase+0x104); err != nil {
 			return err
 		}
 		if verify {
-			if got, _ := b.RegRead(RegX0); got != 8 {
+			if got, _ := b.RegRead(regX0); got != 8 {
 				return fmt.Errorf("X0=%d, want 8", got)
 			}
-			if got, _ := b.RegRead(RegX1); got != 0xDEADC0DEDEADBEEF {
+			if got, _ := b.RegRead(regX1); got != 0xDEADC0DEDEADBEEF {
 				return fmt.Errorf("X1=%#x, want demand-mapped value", got)
 			}
 		}
@@ -155,20 +159,24 @@ func TestUnicornMemory(t *testing.T) {
 	take("P2 after warm engine run")
 
 	cbRegLen := func() int { cbMu.Lock(); defer cbMu.Unlock(); return len(cbReg) }
-	noopHook := func(Backend, uint64, uint32) {}
+	noopHook := func(Backend, GuestAddr, uint32) {}
 
 	// ---- P3a: single engine, 100k× [rewrite instruction + execute] ----------
 	// Persistent code hook → 3 callback crossings per Start. This is the
 	// realistic hot-path shape (sign service reusing one engine).
-	be, err := New()
+	be, err := NewNamed("", ArchARM64)
 	if err != nil {
 		t.Skipf("no backend: %v", err)
 	}
 	defer be.Close()
+	ih, ok := be.(InstructionHooker) // capability probe (P2.5a)
+	if !ok {
+		t.Fatal("backend lacks the InstructionHooker capability")
+	}
 	if err := runOne(be, false); err != nil {
 		t.Fatalf("hot prep: %v", err)
 	}
-	ph, err := be.HookCode(codeBase, codeBase+8, noopHook)
+	ph, err := ih.HookCode(codeBase, codeBase+8, noopHook)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +190,7 @@ func TestUnicornMemory(t *testing.T) {
 		if err := be.MemWrite(codeBase, w[:]); err != nil {
 			t.Fatal(err)
 		}
-		if err := be.RegWrite(RegX0, uint64(i)); err != nil {
+		if err := be.RegWrite(regX0, uint64(i)); err != nil {
 			t.Fatal(err)
 		}
 		if err := be.Start(codeBase, codeBase+12); err != nil {
@@ -199,7 +207,11 @@ func TestUnicornMemory(t *testing.T) {
 	// P3a2: does FlushCache reclaim the TB growth? 10k more rewrites after a
 	// full TB flush — if the slope flattens, the code cache recycles on flush
 	// and periodic FlushCache bounds long-lived engines that rewrite guest code.
-	if err := be.FlushCache(); err != nil {
+	ci, ok := be.(CacheInvalidator) // capability probe (P2.5a)
+	if !ok {
+		t.Fatal("backend lacks the CacheInvalidator capability")
+	}
+	if err := ci.FlushCache(); err != nil {
 		t.Fatal(err)
 	}
 	f0 := take("P3a2 after FlushCache")
@@ -209,7 +221,7 @@ func TestUnicornMemory(t *testing.T) {
 		if err := be.MemWrite(codeBase, w[:]); err != nil {
 			t.Fatal(err)
 		}
-		if err := be.RegWrite(RegX0, uint64(i)); err != nil {
+		if err := be.RegWrite(regX0, uint64(i)); err != nil {
 			t.Fatal(err)
 		}
 		if err := be.Start(codeBase, codeBase+12); err != nil {
@@ -226,7 +238,7 @@ func TestUnicornMemory(t *testing.T) {
 	var p3b []snap
 	p3b = append(p3b, take("P3b hook churn start"))
 	for i := 0; i < hotN; i++ {
-		h, err := be.HookCode(codeBase, codeBase+8, noopHook)
+		h, err := ih.HookCode(codeBase, codeBase+8, noopHook)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -244,7 +256,7 @@ func TestUnicornMemory(t *testing.T) {
 	// ---- P4: engine churn — 100k× full [create → use → close] ---------------
 	var churn []snap
 	for i := 0; i < churnN; i++ {
-		b, err := New()
+		b, err := NewNamed("", ArchARM64)
 		if err != nil {
 			t.Fatal(err)
 		}

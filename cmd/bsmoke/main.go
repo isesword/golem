@@ -15,6 +15,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/isesword/golem/internal/arch/arm64"
 	"github.com/isesword/golem/internal/emu"
 )
 
@@ -30,7 +31,7 @@ func main() {
 	flag.Parse()
 	fmt.Printf("engines compiled in: %s\n", strings.Join(emu.Available(), ", "))
 
-	be, err := emu.NewNamed(*engine)
+	be, err := emu.NewNamed(*engine, emu.ArchARM64)
 	must(err, "emu.NewNamed")
 	defer be.Close()
 	if eng, e := emu.Resolve(*engine); e == nil {
@@ -43,10 +44,15 @@ func main() {
 	// svc #0 (0xD4000001) ; add x0,x0,#1 (0x91000400)
 	code := []byte{0x01, 0x00, 0x00, 0xd4, 0x00, 0x04, 0x00, 0x91}
 	must(be.MemWrite(base, code), "write code")
-	must(be.RegWrite(emu.RegX0, 10), "set x0")
+	must(be.RegWrite(arm64.X0, 10), "set x0")
 
 	hookRan := false
-	_, err = be.HookInterrupt(func(b emu.Backend, intno uint32) {
+	ih, ok := be.(emu.InterruptHooker) // capability probe (P2.5a)
+	if !ok {
+		fmt.Println("FAIL engine lacks the InterruptHooker capability")
+		os.Exit(1)
+	}
+	_, err = ih.HookInterrupt(func(b emu.Backend, intno uint32) {
 		hookRan = true
 		// callback-time fresh mapping — the scenario that faults on an
 		// M-attached thread if the design were wrong.
@@ -58,14 +64,14 @@ func main() {
 			fmt.Println("  hook MemWrite err:", e)
 			return
 		}
-		x0, _ := b.RegRead(emu.RegX0)
-		b.RegWrite(emu.RegX0, x0+5)
+		x0, _ := b.RegRead(arm64.X0)
+		b.RegWrite(arm64.X0, x0+5)
 	})
 	must(err, "hook intr")
 
 	must(be.Start(base, base+8), "emu_start")
 
-	x0, _ := be.RegRead(emu.RegX0)
+	x0, _ := be.RegRead(arm64.X0)
 	back, _ := be.MemRead(0x40000000, 4)
 	fmt.Printf("hookRan=%v  x0=%d (expect 16)  mmap_readback=%x (expect deadbeef)\n",
 		hookRan, x0, back)

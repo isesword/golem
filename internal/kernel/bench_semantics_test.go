@@ -10,8 +10,8 @@ func BenchmarkSemClose(b *testing.B) {
 	fd := k.openTestFile()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		k.call(SYS_close, uint64(fd))
-		k.call(SYS_openat, 0, k.putStr(scratch, "/data/local/bench.bin"), oWRONLY|oCREAT)
+		k.call(nrClose, uint64(fd))
+		k.call(nrOpenat, 0, k.putStr(scratch, "/data/local/bench.bin"), oWRONLY|oCREAT)
 	}
 }
 
@@ -19,7 +19,7 @@ func BenchmarkSemCloseUnknown(b *testing.B) {
 	k := newKernelCtxt(b)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		k.call(SYS_close, 0xdead) // EBADF path
+		k.call(nrClose, 0xdead) // EBADF path
 	}
 }
 
@@ -28,7 +28,7 @@ func BenchmarkSemLseek(b *testing.B) {
 	fd := k.openTestFile()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		k.call(SYS_lseek, uint64(fd), uint64(i%64), 0) // SEEK_SET
+		k.call(nrLseek, uint64(fd), uint64(i%64), 0) // SEEK_SET
 	}
 }
 
@@ -36,14 +36,14 @@ func BenchmarkSemGetrandomDeterministic(b *testing.B) {
 	k := newKernelCtxt(b)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		k.call(SYS_getrandom, scratch, 64, 0)
+		k.call(nrGetrandom, scratch, 64, 0)
 	}
 }
 
 func BenchmarkSemWritev(b *testing.B) {
 	k := newKernelCtxt(b)
 	const wpath = "/data/local/benchiov.bin"
-	fd := k.call(SYS_openat, 0, k.putStr(scratch+0x800, wpath), oWRONLY|oCREAT)
+	fd := k.call(nrOpenat, 0, k.putStr(scratch+0x800, wpath), oWRONLY|oCREAT)
 	k.be.MemWrite(scratch+0x1000, []byte("ABCD"))
 	var iov [32]byte
 	binaryLittleEndianPutUint64(iov[0:], scratch+0x1000)
@@ -51,7 +51,7 @@ func BenchmarkSemWritev(b *testing.B) {
 	k.be.MemWrite(scratch+0x1200, iov[:])
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		k.call(SYS_writev, uint64(fd), scratch+0x1200, 1)
+		k.call(nrWritev, uint64(fd), scratch+0x1200, 1)
 	}
 }
 

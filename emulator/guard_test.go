@@ -25,11 +25,11 @@ func TestGuestCallbackPanic(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.CallSymbol("add", 2, 3); err == nil ||
+	if _, err := e.CallSymbol("add", Words(2, 3)...); err == nil ||
 		!strings.Contains(err.Error(), "panic during guest callback") {
 		t.Fatalf("panicking callback must surface as an error, got %v", err)
 	}
-	if _, err := e.CallSymbol("fib", 5); err == nil ||
+	if _, err := e.CallSymbol("fib", Words(5)...); err == nil ||
 		!strings.Contains(err.Error(), "poisoned") {
 		t.Fatalf("calls after a callback panic must report poisoned, got %v", err)
 	}

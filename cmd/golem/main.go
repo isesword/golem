@@ -65,7 +65,11 @@ func main() {
 	defer e.Close()
 	fmt.Printf("engine=%s  loaded=%s\n", e.Engine(), soPath)
 
-	ret, err := e.CallSymbol(symbol, callArgs...)
+	vals := make([]emulator.Value, len(callArgs))
+	for i, a := range callArgs {
+		vals[i] = emulator.Uint64(a)
+	}
+	ret, err := e.CallSymbol(symbol, vals...)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "call:", err)
 		os.Exit(1)

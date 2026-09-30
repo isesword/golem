@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/isesword/golem/internal/arch"
 	"github.com/isesword/golem/internal/emu"
+	"github.com/isesword/golem/internal/interpose"
 )
 
 // capabilityErr rewrites an engine-capability failure (an error wrapping
@@ -22,6 +24,15 @@ func (e *Emulator) capabilityErr(op string, err error) error {
 		return fmt.Errorf("%s: %w (engine %q)", op, err, e.engine)
 	}
 	return err
+}
+
+// capabilityUnavailable is the probe half of capability gating (P2.5a,
+// DESIGN.md invariant 14): the engine does not implement the capability
+// interface backing op at all. The error wraps emu.ErrUnsupported so callers
+// keep ONE errors.Is degrade path whether the capability is absent (type
+// assertion failed) or present but refused (backend returned ErrUnsupported).
+func (e *Emulator) capabilityUnavailable(op string) error {
+	return fmt.Errorf("%s: %w (engine %q)", op, emu.ErrUnsupported, e.engine)
 }
 
 // Guest memory protection bits (mirror the CPU backend's UC_PROT_*).
@@ -56,16 +67,24 @@ const (
 // anything else maps a dedicated region as before.
 //
 // The backing uc_mem_map failure is returned as an error AND the address-
-// space bookkeeping is rolled back (no phantom region, no consumed VA).
-// Call sites that cannot propagate errors (guest-initiated JNI up-calls)
-// use MustAlloc instead.
+// space bookkeeping is rolled back (no phantom region, no consumed VA); a
+// failed ROLLBACK poisons the emulator (the space is inconsistent — P7.5b:
+// armed for real, not just claimed in the message). Call sites that cannot
+// propagate errors (guest-initiated JNI up-calls) use MustAlloc instead.
 func (e *Emulator) Alloc(size uint64, prot int) (uint64, error) {
+	if e.poisonErr != nil {
+		return 0, fmt.Errorf("emulator poisoned: %w", e.poisonErr)
+	}
 	return e.doAlloc(size, prot)
 }
 
 // MustAlloc is Alloc with panic-on-error — reserved for call sites inside
 // guest-initiated up-calls (jni_dispatch) where no error channel exists.
+// The panic lands in the guest-callback guard, which poisons the emulator.
 func (e *Emulator) MustAlloc(size uint64, prot int) uint64 {
+	if e.poisonErr != nil {
+		panic(fmt.Sprintf("emulator: MustAlloc(%#x, %d): %v", size, prot, e.poisonErr))
+	}
 	a, err := e.doAlloc(size, prot)
 	if err != nil {
 		panic(fmt.Sprintf("emulator: MustAlloc(%#x, %d): %v — guest memory mapping failed", size, prot, err))
@@ -83,12 +102,14 @@ func (e *Emulator) doAlloc(size uint64, prot int) (uint64, error) {
 				chunk = int((size + 0xfff) &^ 0xfff)
 			}
 			base := e.mem.Mmap(uint64(chunk), prot, "arena")
-			if err := e.be.MemMap(base, uint64(chunk), prot); err != nil {
+			if err := e.be.MemMap(emu.GuestAddr(base), uint64(chunk), prot); err != nil {
 				// transaction: the bookkeeping region must not outlive a
 				// failed backend map; if the rollback itself fails the
-				// emulator is poisoned (address space inconsistent).
+				// address space is inconsistent — POISON FOR REAL (P7.5b:
+				// the message used to claim this without arming it).
 				if rb := e.mem.RollbackLast(base, uint64(chunk)); rb != nil {
-					return 0, fmt.Errorf("map arena chunk %#x: %w (rollback also failed: %v — emulator poisoned)", base, err, rb)
+					return 0, e.poison(fmt.Sprintf("map arena chunk %#x", base),
+						fmt.Errorf("%w (rollback also failed: %v — address space inconsistent)", err, rb))
 				}
 				return 0, fmt.Errorf("map arena chunk %#x: %w", base, err)
 			}
@@ -99,9 +120,10 @@ func (e *Emulator) doAlloc(size uint64, prot int) (uint64, error) {
 		return addr, nil
 	}
 	a := e.mem.Mmap(size, prot, "alloc")
-	if err := e.be.MemMap(a, (size+0xfff)&^0xfff, prot); err != nil {
+	if err := e.be.MemMap(emu.GuestAddr(a), (size+0xfff)&^0xfff, prot); err != nil {
 		if rb := e.mem.RollbackLast(a, (size+0xfff)&^0xfff); rb != nil {
-			return 0, fmt.Errorf("map %#x: %w (rollback also failed: %v — emulator poisoned)", a, err, rb)
+			return 0, e.poison(fmt.Sprintf("map %#x", a),
+				fmt.Errorf("%w (rollback also failed: %v — address space inconsistent)", err, rb))
 		}
 		return 0, fmt.Errorf("map %#x: %w", a, err)
 	}
@@ -116,21 +138,25 @@ func (e *Emulator) Malloc(size uint64) (uint64, error) { return e.Alloc(size, Pr
 // where no error channel exists (use Alloc directly where errors propagate).
 func (e *Emulator) WriteScratch(data []byte) uint64 {
 	a := e.MustAlloc(uint64(len(data))+16, ProtRead|ProtWrite)
-	if err := e.be.MemWrite(a, data); err != nil {
+	if err := e.be.MemWrite(emu.GuestAddr(a), data); err != nil {
 		panic(fmt.Sprintf("emulator: WriteScratch: %v", err))
 	}
 	return a
 }
 
 // WriteBytes writes raw bytes to guest memory at addr.
-func (e *Emulator) WriteBytes(addr uint64, data []byte) error { return e.be.MemWrite(addr, data) }
+func (e *Emulator) WriteBytes(addr uint64, data []byte) error {
+	return e.be.MemWrite(emu.GuestAddr(addr), data)
+}
 
 // ReadBytes reads n bytes from guest memory at addr.
-func (e *Emulator) ReadBytes(addr, n uint64) ([]byte, error) { return e.be.MemRead(addr, n) }
+func (e *Emulator) ReadBytes(addr, n uint64) ([]byte, error) {
+	return e.be.MemRead(emu.GuestAddr(addr), n)
+}
 
 // WriteCString writes s followed by a NUL terminator at addr.
 func (e *Emulator) WriteCString(addr uint64, s string) error {
-	return e.be.MemWrite(addr, append([]byte(s), 0))
+	return e.be.MemWrite(emu.GuestAddr(addr), append([]byte(s), 0))
 }
 
 // WriteCStringAlloc allocates a region, writes s+NUL, and returns its address.
@@ -138,14 +164,14 @@ func (e *Emulator) WriteCStringAlloc(s string) uint64 { return e.WriteScratch(ap
 
 // ReadU32 / ReadU64 read a little-endian integer from guest memory.
 func (e *Emulator) ReadU32(addr uint64) (uint32, error) {
-	b, err := e.be.MemRead(addr, 4)
+	b, err := e.be.MemRead(emu.GuestAddr(addr), 4)
 	if err != nil {
 		return 0, err
 	}
 	return binary.LittleEndian.Uint32(b), nil
 }
 func (e *Emulator) ReadU64(addr uint64) (uint64, error) {
-	b, err := e.be.MemRead(addr, 8)
+	b, err := e.be.MemRead(emu.GuestAddr(addr), 8)
 	if err != nil {
 		return 0, err
 	}
@@ -156,7 +182,7 @@ func (e *Emulator) ReadU64(addr uint64) (uint64, error) {
 func (e *Emulator) WriteU32(addr uint64, v uint32) error {
 	var b [4]byte
 	binary.LittleEndian.PutUint32(b[:], v)
-	return e.be.MemWrite(addr, b[:])
+	return e.be.MemWrite(emu.GuestAddr(addr), b[:])
 }
 func (e *Emulator) WriteU64(addr uint64, v uint64) error { return putU64(e.be, addr, v) }
 
@@ -164,7 +190,7 @@ func (e *Emulator) WriteU64(addr uint64, v uint64) error { return putU64(e.be, a
 func (e *Emulator) ReadCStr(addr uint64) (string, error) {
 	var out []byte
 	for {
-		b, err := e.be.MemRead(addr+uint64(len(out)), 64)
+		b, err := e.be.MemRead(emu.GuestAddr(addr+uint64(len(out))), 64)
 		if err != nil {
 			return "", err
 		}
@@ -186,106 +212,215 @@ func (e *Emulator) ReadCString(addr uint64) (string, error) { return e.ReadCStr(
 // ---- function replacement (native hook) -----------------------------------
 
 // Hook is the context passed to a Replace callback: read the incoming args and
-// reach the emulator for memory access; the callback's return value becomes X0.
-type Hook struct{ e *Emulator }
+// reach the emulator for memory access; the callback's return value becomes the
+// call's result (written back per the target's CallABI).
+type Hook struct {
+	e    *Emulator
+	kind HookKind // where this hook fires — gates the P9 entry-scoped answers
+}
 
 // Emu returns the emulator, for memory access inside a Replace callback.
 func (h *Hook) Emu() *Emulator { return h.e }
 
-// Arg returns integer argument / register Xi (0-based, X0..X7).
-func (h *Hook) Arg(i int) uint64 {
-	if i < 0 || i > 7 {
-		return 0
+// Arg returns integer argument i (0-based) of the in-flight guest call as a
+// machine-word Value (Portable API, P9): read through the CallABI (register
+// portion first, then the stack spill area — the entry-state contract).
+//
+// Valid ONLY at function-entry hooks (ReplaceFns / ReplaceE / HookSymbol):
+// there the ABI defines what "argument i" is. At an instruction hook the
+// "argument registers" are just registers — answering would be a guess, so
+// it fails with ErrContextUnavailable (use Reg/RegRead for raw observation).
+func (h *Hook) Arg(i int) (Value, error) {
+	if h.kind != HookFunctionEntry {
+		return Value{}, fmt.Errorf("Arg(%d) at a %s hook — arguments are only defined at function entry: %w", i, h.kind, ErrContextUnavailable)
 	}
-	v, _ := h.e.be.RegRead(emu.RegX0 + emu.Reg(i))
-	return v
-}
-
-// Reg returns register Xi for any i in 0..30 (also 31=SP, 32=PC, 33=NZCV) via the
-// full GP register file. Use this instead of Arg for X8..X30 (Arg only covers X0..X7).
-func (h *Hook) Reg(i int) uint64 {
-	if i < 0 || i > 33 {
-		return 0
+	if i < 0 {
+		return Value{}, fmt.Errorf("Arg(%d): negative argument index", i)
 	}
-	regs, err := h.e.be.ReadGPRegs()
+	args, err := h.e.callABI.ReadArgs(h.e.be, i+1)
 	if err != nil {
-		return 0
+		return Value{}, fmt.Errorf("Arg(%d): %w", i, err)
 	}
-	return regs[i]
+	if len(args) <= i {
+		return Value{}, fmt.Errorf("Arg(%d): only %d argument(s) readable: %w", i, len(args), ErrContextUnavailable)
+	}
+	return Value{Kind: Word, Raw: args[i]}, nil
 }
 
-// SetArg sets register Xi (0..7) — e.g. to rewrite an argument from an inline hook.
+// ReturnValue returns the value the in-flight call is RETURNING (Portable
+// API, P9). Only well-defined where the call has already PRODUCED its
+// result — a function-EXIT context. golem installs no exit hooks yet
+// (HookFunctionExit is reserved), so every context answerable today fails
+// with ErrContextUnavailable rather than reading pre-call register junk.
+func (h *Hook) ReturnValue() (Value, error) {
+	if h.kind != HookFunctionExit {
+		return Value{}, fmt.Errorf("ReturnValue at a %s hook — the result only exists at function exit: %w", h.kind, ErrContextUnavailable)
+	}
+	r, err := h.e.callABI.ReadResult(h.e.be)
+	if err != nil {
+		return Value{}, fmt.Errorf("ReturnValue: %w", err)
+	}
+	return Value{Kind: Word, Raw: r.Value}, nil
+}
+
+// ReturnAddress returns where the in-flight call will return to (Portable
+// API, P9) — per convention: X30 on ARM64, R14 on ARM32, [RSP] on AMD64.
+// Valid ONLY at function-entry hooks; an instruction hook fired mid-frame
+// cannot know the caller, so it answers ErrContextUnavailable (use
+// ReadRole(RoleLR) for the raw link-register value where the architecture
+// has one — that is a CPU observation, not a call-context fact).
+func (h *Hook) ReturnAddress() (uint64, error) {
+	if h.kind != HookFunctionEntry {
+		return 0, fmt.Errorf("ReturnAddress at a %s hook — the caller is only defined at function entry: %w", h.kind, ErrContextUnavailable)
+	}
+	v, err := h.e.callABI.ReadReturnAddress(h.e.be)
+	if err != nil {
+		return 0, fmt.Errorf("ReturnAddress: %w", err)
+	}
+	return uint64(v), nil
+}
+
+// Reg returns (value, ok) for register-file index i — AArch64 order: 0..30 =
+// x0..x30, 31 = SP, 32 = PC, 33 = NZCV — via the RegFileReader capability.
+// ok=false means "this engine/arch has no register-file dump" (or i out of
+// range): a genuine zero value and a missing register stay distinguishable
+// (P7.5c — this used to answer a silent 0 for both). For call ARGUMENTS use
+// Arg: it covers registers and stack spill alike through the CallABI.
+func (h *Hook) Reg(i int) (uint64, bool) {
+	rr, ok := h.e.be.(emu.RegFileReader)
+	if !ok {
+		return 0, false
+	}
+	regs, err := rr.ReadGPRegs()
+	if err != nil || i < 0 || i >= len(regs) {
+		return 0, false
+	}
+	return regs[i], true
+}
+
+// SetArg sets integer argument register i — e.g. to rewrite an argument from
+// an inline hook. Register-shaped introspection only (the optional
+// arch.CallABIIntrospector capability): an argument beyond the register
+// portion lives on the stack and must be rewritten in guest memory instead.
 func (h *Hook) SetArg(i int, v uint64) {
-	if i >= 0 && i <= 7 {
-		_ = h.e.be.RegWrite(emu.RegX0+emu.Reg(i), v)
+	intro, ok := h.e.callABI.(arch.CallABIIntrospector)
+	if !ok {
+		return
+	}
+	if r, ok := intro.ArgReg(i); ok {
+		_ = h.e.be.RegWrite(r, v)
 	}
 }
 
-// PC / SP / LR read those registers (handy inside an inline hook).
-func (h *Hook) PC() uint64 { v, _ := h.e.be.RegRead(emu.RegPC); return v }
-func (h *Hook) SP() uint64 { v, _ := h.e.be.RegRead(emu.RegSP); return v }
-func (h *Hook) LR() uint64 { v, _ := h.e.be.RegRead(emu.RegLR); return v }
+// PC / SP read those registers (handy inside an inline hook).
+func (h *Hook) PC() uint64 { v, _ := h.e.be.RegRead(h.e.pcReg); return v }
+func (h *Hook) SP() uint64 { v, _ := h.e.be.RegRead(h.e.spReg); return v }
 
 // SetPC redirects execution (e.g. skip an instruction, jump elsewhere).
-func (h *Hook) SetPC(v uint64) { _ = h.e.be.RegWrite(emu.RegPC, v) }
+func (h *Hook) SetPC(v uint64) { _ = h.e.be.RegWrite(h.e.pcReg, v) }
+
+// RegRead / RegWrite / MemRead / MemWrite make *Hook satisfy
+// interpose.CallContext (P2.5d): the interpose package cannot import
+// emulator, so the interposition callback contract is defined there and the
+// Hook — the emulator's own callback context — adapts to it.
+func (h *Hook) RegRead(r emu.Reg) (uint64, error)  { return h.e.be.RegRead(r) }
+func (h *Hook) RegWrite(r emu.Reg, v uint64) error { return h.e.be.RegWrite(r, v) }
+func (h *Hook) MemWrite(a emu.GuestAddr, d []byte) error {
+	return h.e.be.MemWrite(a, d)
+}
+func (h *Hook) MemRead(a emu.GuestAddr, n uint64) ([]byte, error) {
+	return h.e.be.MemRead(a, n)
+}
 
 // ReplaceFunc is a Go stand-in for a native function; its return value is the
 // function's return (X0).
 type ReplaceFunc func(h *Hook) uint64
 
-// Replace makes calls to the function at addr run fn instead (the entry is
-// overwritten with an `svc; ret` trampoline). This is golem's analogue of
-// unidbg's hook/replace: model or stub a native function in Go. Works on both
-// engines (it's a trap, not an inline patch).
-// Replace entry-patches `addr` with an SVC trap dispatched to fn. Panics if
-// any step fails (privatize/write/flush): a half-applied patch — code
-// patched but stale translation cached, or a registered hook the guest
-// never reaches — is worse than a loud failure at setup time.
-// ReplaceE entry-patches addr with an SVC trap dispatched to fn — the
-// transactional form: privatize shared pages, save the original instructions,
-// write the patch, flush, and only then register the hook. Any failure rolls
-// the patch back (original instructions restored + flushed); if even the
-// rollback cannot be verified the emulator is POISONED and every later
-// CallFunc/RunThreads rejects with that error. On a recoverable failure the
-// emulator remains usable and the original code still runs.
+// Replace makes calls to the function at addr run fn instead. Since P2.5d
+// (DESIGN.md §3.8, invariant 11) this is FUNCTION INTERPOSITION, not a code
+// patch: guest .text is immutable, so instead of overwriting the entry with a
+// trampoline the emulator binds fn in the InterposeTable and installs a
+// per-entry execution hook (emu.InstructionHooker.HookCode on exactly
+// [addr, addr]). When guest PC reaches addr the hook fires BEFORE the first
+// instruction executes: fn runs, its result is written back via
+// CallABI.WriteResult, and CallABI.ReturnFromCall hands control to the guest
+// caller — the original function body never executes.
+//
+// Interposition needs per-instruction code hooks; an engine without the
+// InstructionHooker capability fails ReplaceE with an error wrapping
+// emu.ErrUnsupported. Replacing an already-replaced address is an error (an
+// interposed entry owns exactly one hook).
 func (e *Emulator) ReplaceE(addr uint64, fn ReplaceFunc) error {
+	// Adapt the ReplaceFunc to an interpose.HostFunc: the callback context is
+	// the Hook, which satisfies interpose.CallContext.
+	hf := interpose.HostFunc(func(ctx interpose.CallContext) uint64 {
+		return fn(ctx.(*Hook))
+	})
+	return e.interposeE(addr, hf)
+}
+
+// interposeE is ReplaceE for an already-adapted interpose.HostFunc — the
+// form platform configs (android.Config.ReplaceFns) carry, so New's
+// exported-symbol replacement pass does not round-trip through ReplaceFunc.
+func (e *Emulator) interposeE(addr uint64, hf interpose.HostFunc) error {
 	if e.poisonErr != nil {
 		return fmt.Errorf("emulator poisoned: %w", e.poisonErr)
 	}
-	// 1. privatize (shared -> private with identical content). On a
-	// recoverable privatize failure the original code is intact.
-	if err := e.privatize(addr, 8); err != nil {
-		if e.poisonErr != nil {
-			return e.poisonErr
-		}
-		return fmt.Errorf("privatize %#x: %w", addr, err)
+	ih, ok := e.be.(emu.InstructionHooker)
+	if !ok {
+		return e.capabilityUnavailable("Replace")
 	}
-	// 2. save the original instructions we are about to overwrite.
-	orig, err := e.be.MemRead(addr, 8)
+	// Duplicate pre-check: an interposed entry owns exactly one hook — a
+	// second Replace on the same address would stack hooks that both fire.
+	if _, dup := e.itab.LookupAddress(emu.GuestAddr(addr)); dup {
+		return fmt.Errorf("Replace %#x: address already interposed", addr)
+	}
+	// Performance constraint (DESIGN.md §8): the hook covers exactly the one
+	// entry address, never a range. Installed BEFORE binding so a failed
+	// ReplaceE leaves no state at all (an unbound entry hook is a benign
+	// no-op: onInterpose's LookupAddress misses and the guest runs on).
+	hook, err := ih.HookCode(emu.GuestAddr(addr), emu.GuestAddr(addr), e.guardCode(e.onInterpose))
 	if err != nil {
-		return fmt.Errorf("read original %#x: %w", addr, err)
+		return e.capabilityErr("Replace", err)
 	}
-	// 3. write the patch. A partial write cannot be verified -> poison.
-	if err := e.be.MemWrite(addr, []byte{0x01, 0x00, 0x00, 0xd4, 0xc0, 0x03, 0x5f, 0xd6}); err != nil {
-		return e.poison(fmt.Sprintf("patch write %#x", addr), err)
-	}
-	// 4. flush stale translations. If it fails, roll the original
-	// instructions back; if even the rollback cannot be verified -> poison.
-	if err := e.be.FlushCache(); err != nil {
-		if rerr := e.be.MemWrite(addr, orig); rerr != nil {
-			return e.poison(fmt.Sprintf("rollback write %#x", addr), rerr)
+	// Unicorn instruments hook callouts into translated blocks AT TRANSLATION
+	// TIME: a TB translated before this hook was added (the function already
+	// ran once) would never fire it, so the affected code-cache range must be
+	// flushed after installing the hook — through the CodeCacheController
+	// capability (P3.5), not a backend-specific call. A failed flush leaves
+	// the hook installed-but-inert — remove it so a retry does not stack
+	// hooks. An engine with hooks but no CodeCacheController capability
+	// presumably does not cache translations (nothing to invalidate), so
+	// absence is tolerated.
+	if cc, ok := e.be.(emu.CodeCacheController); ok {
+		if err := cc.FlushCodeCache(emu.GuestAddr(addr), emu.GuestAddr(addr)+1); err != nil {
+			_ = hook.Remove()
+			return e.capabilityErr("Replace", err)
 		}
-		if rerr := e.be.FlushCache(); rerr != nil {
-			return e.poison(fmt.Sprintf("rollback flush %#x", addr), rerr)
-		}
-		return fmt.Errorf("Replace %#x: flush failed (%v) — original instructions restored", addr, err)
 	}
-	// 5. success: register the dispatch hook last.
-	e.replaced[addr] = e.guardHostFn(func(em *Emulator, b emu.Backend) {
-		ret := fn(&Hook{em})
-		_ = b.RegWrite(emu.RegX0, ret)
-	})
+	if err := e.itab.BindAddress(emu.GuestAddr(addr), hf); err != nil {
+		_ = hook.Remove()
+		return err // unreachable after the pre-check (single-threaded)
+	}
 	return nil
+}
+
+// onInterpose is the single dispatch behind every interposition entry hook:
+// look the entry up in the InterposeTable, run the host function, write its
+// result back per the CallABI and return to the guest caller. Runs inside the
+// engine's callback trampoline, guarded like every backend callback.
+func (e *Emulator) onInterpose(b emu.Backend, addr uint64, _ uint32) {
+	hf, ok := e.itab.LookupAddress(emu.GuestAddr(addr))
+	if !ok {
+		return // hook outlived its binding (cannot happen today; keep it benign)
+	}
+	ret := hf(&Hook{e: e, kind: HookFunctionEntry})
+	if err := e.callABI.WriteResult(b, arch.CallResult{Value: ret}); err != nil && e.cfg.Verbose {
+		fmt.Printf("[interpose] %#x: WriteResult: %v\n", addr, err)
+	}
+	if err := e.callABI.ReturnFromCall(b); err != nil && e.cfg.Verbose {
+		fmt.Printf("[interpose] %#x: ReturnFromCall: %v\n", addr, err)
+	}
 }
 
 // Replace is ReplaceE with panic-on-error, for call sites that cannot
@@ -312,12 +447,35 @@ func (e *Emulator) ReplaceSymbol(name string, fn ReplaceFunc) error {
 // registers via *Hook — rewrite an argument, capture a value, or SetPC to skip
 // or redirect. Returns a remover.
 //
-// Inline hooks need per-instruction code hooks; an engine without them
-// returns an error wrapping emu.ErrUnsupported (use Replace for entry
-// interception, which works on any engine — it is a trap, not an inline patch).
+// Inline hooks need per-instruction code hooks; an engine without the
+// InstructionHooker capability returns an error wrapping emu.ErrUnsupported.
+// (Replace uses the same capability since P2.5d — entry interception is an
+// execution hook too, no longer an SVC trap patch.)
 func (e *Emulator) HookAddr(addr uint64, fn func(h *Hook)) (func(), error) {
-	h, err := e.be.HookCode(addr, addr, e.guardCode(func(b emu.Backend, a uint64, size uint32) {
-		fn(&Hook{e})
+	return e.hookAddrKind(addr, fn, HookInstruction)
+}
+
+// HookSymbol is HookAddr by exported symbol name. Unlike HookAddr it marks
+// the context as FUNCTION-ENTRY (an exported function symbol's address IS
+// the entry — the P9 semantic questions Arg/ReturnAddress are answerable);
+// only hook function symbols with it, never data symbols.
+func (e *Emulator) HookSymbol(name string, fn func(h *Hook)) (func(), error) {
+	addr, ok := e.Sym(name)
+	if !ok {
+		return nil, fmt.Errorf("symbol %q not found", name)
+	}
+	return e.hookAddrKind(addr, fn, HookFunctionEntry)
+}
+
+// hookAddrKind is the shared per-address code-hook installer; kind labels
+// the P9 context the callback will observe.
+func (e *Emulator) hookAddrKind(addr uint64, fn func(h *Hook), kind HookKind) (func(), error) {
+	ih, ok := e.be.(emu.InstructionHooker)
+	if !ok {
+		return nil, e.capabilityUnavailable("HookAddr")
+	}
+	h, err := ih.HookCode(emu.GuestAddr(addr), emu.GuestAddr(addr), e.guardCode(func(b emu.Backend, a uint64, size uint32) {
+		fn(&Hook{e: e, kind: kind})
 	}))
 	if err != nil {
 		return nil, e.capabilityErr("HookAddr", err)
@@ -325,21 +483,16 @@ func (e *Emulator) HookAddr(addr uint64, fn func(h *Hook)) (func(), error) {
 	return func() { _ = h.Remove() }, nil
 }
 
-// HookSymbol is HookAddr by exported symbol name.
-func (e *Emulator) HookSymbol(name string, fn func(h *Hook)) (func(), error) {
-	addr, ok := e.Sym(name)
-	if !ok {
-		return nil, fmt.Errorf("symbol %q not found", name)
-	}
-	return e.HookAddr(addr, fn)
-}
-
 // HookRange installs a per-instruction hook over [start,end); fn gets the Hook
 // and the current PC. Like HookAddr but for a whole region (needs an engine
 // with per-instruction code hooks; see HookAddr).
 func (e *Emulator) HookRange(start, end uint64, fn func(h *Hook, addr uint64)) (func(), error) {
-	h, err := e.be.HookCode(start, end, e.guardCode(func(b emu.Backend, a uint64, size uint32) {
-		fn(&Hook{e}, a)
+	ih, ok := e.be.(emu.InstructionHooker)
+	if !ok {
+		return nil, e.capabilityUnavailable("HookRange")
+	}
+	h, err := ih.HookCode(emu.GuestAddr(start), emu.GuestAddr(end), e.guardCode(func(b emu.Backend, a uint64, size uint32) {
+		fn(&Hook{e: e, kind: HookInstruction}, a)
 	}))
 	if err != nil {
 		return nil, e.capabilityErr("HookRange", err)
@@ -351,8 +504,12 @@ func (e *Emulator) HookRange(start, end uint64, fn func(h *Hook, addr uint64)) (
 // (h.PC() = the reading instruction) and the read (addr,size). Needs an engine
 // with memory-access hooks (errors wrap emu.ErrUnsupported otherwise).
 func (e *Emulator) HookMemRead(start, end uint64, fn func(h *Hook, addr uint64, size int)) (func(), error) {
-	h, err := e.be.HookMemRead(start, end, e.guardMemRead(func(b emu.Backend, addr uint64, size int) {
-		fn(&Hook{e}, addr, size)
+	mh, ok := e.be.(emu.MemReadHooker)
+	if !ok {
+		return nil, e.capabilityUnavailable("HookMemRead")
+	}
+	h, err := mh.HookMemRead(emu.GuestAddr(start), emu.GuestAddr(end), e.guardMemRead(func(b emu.Backend, addr uint64, size int) {
+		fn(&Hook{e: e, kind: HookInstruction}, addr, size)
 	}))
 	if err != nil {
 		return nil, e.capabilityErr("HookMemRead", err)
@@ -364,8 +521,12 @@ func (e *Emulator) HookMemRead(start, end uint64, fn func(h *Hook, addr uint64, 
 // (h.PC() = the writing instruction), the (addr,size), and the value being
 // written. Needs an engine with memory-access hooks (see HookMemRead).
 func (e *Emulator) HookMemWrite(start, end uint64, fn func(h *Hook, addr uint64, size int, value int64)) (func(), error) {
-	h, err := e.be.HookMemWrite(start, end, e.guardMemWrite(func(b emu.Backend, addr uint64, size int, value int64) {
-		fn(&Hook{e}, addr, size, value)
+	mh, ok := e.be.(emu.MemWriteHooker)
+	if !ok {
+		return nil, e.capabilityUnavailable("HookMemWrite")
+	}
+	h, err := mh.HookMemWrite(emu.GuestAddr(start), emu.GuestAddr(end), e.guardMemWrite(func(b emu.Backend, addr uint64, size int, value int64) {
+		fn(&Hook{e: e, kind: HookInstruction}, addr, size, value)
 	}))
 	if err != nil {
 		return nil, e.capabilityErr("HookMemWrite", err)
@@ -380,7 +541,11 @@ func (e *Emulator) HookMemWrite(start, end uint64, fn func(h *Hook, addr uint64,
 // code hooks.
 
 func (e *Emulator) Trace(start, end uint64) (func(), error) {
-	h, err := e.be.HookCode(start, end, e.guardCode(func(b emu.Backend, addr uint64, size uint32) {
+	ih, ok := e.be.(emu.InstructionHooker)
+	if !ok {
+		return nil, e.capabilityUnavailable("Trace")
+	}
+	h, err := ih.HookCode(emu.GuestAddr(start), emu.GuestAddr(end), e.guardCode(func(b emu.Backend, addr uint64, size uint32) {
 		fmt.Printf("[trace] 0x%x  %s\n", addr, e.NearestSym(addr))
 	}))
 	if err != nil {

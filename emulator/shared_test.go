@@ -8,8 +8,10 @@ import (
 	"github.com/isesword/golem/dvm"
 )
 
-// Phase B integration: read-only module pages shared via uc_mem_map_ptr,
-// with per-engine privatization when Replace patches guest code.
+// Phase B integration: read-only module pages shared via uc_mem_map_ptr.
+// P2.5d: Replace is Function Interposition (an execution hook), so it no
+// longer privatizes — the shared pages stay shared in every engine, and
+// per-engine isolation comes from hooks being per-engine state.
 
 func newSharedEngine(t *testing.T) *Emulator {
 	t.Helper()
@@ -35,13 +37,13 @@ func TestSharedReadOnlyActive(t *testing.T) {
 		}
 	}
 	// sanity: the engine still executes shared code
-	r, err := e.CallSymbol("add", 2, 3)
+	r, err := e.CallSymbol("add", Words(2, 3)...)
 	if err != nil || r != 5 {
 		t.Fatalf("add(2,3)=%d err=%v, want 5", r, err)
 	}
 }
 
-func TestReplacePrivatizesOnlyThatEngine(t *testing.T) {
+func TestReplaceInterposesOnlyThatEngine(t *testing.T) {
 	a := newSharedEngine(t)
 	b := newSharedEngine(t)
 
@@ -53,18 +55,20 @@ func TestReplacePrivatizesOnlyThatEngine(t *testing.T) {
 		t.Fatal("add must live in a shared range before Replace")
 	}
 
-	// engine A replaces add: a*10+b
-	a.Replace(addrA, func(h *Hook) uint64 { return h.Arg(0)*10 + h.Arg(1) })
+	// engine A interposes add: a*10+b
+	a.Replace(addrA, func(h *Hook) uint64 { return mustArg(h, 0)*10 + mustArg(h, 1) })
 
-	if a.isShared(addrA, 8) {
-		t.Fatal("Replace must privatize the patched range")
+	// Interposition writes NO guest memory: the range stays shared in A.
+	if !a.isShared(addrA, 8) {
+		t.Fatal("interposition must not privatize/unshare the target range")
 	}
-	if r, err := a.CallSymbol("add", 2, 3); err != nil || r != 23 {
+	if r, err := a.CallSymbol("add", Words(2, 3)...); err != nil || r != 23 {
 		t.Fatalf("engine A add(2,3) after Replace = %d err=%v, want 23", r, err)
 	}
 
-	// engine B must be UNAFFECTED: it still maps the shared original bytes
-	if r, err := b.CallSymbol("add", 2, 3); err != nil || r != 5 {
+	// engine B must be UNAFFECTED: hooks are per-engine, so it still runs the
+	// shared original code.
+	if r, err := b.CallSymbol("add", Words(2, 3)...); err != nil || r != 5 {
 		t.Fatalf("engine B add(2,3) = %d err=%v, want original 5", r, err)
 	}
 	if !b.isShared(addrA, 8) {
@@ -85,7 +89,7 @@ func TestNoSharedModulesOptOut(t *testing.T) {
 	if len(e.shared) != 0 {
 		t.Fatalf("NoSharedModules must produce zero shared ranges, got %d", len(e.shared))
 	}
-	if r, err := e.CallSymbol("add", 2, 3); err != nil || r != 5 {
+	if r, err := e.CallSymbol("add", Words(2, 3)...); err != nil || r != 5 {
 		t.Fatalf("opt-out engine broken: add(2,3)=%d err=%v", r, err)
 	}
 }
@@ -101,7 +105,7 @@ func TestSharedEngineJNI(t *testing.T) {
 }
 
 // Phase A/B review regression: ReplaceFns entries naming symbols EXPORTED by
-// the loaded modules must be entry-patched AFTER boot (the pre-boot pass only
+// the loaded modules must be interposed AFTER boot (the pre-boot pass only
 // sees an empty symbol table and binds import overrides).
 func TestReplaceFnsPostBootExportPatch(t *testing.T) {
 	e, err := New(Config{
@@ -109,7 +113,7 @@ func TestReplaceFnsPostBootExportPatch(t *testing.T) {
 		AssetRoot: "../assets",
 		Android: AndroidConfig{
 			ReplaceFns: map[string]func(h *Hook) uint64{
-				"add": func(h *Hook) uint64 { return h.Arg(0)*10 + h.Arg(1) },
+				"add": func(h *Hook) uint64 { return mustArg(h, 0)*10 + mustArg(h, 1) },
 			},
 		},
 	})
@@ -117,11 +121,11 @@ func TestReplaceFnsPostBootExportPatch(t *testing.T) {
 		t.Skipf("boot: %v", err)
 	}
 	defer e.Close()
-	r, err := e.CallSymbol("add", 2, 3)
+	r, err := e.CallSymbol("add", Words(2, 3)...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r != 23 {
-		t.Fatalf("ReplaceFns export patch inactive: add(2,3)=%d, want 23 (2*10+3)", r)
+		t.Fatalf("ReplaceFns export interposition inactive: add(2,3)=%d, want 23 (2*10+3)", r)
 	}
 }

@@ -3,21 +3,54 @@
 本文档定义 golem 的分层不变量。**任何改动违反本文档的分层边界即架构回退**，
 需要先修改本文档并说明理由。
 
+> 本版（2026-09-30，P9）同步 Public Semantic API 的落成：emulator 包升级为
+> facade（Portable / Advanced 双层文档化），arch 层新增观察语义
+> （CallABI.ReadReturnAddress、RoleReader）。上一版（P7.5a）确立的三层
+> 模型不变；P9 只在消费者一侧加缝，未触碰冻结核。
+
 ## 分层图
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ 上层（消费者，永不感知平台/CPU引擎差异）                        │
-│   emulator / dvm / loader / kernel / vfs / Pool[T]           │
-│   TrainApp 的 apseemu、mpaasrpc、未来的业务层                  │
+│ Public Semantic API（emulator 包 = facade，P9）                │
+│   Portable: HookContext(Arg/ReturnAddress/ReadRole)          │
+│             CallSymbol(...Value) / Value kinds               │
+│   Advanced: Reg(i) / RegRead / CallSymbolArgs（架构自担）      │
 ├─────────────────────────────────────────────────────────────┤
-│ emu 层（平台与引擎差异的唯一容身处）                            │
-│   emu.Backend 接口（唯一契约，方法数以 backend.go 为准）       │
-│   registry.go        引擎选择/平台感知（Windows 缺引擎→明确报错）│
-│   unicorn_purego.go  POSIX 引擎（darwin/linux，已验证）        │
-│   windows 构建路径  unicorn.dll(预提交,PR #2364)+UC_CTL_UC_PREALLOC│
+│ 上层（消费者，永不感知平台/架构/引擎差异）                        │
+│   emulator / dvm / vfs / Pool[T]                             │
+│   TrainApp 的 apseemu、未来的业务层                            │
+├─────────────────────────────────────────────────────────────┤
+│ 平台语义层（per-platform / per-arch，纯数据 personality）       │
+│   internal/platform  Factory→Runtime（android / darwin）      │
+│   internal/target    Target（格式探测产物：format/platform/arch）│
+│   internal/arch      每架构 CallABI / 寄存器模型 /              │
+│                      RoleReader + ReadReturnAddress（P9 观察语义）│
+│   internal/loader    ELF / Mach-O 解析 + 动态链接器             │
+│   internal/kernel    syscall 语义 handler（平台无关）           │
+│   internal/memory    guest 地址空间分配器                      │
+├─────────────────────────────────────────────────────────────┤
+│ emu 层（CPU 引擎差异的唯一容身处）                               │
+│   emu.Backend 核心接口 + capability 小接口（backend.go 为准）   │
+│   registry.go        引擎选择（Windows 缺引擎→明确报错）         │
+│   unicorn_purego.go  POSIX 引擎（darwin/linux）+               │
+│   windows 路径       unicorn.dll(预提交,VEH-off)+UC_CTL_UC_PREALLOC│
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### P9 观察语义（已验证入宪）
+
+- **角色与返回地址是两个概念，永不合并没有例外**：`ReadRole(RoleLR)` 是
+  CPU 状态观察（任何 hook kind、任何 PC 可读；AMD64 无此角色 →
+  ErrUnsupportedRole）；`ReturnAddress()` 是调用上下文事实（仅
+  function-entry hook 可答，AMD64 从 [RSP] 读）。三架构 quad 均实现
+  RoleReader；测试钉死含 AMD64 的负例。
+- **上下文门控是契约不是便利**：Arg/ReturnAddress 在非 entry hook 一律
+  ErrContextUnavailable（不猜）；ReturnValue 仅 exit 上下文有意义
+  （HookFunctionExit 预留，暂无安装 API）。
+- Value/ValueKind 是 arch.CallArg 的公开面：Word 类 = 单字（32 位目标单
+  寄存器），U64/I64 = 32 位目标的寄存器对；转换只在 facade→CallABI 边界
+  发生一次。
 
 ## 不变量（逐条可测）
 
@@ -25,9 +58,12 @@
    验证：`grep -rn "purego" emulator/ dvm/ internal/kernel/ internal/loader/`
    必须为空。当前已满足（32 处引用全部经由接口）。
 
-2. **`emu.Backend` 是唯一契约。** 新平台 = 新 Backend 实现 + registry 注册，
-   上层零改动。Windows 引擎路径（上游预提交方案）全部实现在 `internal/emu`
-   包内。
+2. **引擎契约的唯一容身处是 `internal/emu`；平台/架构侧另有三份一等契约。**
+   新 CPU 引擎 = 新 Backend 实现 + emu registry 注册，上层零改动；新 guest
+   平台 = `internal/platform/<name>` 包（Factory→Runtime 纯数据）+
+   `emulator/wiring.go` 空导入 + loader relocator + arch quad，emulator
+   本体零改动（P5b.5 合成平台契约测试钉住该缝）。上层对平台只消费
+   `Runtime` 数据与 nil/feature-test，绝不 `switch platform.ID`。
 
 3. **Windows 引擎级难题在 emu 层终结。选定路线（2026-09-27 二轮调研定案）：上游预提交，**
    **放弃 C 服务线程方案。**
@@ -79,10 +115,12 @@
    "rebuild with -tags ..."）；Windows 缺 DLL 时的定位指引在
    `dlopenUnicorn` 的候选列表错误里。
 
-4. **错误语义（388b76c 确立）：** 内存分配可恢复错误走 error 返回 +
-   `Space.RollbackLast` 事务；不可验证的状态转换走 poison；
-   ReplaceE 五步事务（privatize→存原指令→补丁→flush→注册）。
-   后端实现必须满足三态契约（见 emulator/fakebe_test.go）。
+4. **错误语义（388b76c 确立，P2.5d 后 interposition 化）：** 内存分配可恢复
+   错误走 error 返回 + `Space.RollbackLast` 事务；不可验证的状态转换走
+   poison；ReplaceE 为可完全回滚的 interposition 五步事务（能力探测→itab
+   预检→HookCode 装 entry hook→flush→BindAddress，任一步失败显式回滚、
+   不写 guest 文本）。契约测试见 emulator 包 guard/replace 测试（原
+   fakebe 三态矩阵随 privatize 退役，故障分支覆盖为已知债务）。
 
 5. **JNI 引用生命周期按 ART 语义（Phase A 确立）：** local 帧随调用回收、
    global 显式且值稳定、句柄单调不复用、stale 大声失败。兼容旋钮禁止。
@@ -100,6 +138,8 @@
 
 ## 平台支持矩阵（随实现更新）
 
+### 宿主（构建/运行环境）
+
 | 平台 | 编译 | 引擎运行 | 实现路径 |
 |---|---|---|---|
 | linux amd64/arm64 | ✅ CI | ✅ CI 实弹 | unicorn_purego |
@@ -108,11 +148,22 @@
 | windows arm64 | ✅ CI（交叉编译） | ✅ **CI 实弹全套绿**（windows-11-arm runner，engine-windows-arm64 job） | 同上 + PR #2286（musl setjmp/longjmp） |
 | （全部平台兜底） | — | WSL2 / 进程外签名服务 | 部署形态，上层零改动 |
 
+### guest（模拟目标，P5a..P7）
+
+| guest 平台 | 架构 | 状态 |
+|---|---|---|
+| Android | ARM64 | ✅ 主线（真 bionic 实弹） |
+| Android | ARM32（ARMv7 + Thumb） | ✅ 主线（zig nostdlib e2e + 真 bionic JNI e2e；bionic 资产经 `scripts/fetch_bionic_arm32.sh` 获取，不入库） |
+| Android | AMD64 | ✅ e2e 验收链 |
+| Darwin（Mach-O） | ARM64 / ARM64e | ✅ e2e 验收链（DYLD_CHAINED_PTR_64 format 1/2） |
+
 ## 改动判据
 
 - 给上层加功能：只许动 emulator/dvm/loader/kernel/vfs 的公开 API；
 - 换/加 CPU 引擎：只许在 internal/emu 加文件并 Register；
-- 加平台：只许加 Backend 实现 + registry 候选 + CI 矩阵行；
+- 加 guest 平台：只许加 `internal/platform/<name>` 包（Factory→Runtime）+
+  `emulator/wiring.go` 空导入 + loader 格式/relocator + arch quad +
+  CI 矩阵行；emulator 本体零改动；
 - 任何 PR 触碰以上边界之外的平台细节 = 设计错误。
 
 ## 宪法修订规则

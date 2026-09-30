@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/isesword/golem/dvm"
-	"github.com/isesword/golem/internal/kernel"
 	"github.com/isesword/golem/internal/profile"
 )
 
@@ -13,7 +12,8 @@ import (
 // and syscall time can never disagree; everything else delegates.
 func TestClockJniTimeGetters(t *testing.T) {
 	prof := profile.New(42, time.Now())
-	e := &Emulator{kctx: &kernel.Context{Clock: profileClock{prof: prof}}}
+	e := newTestEmulator(t, nil) // never touches the backend; kctx injected by the constructor
+	e.kctx.Clock = profileClock{prof: prof}
 	j := &clockJni{Jni: dvm.AbstractJni{}, e: e, prof: prof}
 
 	ctm := j.CallStaticLongMethodV(nil, nil, "java/lang/System->currentTimeMillis()J", nil)
@@ -48,10 +48,10 @@ func TestClockJniTimeGetters(t *testing.T) {
 func TestClockJniEpochWins(t *testing.T) {
 	const epoch = 1700000000
 	prof := profile.New(42, time.Now())
-	e := &Emulator{
-		cfg:  Config{Epoch: epoch},
-		kctx: &kernel.Context{Epoch: epoch, Clock: profileClock{prof: prof}},
-	}
+	e := newTestEmulator(t, nil)
+	e.cfg.Epoch = epoch
+	e.kctx.Epoch = epoch
+	e.kctx.Clock = profileClock{prof: prof}
 	j := &clockJni{Jni: dvm.AbstractJni{}, e: e, prof: prof}
 
 	if got := j.CallStaticLongMethodV(nil, nil, "java/lang/System->currentTimeMillis()J", nil); got != epoch*1000 {
