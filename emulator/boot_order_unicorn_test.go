@@ -24,7 +24,7 @@ func TestTCGBufferAppliedBeforeFirstExecution(t *testing.T) {
 	}
 	defer e.Close()
 
-	if r, err := e.CallSymbol("add", 2, 3); err != nil || int32(r) != 5 {
+	if r, err := e.CallSymbol("add", Words(2, 3)...); err != nil || int32(r) != 5 {
 		t.Fatalf("add(2,3) = %d, err=%v — guest execution after a sized TCG buffer must work", int32(r), err)
 	}
 }

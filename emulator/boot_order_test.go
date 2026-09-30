@@ -323,7 +323,7 @@ func TestBootFinalizePrecedesExecution(t *testing.T) {
 
 	// The first real guest execution: every finalize and the auxv build must
 	// already be behind it.
-	if _, err := e.CallSymbol("add", 2, 3); err != nil {
+	if _, err := e.CallSymbol("add", Words(2, 3)...); err != nil {
 		t.Fatalf("CallSymbol: %v", err)
 	}
 	startIdx := firstIndex(be.events, isOp("start"))

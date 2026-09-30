@@ -1,5 +1,9 @@
 package emulator
 
+import (
+	"github.com/isesword/golem/internal/arch"
+)
+
 // P9 Public Semantic API — values. A Value carries an integer with its ABI
 // KIND, so callers stop caring whether "a 64-bit argument" is one register
 // (ARM64), an even register pair (ARM32), or stack spill slot #6 (AMD64).
@@ -76,3 +80,36 @@ func Uint64(v uint64) Value { return Value{Kind: U64, Raw: v} }
 
 // Int64 builds a signed 64-bit Value.
 func Int64(v int64) Value { return Value{Kind: I64, Raw: uint64(v)} }
+
+// callArg maps a Value onto the arch-level typed argument (Advanced layer):
+// word-class kinds collapse to ArgWord, 64-bit kinds to their pair form.
+func (v Value) callArg() arch.CallArg {
+	switch v.Kind {
+	case U64:
+		return arch.CallArg{Value: v.Raw, Kind: arch.ArgU64}
+	case I64:
+		return arch.CallArg{Value: v.Raw, Kind: arch.ArgI64}
+	default: // Word / Pointer / U32 / I32: one slot, natural width
+		return arch.CallArg{Value: v.Raw, Kind: arch.ArgWord}
+	}
+}
+
+func valuesToCallArgs(vs []Value) []arch.CallArg {
+	out := make([]arch.CallArg, len(vs))
+	for i, v := range vs {
+		out[i] = v.callArg()
+	}
+	return out
+}
+
+// Words builds word-kind Values — the DEFAULT for plain integer arguments:
+// one machine word each (on 32-bit targets one register, never a pair).
+// For genuinely 64-bit values on 32-bit ABIs use Uint64/Int64 (register
+// pair), and Ptr for pointers.
+func Words(vs ...uint64) []Value {
+	out := make([]Value, len(vs))
+	for i, v := range vs {
+		out[i] = Value{Kind: Word, Raw: v}
+	}
+	return out
+}

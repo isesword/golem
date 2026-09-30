@@ -35,7 +35,7 @@ func TestWithPlatformConfigBootEquivalence(t *testing.T) {
 	if e.target == nil || e.target.Platform != platform.Android {
 		t.Fatalf("target not resolved: %+v", e.target)
 	}
-	r, err := e.CallSymbol("add", 2, 3)
+	r, err := e.CallSymbol("add", Words(2, 3)...)
 	if err != nil {
 		t.Fatal(err)
 	}

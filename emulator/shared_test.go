@@ -37,7 +37,7 @@ func TestSharedReadOnlyActive(t *testing.T) {
 		}
 	}
 	// sanity: the engine still executes shared code
-	r, err := e.CallSymbol("add", 2, 3)
+	r, err := e.CallSymbol("add", Words(2, 3)...)
 	if err != nil || r != 5 {
 		t.Fatalf("add(2,3)=%d err=%v, want 5", r, err)
 	}
@@ -62,13 +62,13 @@ func TestReplaceInterposesOnlyThatEngine(t *testing.T) {
 	if !a.isShared(addrA, 8) {
 		t.Fatal("interposition must not privatize/unshare the target range")
 	}
-	if r, err := a.CallSymbol("add", 2, 3); err != nil || r != 23 {
+	if r, err := a.CallSymbol("add", Words(2, 3)...); err != nil || r != 23 {
 		t.Fatalf("engine A add(2,3) after Replace = %d err=%v, want 23", r, err)
 	}
 
 	// engine B must be UNAFFECTED: hooks are per-engine, so it still runs the
 	// shared original code.
-	if r, err := b.CallSymbol("add", 2, 3); err != nil || r != 5 {
+	if r, err := b.CallSymbol("add", Words(2, 3)...); err != nil || r != 5 {
 		t.Fatalf("engine B add(2,3) = %d err=%v, want original 5", r, err)
 	}
 	if !b.isShared(addrA, 8) {
@@ -89,7 +89,7 @@ func TestNoSharedModulesOptOut(t *testing.T) {
 	if len(e.shared) != 0 {
 		t.Fatalf("NoSharedModules must produce zero shared ranges, got %d", len(e.shared))
 	}
-	if r, err := e.CallSymbol("add", 2, 3); err != nil || r != 5 {
+	if r, err := e.CallSymbol("add", Words(2, 3)...); err != nil || r != 5 {
 		t.Fatalf("opt-out engine broken: add(2,3)=%d err=%v", r, err)
 	}
 }
@@ -121,7 +121,7 @@ func TestReplaceFnsPostBootExportPatch(t *testing.T) {
 		t.Skipf("boot: %v", err)
 	}
 	defer e.Close()
-	r, err := e.CallSymbol("add", 2, 3)
+	r, err := e.CallSymbol("add", Words(2, 3)...)
 	if err != nil {
 		t.Fatal(err)
 	}

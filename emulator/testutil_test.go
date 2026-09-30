@@ -92,3 +92,13 @@ func mustArg(h *Hook, i int) uint64 {
 	}
 	return v.Raw
 }
+
+// toValues adapts plain word lists to the Portable Value form for the boot
+// tests' call helpers.
+func toValues(vs []uint64) []Value {
+	out := make([]Value, len(vs))
+	for i, v := range vs {
+		out[i] = Uint64(v)
+	}
+	return out
+}

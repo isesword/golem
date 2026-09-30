@@ -73,7 +73,7 @@ func TestBootAndroidARM32EndToEnd(t *testing.T) {
 
 	call := func(name string, args ...uint64) uint64 {
 		t.Helper()
-		v, err := e.CallSymbol(name, args...)
+		v, err := e.CallSymbol(name, Words(args...)...)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -105,6 +105,16 @@ func TestBootAndroidARM32EndToEnd(t *testing.T) {
 	}
 	if typed != want64 {
 		t.Fatalf("add64lohi(1, 0x1122334455667788) = %#x, want %#x (a=r0, b=r2:r3)", typed, uint64(want64))
+	}
+	// P9: the Portable typed call lands the SAME pair — Uint64() builds a
+	// U64-kinded Value, which converts to ArgU64, so callers get r2:r3
+	// placement without touching arch types.
+	v9, err := e.CallSymbol("add64lohi", Uint32(1), Uint64(0x1122334455667788))
+	if err != nil {
+		t.Fatalf("add64lohi (P9 Value): %v", err)
+	}
+	if v9 != want64 {
+		t.Fatalf("add64lohi (P9 Value) = %#x, want %#x (U64 → r2:r3 pair)", v9, uint64(want64))
 	}
 
 	// R_ARM_RELATIVE: fptr_table[0] was relocated by the load bias and is

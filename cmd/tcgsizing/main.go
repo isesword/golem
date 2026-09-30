@@ -99,7 +99,7 @@ func main() {
 					if *heavy {
 						arg = 20 // fib(20) = deep recursion, large code footprint
 					}
-					if _, err := e.CallSymbol(sym, arg, 3); err != nil {
+					if _, err := e.CallSymbol(sym, emulator.Words(arg, 3)...); err != nil {
 						fmt.Fprintf(os.Stderr, "call: %v\n", err)
 						atomic.AddInt64(&fails, 1)
 						continue

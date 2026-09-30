@@ -66,7 +66,7 @@ func TestBootAndroidARM32RealBionicJNI(t *testing.T) {
 
 	call := func(name string, args ...uint64) uint64 {
 		t.Helper()
-		v, err := e.CallSymbol(name, args...)
+		v, err := e.CallSymbol(name, Words(args...)...)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}

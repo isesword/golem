@@ -121,7 +121,7 @@ func sign(e *emulator.Emulator, url, cookie string) (string, error) {
 	}
 	urlPtr := e.WriteCStringAlloc(url)
 	ckPtr := e.WriteCStringAlloc(cookie)
-	ret, err := e.CallOffset(m, signOffset, urlPtr, ckPtr)
+	ret, err := e.CallOffset(m, signOffset, emulator.Uint64(urlPtr), emulator.Uint64(ckPtr))
 	if err != nil {
 		return "", err
 	}

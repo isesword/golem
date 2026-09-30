@@ -28,7 +28,7 @@ func TestInterposeEntryHookE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	// sanity: the original body computes a+b
-	if r, _ := e.CallSymbol("add", 2, 3); int32(r) != 5 {
+	if r, _ := e.CallSymbol("add", Words(2, 3)...); int32(r) != 5 {
 		t.Fatalf("pre-interpose add(2,3) = %d, want 5", int32(r))
 	}
 
@@ -51,7 +51,7 @@ func TestInterposeEntryHookE2E(t *testing.T) {
 
 	// Top-level call: host fn runs, original body skipped (23 != 5), result
 	// written back per the CallABI.
-	if r, _ := e.CallSymbol("add", 2, 3); int32(r) != 23 {
+	if r, _ := e.CallSymbol("add", Words(2, 3)...); int32(r) != 23 {
 		t.Fatalf("interposed add(2,3) = %d, want 23 (2*10+3)", int32(r))
 	}
 	if hostRan == 0 {
@@ -59,7 +59,7 @@ func TestInterposeEntryHookE2E(t *testing.T) {
 	}
 
 	// Repeatability: a second call through the same entry intercepts again.
-	if r, _ := e.CallSymbol("add", 4, 5); int32(r) != 45 {
+	if r, _ := e.CallSymbol("add", Words(4, 5)...); int32(r) != 45 {
 		t.Fatalf("interposed add(4,5) = %d, want 45", int32(r))
 	}
 
@@ -76,7 +76,7 @@ func TestInterposeEntryHookE2E(t *testing.T) {
 		t.Fatal("interposed page must remain shared — nothing may write it")
 	}
 	// Other functions in the same module are unaffected.
-	if r, _ := e.CallSymbol("fib", 20); r != 6765 {
+	if r, _ := e.CallSymbol("fib", Words(20)...); r != 6765 {
 		t.Fatalf("fib(20) = %d, want 6765 (interposition is per-entry)", r)
 	}
 }
@@ -103,7 +103,7 @@ func TestInterposeFromGuestCaller(t *testing.T) {
 	}
 
 	p := e.WriteCStringAlloc("hello")
-	if r, _ := e.CallSymbol("slen", p); int32(r) != 5 {
+	if r, _ := e.CallSymbol("slen", Words(p)...); int32(r) != 5 {
 		t.Fatalf("pre-interpose slen(\"hello\") = %d, want 5", int32(r))
 	}
 
@@ -112,7 +112,7 @@ func TestInterposeFromGuestCaller(t *testing.T) {
 	}
 	// The guest caller (slen) branches into strlen's entry; the entry hook
 	// must intercept that too, and the guest body must not run (42 != 5).
-	if r, _ := e.CallSymbol("slen", p); int32(r) != 42 {
+	if r, _ := e.CallSymbol("slen", Words(p)...); int32(r) != 42 {
 		t.Fatalf("slen(\"hello\") with strlen interposed = %d, want 42", int32(r))
 	}
 	after, err := e.ReadBytes(addr, 16)

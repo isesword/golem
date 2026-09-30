@@ -1097,17 +1097,20 @@ func (e *Emulator) CallFuncArgs(addr uint64, args ...arch.CallArg) (uint64, erro
 	return res.Value, nil
 }
 
-// CallSymbol calls an exported function by name with integer args.
-func (e *Emulator) CallSymbol(name string, args ...uint64) (uint64, error) {
+// CallSymbol calls an exported function by name with typed Values (the
+// Portable Call API, P9): kind-carrying arguments so callers never handle
+// register pairs (ARM32 U64) or spill slots (AMD64 args 7+) themselves.
+// Plain integers: pass Uint64(n).
+func (e *Emulator) CallSymbol(name string, args ...Value) (uint64, error) {
 	addr, ok := e.Sym(name)
 	if !ok {
 		return 0, fmt.Errorf("symbol %q not found", name)
 	}
-	return e.CallFunc(addr, args...)
+	return e.CallFuncArgs(addr, valuesToCallArgs(args)...)
 }
 
-// CallSymbolArgs is the typed variant of CallSymbol (P6) — see
-// CallFuncArgs.
+// CallSymbolArgs is the Advanced typed variant of CallSymbol — arch.CallArg
+// is the internal vocabulary Value fronts (P9). See CallFuncArgs.
 func (e *Emulator) CallSymbolArgs(name string, args ...arch.CallArg) (uint64, error) {
 	addr, ok := e.Sym(name)
 	if !ok {
@@ -1118,15 +1121,16 @@ func (e *Emulator) CallSymbolArgs(name string, args ...arch.CallArg) (uint64, er
 
 // CallOffset calls a function at module base + offset — for non-exported entry
 // points located by reverse engineering (unidbg's module.callFunction(offset)).
-// A nil module means the main module (Config.SOPath).
-func (e *Emulator) CallOffset(m *Module, offset uint64, args ...uint64) (uint64, error) {
+// A nil module means the main module (Config.SOPath). Typed Values, like
+// CallSymbol.
+func (e *Emulator) CallOffset(m *Module, offset uint64, args ...Value) (uint64, error) {
 	if m == nil {
 		m = e.main
 	}
 	if m == nil {
 		return 0, fmt.Errorf("CallOffset: no module (set Config.SOPath or pass a module)")
 	}
-	return e.CallFunc(m.Base+offset, args...)
+	return e.CallFuncArgs(m.Base+offset, valuesToCallArgs(args)...)
 }
 
 // RunThreads (the cooperative scheduler) and PendingThreads live in scheduler.go.
