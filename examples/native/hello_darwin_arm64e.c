@@ -13,24 +13,31 @@
 // Build (committed prebuilt is hello_darwin_arm64e.dylib; rebuild on macOS
 // with build_darwin_arm64e_fixture.sh):
 //   clang -arch arm64e -target arm64-apple-macos11 -dynamiclib \
-//         -fno-builtin -fno-stack-protector -mbranch-protection=none -O2 \
+//         -fno-builtin -fno-stack-protector -mbranch-protection=none \
+//         -fno-ptrauth-returns -O2 \
 //         -Wl,-undefined,dynamic_lookup \
 //         -o hello_darwin_arm64e.dylib hello_darwin_arm64e.c
 //
-// CALL-SITE AUTHENTICATION: golem's PACPolicyStrip materializes BARE
-// pointers into the auth slots, so no guest code may authenticate a
-// loader-materialized pointer (P5c policy). But clang ties call-site
-// authentication to signed-storage provenance: ANY call through a value it
-// can trace back to the signed globals emits blraaz — neither
-// -mbranch-protection=none nor integer casts remove it, and
-// -fno-ptrauth-calls would also strip the auth property from the FIXUPS
-// (defeating the fixture). The two functions that call through those slots
-// therefore issue an explicit `blr` via inline asm — deterministic, and a
-// faithful stand-in for foreign/interposed call paths. The arm64e ABI's
-// pac-ret prologue pair (pacibsp/retab) cannot be disabled — clang forces
-// it — and needs no policy: it is the CPU's own LR signing and round-trips
-// inside the CPU backend (verified against unicorn's pauth-capable ARM64
-// model).
+// CALL-SITE / RETURN AUTHENTICATION: golem emulates NO PAC instruction
+// semantics (chained.go's PACPolicyStrip covers fixup materialization
+// only), so the fixture must contain no PAC instructions at all:
+//
+//   - Calls through the signed globals: clang ties call-site
+//     authentication to signed-storage provenance — ANY call through a
+//     value it can trace back to those slots emits blraaz, and neither
+//     -mbranch-protection=none nor integer casts remove it, while
+//     -fno-ptrauth-calls would also strip the auth property from the
+//     FIXUPS (defeating the fixture). The two functions that call through
+//     those slots therefore issue an explicit `blr` via inline asm —
+//     deterministic, and a faithful stand-in for foreign/interposed call
+//     paths. (PACPolicyStrip materializes BARE pointers into the slots, so
+//     no guest code may authenticate them anyway.)
+//   - Return-address signing: the arm64e ABI forces pacibsp/retab even
+//     under -mbranch-protection=none, and golem's unicorn backend does NOT
+//     emulate them (measured: pacibsp is a HINT-space NOP without pauth,
+//     but retab is an UNDEFINED instruction that faults). -fno-ptrauth-
+//     returns removes the pair (plain ret) while keeping the arm64e
+//     subtype and all four auth fixup entries.
 
 long add(long a, long b) { return a + b; }
 

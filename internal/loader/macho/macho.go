@@ -53,11 +53,15 @@ const (
 )
 
 // Load-command and opcode constants (dyld's mach-o/loader.h / dyldinfo).
+// LC_REQ_DYLD is the "required for execution" bit OR'd into a command value
+// (loader.h); current ld emits LC_DYLD_CHAINED_FIXUPS | LC_REQ_DYLD, so the
+// command dispatch below masks it off before matching.
 const (
+	lcReqDyld           = 0x80000000
 	lcDyldInfo          = 0x22
-	lcDyldInfoOnly      = 0x80000022
+	lcDyldInfoOnly      = lcReqDyld | 0x22
 	lcDyldChainedFixups = 0x34 // LC_DYLD_CHAINED_FIXUPS — decoded in chained.go (P5c)
-	lcMain              = 0x80000028
+	lcMain              = 0x28 // LC_MAIN (always carries LC_REQ_DYLD in practice)
 
 	rebaseOpDone             = 0x00
 	rebaseOpSetTypeImm       = 0x10
@@ -152,7 +156,7 @@ func Parse(path string) (*loader.Image, error) {
 				img.Needed = append(img.Needed, lc.Name)
 			}
 		case debugmacho.LoadBytes:
-			cmd := binary.LittleEndian.Uint32(lc)
+			cmd := binary.LittleEndian.Uint32(lc) &^ lcReqDyld
 			switch cmd {
 			case lcDyldChainedFixups:
 				// linkedit_data_command: dataoff/datasize locate the payload;
@@ -160,7 +164,7 @@ func Parse(path string) (*loader.Image, error) {
 				// imports onto img.Syms).
 				chainedOff = binary.LittleEndian.Uint32(lc[8:])
 				chainedSize = binary.LittleEndian.Uint32(lc[12:])
-			case lcDyldInfo, lcDyldInfoOnly:
+			case lcDyldInfo:
 				dyldInfo, haveDyldInfo = parseDyldInfo(lc), true
 			case lcMain:
 				img.Entry = binary.LittleEndian.Uint64(lc[8:]) // entryoff (file offset)

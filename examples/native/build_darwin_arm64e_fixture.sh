@@ -8,12 +8,11 @@
 #                                 LC_DYLD_CHAINED_FIXUPS with all four entry
 #                                 kinds (auth/non-auth rebase/bind). Calls
 #                                 through loader-materialized pointers use
-#                                 explicit `blr` asm (see the .c header —
-#                                 clang cannot be talked out of blraaz
-#                                 otherwise, and PACPolicyStrip writes bare
-#                                 pointers that must never be authenticated).
-#                                 pac-ret stays — the arm64e ABI forces it
-#                                 and the CPU backend executes it.
+#                                 explicit `blr` asm, and -fno-ptrauth-
+#                                 returns drops the ABI-forced pac-ret pair
+#                                 (see the .c header — golem emulates no PAC
+#                                 instruction semantics; this unicorn build
+#                                 faults on retab).
 #   hostdata_darwin_arm64.dylib — plain arm64 classic data exporter; the
 #                                 cross-module bind target for host_value.
 #
@@ -30,7 +29,8 @@ set -e
 cd "$(dirname "$0")"
 
 clang -arch arm64e -target arm64-apple-macos11 -dynamiclib \
-      -fno-builtin -fno-stack-protector -mbranch-protection=none -O2 \
+      -fno-builtin -fno-stack-protector -mbranch-protection=none \
+      -fno-ptrauth-returns -O2 \
       -Wl,-undefined,dynamic_lookup \
       -o hello_darwin_arm64e.dylib hello_darwin_arm64e.c
 

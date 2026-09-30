@@ -332,10 +332,10 @@ func decodeChainedEntryARM64E(v, slotVA uint64, imports []string, symIdx map[str
 //     chain entry's authentication metadata (diversity/addrDiv/key) is
 //     still explicit and validated.
 //   - PAC INSTRUCTION semantics (braa/autia/...) are NOT emulated; fixture
-//     code never authenticates loader-materialized pointers (-mbranch-
-//     protection=none removes the auth indirect calls). The arm64e ABI's
-//     pac-ret pair is the CPU's own business and round-trips inside the
-//     backend.
+//     code contains no PAC instructions at all — calls through signed
+//     slots use explicit `blr` asm (clang cannot be talked out of blraaz),
+//     and -fno-ptrauth-returns drops the ABI-forced pac-ret pair (this
+//     unicorn build treats retab as an undefined instruction).
 //
 // Combinations the policy does NOT cover are loud errors, never silent
 // strips: addrDiv=1 (the signature depends on address division — a

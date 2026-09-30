@@ -5,6 +5,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/isesword/golem/internal/arch"
+	"github.com/isesword/golem/internal/emu"
 	"github.com/isesword/golem/internal/loader"
 )
 
@@ -439,5 +441,75 @@ func TestParseBothFixupSourcesRejected(t *testing.T) {
 	f.Close()
 	if _, err := Parse(f.Name()); err == nil || !contains(err.Error(), "ambiguous") {
 		t.Fatalf("err = %v, want an ambiguous-fixup-source error", err)
+	}
+}
+
+// fixtureARM64E is the committed clang-built Mach-O ARM64E dylib with
+// LC_DYLD_CHAINED_FIXUPS (examples/native/hello_darwin_arm64e.c +
+// build_darwin_arm64e_fixture.sh).
+const fixtureARM64E = "../../../examples/native/hello_darwin_arm64e.dylib"
+
+// TestParseChainedFixtureARM64E pins the decode of the REAL toolchain
+// product — not a synthetic payload: the arm64e fixture carries exactly one
+// chain over its single __DATA page (page_size 0x4000, format
+// DYLD_CHAINED_PTR_ARM64E, imports format DYLD_CHAINED_IMPORT) with all
+// four entry kinds, in chain order:
+//
+//	0x4000  auth-bind       host_fp      <- host_magic  (IA, ad=0)
+//	0x4008  bind            host_val_ptr <- host_value
+//	0x4010  auth-rebase     fptr_table[0] -> seven      (IA, ad=0)
+//	0x4028  rebase          local_ptr     -> local_val
+//
+// The addresses below are THIS build's (nm/dyld_info output); if the
+// fixture is ever rebuilt and they shift, regenerate with:
+//
+//	dyld_info -fixups examples/native/hello_darwin_arm64e.dylib
+//	nm examples/native/hello_darwin_arm64e.dylib | grep -E 'seven|local_val'
+//
+// and update the constants — the test asserts exact values on purpose, so a
+// silent toolchain-layout drift fails here first.
+func TestParseChainedFixtureARM64E(t *testing.T) {
+	if _, err := os.Stat(fixtureARM64E); err != nil {
+		t.Skipf("fixture not present: %v", err)
+	}
+	img, err := Parse(fixtureARM64E)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if img.Format != loader.FormatMachO || img.Arch != emu.ArchARM64 || img.Machine != arch.IDARM64 {
+		t.Fatalf("identity = (%v, %v, %v), want (macho, arm64, IDARM64)", img.Format, img.Arch, img.Machine)
+	}
+	// Both imports ride the chained imports table (flat namespace, resolved
+	// by name through the SymbolResolver at load time).
+	symByName := map[string]uint32{}
+	for i, s := range img.Syms {
+		if _, ok := symByName[s.Name]; !ok {
+			symByName[s.Name] = uint32(i)
+		}
+	}
+	hostMagic, ok := symByName["host_magic"]
+	if !ok {
+		t.Fatalf("host_magic not in the symbol table (syms: %v)", img.Syms)
+	}
+	hostValue, ok := symByName["host_value"]
+	if !ok {
+		t.Fatalf("host_value not in the symbol table (syms: %v)", img.Syms)
+	}
+
+	// Chain order is the walk order; seven is at vaddr 0x3fc and local_val
+	// at 0x4020 in this build (see the regeneration note above).
+	want := []loader.Reloc{
+		{Offset: 0x4000, Type: RelocBindPointer, Sym: hostMagic, Addend: 0},  // auth-bind -> bare resolved (PACPolicyStrip)
+		{Offset: 0x4008, Type: RelocBindPointer, Sym: hostValue, Addend: 0},  // non-auth bind, zero addend
+		{Offset: 0x4010, Type: RelocRebasePointer, Addend: 0x3fc},            // auth-rebase -> bare runtimeOffset of seven
+		{Offset: 0x4028, Type: RelocRebasePointer, Addend: 0x4020},           // non-auth rebase -> local_val vmaddr
+	}
+	if len(img.Relocs) != len(want) {
+		t.Fatalf("relocs = %v, want exactly %d (the four chain entries)", img.Relocs, len(want))
+	}
+	for i, w := range want {
+		if img.Relocs[i] != w {
+			t.Errorf("relocs[%d] = %+v, want %+v", i, img.Relocs[i], w)
+		}
 	}
 }
