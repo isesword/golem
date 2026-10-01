@@ -18,9 +18,18 @@ package emu
 // wrapping it.
 
 // InstructionHooker is the per-instruction code-hook capability (the basis of
-// inline hooks, breakpoints, and the instruction tracer). [start, end) is the
-// guest address range to watch; unicorn's begin>end convention selects the
-// whole address space.
+// inline hooks, breakpoints, and the instruction tracer). Range contract:
+//
+//	start < end: watch [start, end) — the half-open guest range
+//	start == end: an EMPTY range — illegal, HookCode must error and never
+//	             hand it to the engine
+//	start > end: the whole address space (unicorn's begin>end convention)
+//
+// Installation-effect guarantee: a SUCCESSFUL HookCode call is observed by
+// the NEXT execution of a watched instruction, even when that instruction's
+// translation predates the hook. Engines that bind hook callouts at
+// translation time (unicorn) invalidate their affected cache as part of the
+// installation itself — callers never flush for hook installation.
 type InstructionHooker interface {
 	HookCode(start, end GuestAddr, fn CodeHookFunc) (HookHandle, error)
 }
@@ -64,23 +73,13 @@ type ContextManager interface {
 }
 
 // CacheInvalidator invalidates the engine's translated/JIT'd code cache.
-// Called after writing new code into an executable region (self-modifying
-// code) and after installing an interposition entry hook unicorn
-// instruments hook callouts at TB translation time, so a block translated
-// before the hook existed would never fire it unless the cache is flushed.
+// For EXPLICIT code modification only (self-modifying code, guest-side
+// patching): hook installation carries its own effect guarantee via
+// InstructionHooker and needs no caller-side flush.
 type CacheInvalidator interface {
 	FlushCache() error
 }
 
-// CodeCacheController is the execution-hook companion contract (DESIGN.md §3.1): after installing a NEW execution hook over [start, end),
-// already-translated blocks may not contain the hook callout (unicorn
-// instruments hooks at TB translation time), so the interpose/stub layer
-// must invalidate the affected range through this capability instead of
-// knowing the concrete backend. Implementations without a ranged invalidate
-// may flush their whole cache internally (unicorn does — see its doc).
-type CodeCacheController interface {
-	FlushCodeCache(start, end GuestAddr) error
-}
 
 // RegFileReader is the whole-register-file dump capability one call
 // returns the guest's general-purpose register file, cheap enough for

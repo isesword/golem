@@ -375,28 +375,21 @@ func (e *Emulator) interposeE(addr uint64, hf interpose.HostFunc) error {
 	if _, dup := e.itab.LookupAddress(emu.GuestAddr(addr)); dup {
 		return fmt.Errorf("Replace %#x: address already interposed", addr)
 	}
+	// The half-open single-address range below needs addr+1: MaxUint64 cannot
+	// represent it, and the +1 would wrap into the whole-space convention.
+	if addr == ^uint64(0) {
+		return fmt.Errorf("Replace %#x: address cannot carry the half-open hook range", addr)
+	}
 	// Performance constraint (DESIGN.md §8): the hook covers exactly the one
-	// entry address, never a range. Installed BEFORE binding so a failed
-	// ReplaceE leaves no state at all (an unbound entry hook is a benign
-	// no-op: onInterpose's LookupAddress misses and the guest runs on).
+	// entry address — [addr, addr+1) half-open — never a wider range.
+	// Installed BEFORE binding so a failed ReplaceE leaves no state at all
+	// (an unbound entry hook is a benign no-op: onInterpose's LookupAddress
+	// misses and the guest runs on). HookCode's success carries the
+	// installation-effect guarantee (already-translated blocks observe the
+	// hook on their next execution), so no caller-side cache flush here.
 	hook, err := ih.HookCode(emu.GuestAddr(addr), emu.GuestAddr(addr)+1, e.guardCode(e.onInterpose))
 	if err != nil {
 		return e.capabilityErr("Replace", err)
-	}
-	// Unicorn instruments hook callouts into translated blocks AT TRANSLATION
-	// TIME: a TB translated before this hook was added (the function already
-	// ran once) would never fire it, so the affected code-cache range must be
-	// flushed after installing the hook — through the CodeCacheController
-	// capability, not a backend-specific call. A failed flush leaves
-	// the hook installed-but-inert — remove it so a retry does not stack
-	// hooks. An engine with hooks but no CodeCacheController capability
-	// presumably does not cache translations (nothing to invalidate), so
-	// absence is tolerated.
-	if cc, ok := e.be.(emu.CodeCacheController); ok {
-		if err := cc.FlushCodeCache(emu.GuestAddr(addr), emu.GuestAddr(addr)+1); err != nil {
-			_ = hook.Remove()
-			return e.capabilityErr("Replace", err)
-		}
 	}
 	if err := e.itab.BindAddress(emu.GuestAddr(addr), hf); err != nil {
 		_ = hook.Remove()

@@ -264,11 +264,32 @@ func loadUnicorn() error {
 	return nil
 }
 
+// loadedLibraryPath records the library the successful dlopen came from —
+// test provenance: version-matrix runs assert WHICH build they measured
+// instead of trusting the fallback chain.
+var loadedLibraryPath string
+
+// LoadedLibrary returns the path of the loaded unicorn library ("" before
+// the first successful load). Call after any boot; the load is sync.Once'd.
+func LoadedLibrary() string {
+	_ = ensureLoaded()
+	return loadedLibraryPath
+}
+
 func dlopenUnicorn() (uintptr, error) {
-	var candidates []string
+	// An explicitly configured library is a pin, not a preference: if it
+	// fails to load, error out instead of silently falling back — a run that
+	// believed it measured build X while actually loading build Y is worse
+	// than a failed run.
 	if p := strings.TrimSpace(os.Getenv("GOLEM_UNICORN")); p != "" {
-		candidates = append(candidates, p)
+		h, err := loadLibrary(p)
+		if err != nil {
+			return 0, fmt.Errorf("emu: GOLEM_UNICORN=%s failed to load (no fallback for explicit paths): %w", p, err)
+		}
+		loadedLibraryPath = p
+		return h, nil
 	}
+	var candidates []string
 	switch runtime.GOOS {
 	case "windows":
 		// MUST be the VEH-off build (see header comment); candidates start
@@ -297,6 +318,7 @@ func dlopenUnicorn() (uintptr, error) {
 	for _, c := range candidates {
 		h, err := loadLibrary(c)
 		if err == nil {
+			loadedLibraryPath = c
 			return h, nil
 		}
 		lastErr = err
@@ -397,15 +419,14 @@ func init() { Register("unicorn", newUnicornBackend) }
 // interface defined today (DESIGN.md invariant 14: facts, not promises — a
 // drift here fails the build).
 var (
-	_ Backend             = (*unicornBackend)(nil)
-	_ InstructionHooker   = (*unicornBackend)(nil)
-	_ InterruptHooker     = (*unicornBackend)(nil)
-	_ InvalidMemHooker    = (*unicornBackend)(nil)
-	_ MemReadHooker       = (*unicornBackend)(nil)
-	_ MemWriteHooker      = (*unicornBackend)(nil)
-	_ ContextManager      = (*unicornBackend)(nil)
-	_ CacheInvalidator    = (*unicornBackend)(nil)
-	_ CodeCacheController = (*unicornBackend)(nil)
+	_ Backend           = (*unicornBackend)(nil)
+	_ InstructionHooker = (*unicornBackend)(nil)
+	_ InterruptHooker   = (*unicornBackend)(nil)
+	_ InvalidMemHooker  = (*unicornBackend)(nil)
+	_ MemReadHooker     = (*unicornBackend)(nil)
+	_ MemWriteHooker    = (*unicornBackend)(nil)
+	_ ContextManager    = (*unicornBackend)(nil)
+	_ CacheInvalidator  = (*unicornBackend)(nil)
 )
 
 type unicornBackend struct {
@@ -700,29 +721,39 @@ func trampFor(htype int32) uintptr {
 	}
 }
 
-// HookCode registers a code hook over [start, end].
+// HookCode registers a code hook per the InstructionHooker contract:
+// [start, end) half-open, start == end is an empty range (error — never
+// handed to the engine), start > end selects the whole address space
+// (unicorn's begin>end convention, passed through unchanged).
 //
-// range normalization: unicorn2 quantizes hook range ENDS down to the
-// target's instruction size, so [addr, addr] collapses to an EMPTY range on
-// aarch64 (end addr+1 aligns back to addr) and never fires — while firing
-// fine on x86_64 (1-byte granularity). This backend adapter normalizes a
-// single-address hook to at least one instruction slot per target, so the
-// PUBLIC semantic ("fire at this address") holds everywhere:
+// The engine boundary converts half-open to unicorn's INCLUSIVE [begin, end]
+// by passing end-1 — no per-arch widening: unicorn compares instruction
+// addresses, not instruction-size-quantized ranges (verified against
+// unicorn2's HOOK_BOUND_CHECK and live on aarch64/x86_64).
 //
-//	ARM64: end ← addr+4 (fixed 4-byte encoding)
-//	ARM end ← addr+4 (ARM state; a Thumb entry may co-fire the
-//	           following 2-byte instruction — documented, tolerated)
-//	AMD64: end ← addr+1 (1-byte granularity)
+// A successful return carries the contract's installation-effect guarantee:
+// the whole-cache flush below re-arms translation-time instrumentation for
+// blocks translated before the hook existed (redundant but consistent on
+// builds that invalidate internally). A failed flush rolls the hook back.
 func (b *unicornBackend) HookCode(start, end GuestAddr, fn CodeHookFunc) (HookHandle, error) {
 	if start == end {
-		switch b.arch {
-		case ArchARM64, ArchARM:
-			end = start + 4
-		case ArchAMD64:
-			end = start + 1
-		}
+		return nil, fmt.Errorf("emu: HookCode [%#x,%#x): empty range is not a hook", start, end)
 	}
-	return b.addHook(hkCode, start, end, &hookReg{be: b, code: fn})
+	hookEnd := end
+	if start < end {
+		hookEnd = end - 1 // half-open → unicorn's inclusive end
+	}
+	hh, err := b.addHook(hkCode, start, hookEnd, &hookReg{be: b, code: fn})
+	if err != nil {
+		return nil, err
+	}
+	if ferr := b.FlushCache(); ferr != nil {
+		if rerr := hh.Remove(); rerr != nil {
+			return nil, fmt.Errorf("emu: HookCode [%#x,%#x): flush failed (%v) AND rollback failed (%v)", start, end, ferr, rerr)
+		}
+		return nil, fmt.Errorf("emu: HookCode [%#x,%#x): cache flush: %w", start, end, ferr)
+	}
+	return hh, nil
 }
 
 func (b *unicornBackend) HookInterrupt(fn InterruptHookFunc) (HookHandle, error) {
@@ -868,20 +899,15 @@ func (b *unicornBackend) RestoreContext(ctx CPUContext) error {
 
 func (b *unicornBackend) FlushCache() error {
 	if pCtl == nil {
-		return nil // optional symbol; nothing to invalidate on old builds
+		// HookCode's installation-effect guarantee rides on this flush: a
+		// build without uc_ctl cannot provide it, and staying silent would
+		// mean "installed but never observed".
+		return fmt.Errorf("emu: FlushCache: uc_ctl unavailable in this unicorn build: %w", ErrUnsupported)
 	}
 	if e := pCtl(b.uc, ctlTBFlush); e != ucOK {
 		return ucErr("flush_tb", e)
 	}
 	return nil
-}
-
-// FlushCodeCache implements CodeCacheController . Unicorn exposes only
-// a WHOLE-cache TB flush (UC_CTL_TB_FLUSH has no ranged form), so the range
-// is accepted for the contract and the entire cache is invalidated — correct
-// (a superset of the affected range), just coarser than the caller's hint.
-func (b *unicornBackend) FlushCodeCache(start, end GuestAddr) error {
-	return b.FlushCache()
 }
 
 func (b *unicornBackend) Close() error {
@@ -903,10 +929,14 @@ type ucHook struct {
 }
 
 func (h *ucHook) Remove() error {
-	unregisterCB(h.id)
+	// Delete at the engine FIRST: until uc_hook_del succeeds the hook still
+	// fires — dropping the Go callback first would leave a live engine hook
+	// pointing at a dead trampoline. Rollback paths (HookCode flush failure)
+	// depend on Remove's honesty: an error means the hook is NOT gone.
 	if e := pHookDel(h.b.uc, h.hh); e != ucOK {
 		return ucErr("hook_del", e)
 	}
+	unregisterCB(h.id)
 	return nil
 }
 

@@ -73,7 +73,7 @@ unidbg 是这个领域的事实标准,但它跑在 JVM 上,依赖偏重,且它�
 
 - Go 1.26+
 - 一个 CPU 引擎:Unicorn(默认)。构建**无需任何 C 编译器**;运行期需要能找到 libunicorn,按以下顺序查找:
-  1. `$GOLEM_UNICORN` —— 显式路径,**最高优先级,三个平台通用**。想换成自己构建的引擎库(比如自编 VEH-off `unicorn.dll`),把它指过去即可,**无需重新编译 golem**;
+  1. `$GOLEM_UNICORN` —— 显式钉住,三个平台通用。设了它就**只**加载这个路径:加载失败直接报错,**不会回退**到平台默认路径(防止"以为在测自建库、实际跑的是系统库")。想换成自己构建的引擎库(比如自编 VEH-off `unicorn.dll`),把它指过去即可,**无需重新编译 golem**;
   2. 平台默认搜索路径 —— macOS/Linux 的系统安装(`brew install unicorn` / `apt install libunicorn2`);
   3. Windows 仓库自带副本 —— `assets/windows/<arch>/unicorn.dll`(CI 构建的 VEH-off 版,开箱即用;正式版 DLL 也可从 [Releases](https://github.com/isesword/golem/releases/latest) 单独下载)。
 
@@ -85,7 +85,7 @@ unidbg 是这个领域的事实标准,但它跑在 JVM 上,依赖偏重,且它�
 # 纯 Go 构建,无 cgo、无 zig(Linux / macOS / Windows)
 CGO_ENABLED=0 go build -tags unicorn -o bin/golem ./cmd/golem
 
-# 运行(系统装有 libunicorn 时无需任何环境变量;找不到再用 GOLEM_UNICORN 指路)
+# 运行(系统装有 libunicorn 时无需任何环境变量;系统库不在搜索路径上时用 GOLEM_UNICORN 钉住具体路径)
 ./bin/golem examples/native/native.so fib 20                  # fib([20]) = 6765
 # macOS 手动安装的 unicorn:GOLEM_UNICORN=$(brew --prefix unicorn)/lib/libunicorn.dylib
 # Linux: apt install libunicorn2 即在默认搜索路径上
