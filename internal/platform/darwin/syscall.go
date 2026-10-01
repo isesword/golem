@@ -17,7 +17,7 @@ import (
 // (Darwin's dual x0/x1 return is why kernel.Result has Value2; DESIGN.md
 // §3.5.) Negative numbers are Mach traps; stored in the frame's uint64 Num
 // they become huge values that simply miss every table entry, which is the
-// correct P5b behavior — no Mach trap is implemented.
+// correct behavior — no Mach trap is implemented.
 //
 // The transport is STATEFUL (pointer receiver): EncodeResult must know the
 // syscall class (unix vs Mach) to pick the encoding, and kernel's
@@ -43,7 +43,7 @@ var syscallArgRegs = [6]emu.Reg{arm64.X0, arm64.X1, arm64.X2, arm64.X3, arm64.X4
 const nzcvCarry = 0x20000000
 
 // Decode reads the syscall number (x16) and the six argument registers
-// (x0..x5) into a SyscallFrame. NArg is always 6: P5b does not decode the
+// (x0..x5) into a SyscallFrame. NArg is always 6: does not decode the
 // 7+-argument stack spill path of Darwin's generic syscall shim (none of the
 // bound syscalls takes more than 6 arguments).
 func (t *DarwinARM64Transport) Decode(b emu.Backend) (kernel.SyscallFrame, error) {
@@ -69,7 +69,7 @@ func (t *DarwinARM64Transport) Decode(b emu.Backend) (kernel.SyscallFrame, error
 // two encodings; the unix/Mach choice comes from the last Decode.
 func (t *DarwinARM64Transport) EncodeResult(b emu.Backend, r kernel.Result) error {
 	if t.mach {
-		// Mach trap: kern_return_t in x0, no carry convention. (P5b binds no
+		// Mach trap: kern_return_t in x0, no carry convention. (binds no
 		// Mach trap, so in practice this only ever encodes the ENOSYS miss of
 		// a negative number — still the honest encoding for it.)
 		v := r.Value

@@ -34,7 +34,7 @@ type Snapshot struct {
 	nextFiberID int
 	// The AddressSpace module/stub bump cursors (e.as) are deliberately NOT
 	// captured: restore does not roll back module/stub VA allocation — the
-	// same semantics the pre-P2.5c module/stub cursor fields had (they lived
+	// same semantics the legacy module/stub cursor fields had (they lived
 	// outside the snapshot too). Modules loaded and stubs emitted after the
 	// snapshot keep their addresses across a Restore.
 }
@@ -148,7 +148,7 @@ func (e *Emulator) Restore(snap *Snapshot) error {
 		return fmt.Errorf("restore: nil snapshot")
 	}
 	// Poisoned = untrustworthy address space; rebuilding a snapshot on top of
-	// it would launder the inconsistency into "restored" state (P7.5b).
+	// it would launder the inconsistency into "restored" state .
 	if e.poisonErr != nil {
 		return fmt.Errorf("emulator poisoned: %w", e.poisonErr)
 	}

@@ -1,6 +1,6 @@
 package emulator
 
-// P9.5a-0 call-path benchmark set: separates fixed framework overhead from
+// .5a-0 call-path benchmark set: separates fixed framework overhead from
 // argument-count scaling and guest-execution share. Permanent regression
 // harness — run with -count>=6 and compare medians.
 import "testing"

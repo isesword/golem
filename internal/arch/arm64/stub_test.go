@@ -7,7 +7,7 @@ import (
 )
 
 // TestEmitStubBytes pins the trampoline encoding byte-for-byte to the
-// pre-P1 hardcoded `svc #0 ; ret` — both stub kinds intentionally emit the
+// legacy hardcoded `svc #0 ; ret` — both stub kinds intentionally emit the
 // same bytes (classification is by address + metadata, not svc immediate).
 func TestEmitStubBytes(t *testing.T) {
 	_, _, enc, _ := resolveQuad(t)

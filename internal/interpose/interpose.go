@@ -136,7 +136,7 @@ type HostFunc func(ctx CallContext) uint64
 // invariant 11 mechanism ③):
 //
 //	BindSymbol   — link-time binding, resolved through the symbol layer
-//	               (wired to loader.SymbolResolver in P3.5).
+//	               (wired to loader.SymbolResolver in).
 //	BindAddress  — run-time binding of an existing code address; a backend
 //	               execution hook at that entry intercepts the call:
 //	               LookupAddress hit → run the HostFunc →

@@ -11,7 +11,7 @@ import (
 
 // androidStartup asserts the emulator's StartupABI is the Android one — these
 // tests exercise the bionic getauxval path, which only exists on Android
-// (P5b: Darwin's StartupABI has no auxv).
+// (Darwin's StartupABI has no auxv).
 func androidStartup(t *testing.T, e *Emulator) *android.StartupABI {
 	t.Helper()
 	as, ok := e.startup.(*android.StartupABI)
@@ -81,7 +81,7 @@ func getauxval(t *testing.T, e *Emulator, be *auxvBE, typ uint64) uint64 {
 	return be.writes[arm64.X0]
 }
 
-// TestGetauxvalServesStartupABIVector pins the P4d single-source invariant at
+// TestGetauxvalServesStartupABIVector pins the single-source invariant at
 // the emulator level: with a non-empty injected Features, getauxval answers
 // come from the StartupABI-built vector (HWCAP from Features) — and the two
 // agree key by key.
@@ -133,9 +133,9 @@ func TestGetauxvalServesStartupABIVector(t *testing.T) {
 	}
 }
 
-// TestGetauxvalEmptyFeaturesPreservesBehavior is the P4d behavior-invariant
+// TestGetauxvalEmptyFeaturesPreservesBehavior is the behavior-invariant
 // red line at the emulator level: with the Target's real (empty) arm64
-// CPUFeatures, getauxval answers are bit-identical to the pre-P4d hardcoded
+// CPUFeatures, getauxval answers are bit-identical to the legacy hardcoded
 // table — AT_PAGESZ=4096, AT_HWCAP=0, AT_HWCAP2=0, AT_SECURE=0, unknown=0 —
 // and AT_RANDOM still yields a valid pointer.
 func TestGetauxvalEmptyFeaturesPreservesBehavior(t *testing.T) {

@@ -1,7 +1,7 @@
 //go:build unicorn && (darwin || linux)
 
-// P5c acceptance: the FULL emulator boot flow on a Darwin/ARM64E target —
-// the same ARM64 CPU and Darwin platform as P5b, flipped to the ARM64E
+// acceptance: the FULL emulator boot flow on a Darwin/ARM64E target —
+// the same ARM64 CPU and Darwin platform as, flipped to the ARM64E
 // variant with LC_DYLD_CHAINED_FIXUPS (format DYLD_CHAINED_PTR_ARM64E)
 // instead of classic dyld opcodes. The fixture exercises all four chain
 // entry kinds end to end:
@@ -70,7 +70,7 @@ func TestBootDarwinARM64EEndToEnd(t *testing.T) {
 		Engine: "unicorn",
 		Pid:    4242,
 		// No AssetRoot: the Darwin boot must not touch the Android asset
-		// tree (P5b ships no Darwin runtime libraries).
+		// tree (ships no Darwin runtime libraries).
 	}, WithPlatformConfig(darwin.NewConfig(
 		darwin.WithReplaceFns(map[string]interpose.HostFunc{
 			"host_magic": func(ctx interpose.CallContext) uint64 {
@@ -89,7 +89,7 @@ func TestBootDarwinARM64EEndToEnd(t *testing.T) {
 			e.target.Format, e.target.Platform, e.target.ID)
 	}
 
-	// The P5c payload: load the ARM64E library — LC_DYLD_CHAINED_FIXUPS
+	// The payload: load the ARM64E library — LC_DYLD_CHAINED_FIXUPS
 	// decodes into the standard Reloc contract (chained.go) and links
 	// through the resolver chain: host_magic to the HostResolver stub,
 	// host_value to hostdata's global-scope export.

@@ -18,7 +18,7 @@ import (
 // newTestEmulator builds an Emulator for unit tests with the full platform
 // personality injected — resolved Arch/CallABI/StubEncoder triple, cached role
 // registers, and a kernel Context carrying the Android/AArch64 syscall
-// transport, dispatch table and struct codecs exactly as New wires them (P2:
+// transport, dispatch table and struct codecs exactly as New wires them (
 // no test may rely on zero-value coincidences; a bare &Emulator{} has a nil
 // transport/table and its first guest syscall would panic). be may be nil for
 // tests that never touch the backend (e.g. JNI clock tests).
@@ -29,7 +29,7 @@ func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 		t.Fatal(err)
 	}
 	// The layout comes from the platform's LayoutPolicy exactly as New wires
-	// it (P4c) — no test-local copy of the address geometry.
+	// it — no test-local copy of the address geometry.
 	layout, err := android.LayoutPolicy{}.Resolve(
 		platform.TargetInfo{Platform: platform.Android, Caps: cpuArch.Caps()},
 		platform.LayoutOverrides{},
@@ -44,7 +44,7 @@ func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 		t.Fatal(err)
 	}
 	// Startup and lookup are the SAME instance, exactly as the platform
-	// factory binds them into the Runtime (P5b.5).
+	// factory binds them into the Runtime .
 	startup := &android.StartupABI{}
 	e := &Emulator{
 		be:          be,
@@ -69,11 +69,11 @@ func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 		sysNanosleep:      pers.Nanosleep,
 		sysClockNanosleep: pers.ClockNanosleep,
 	}
-	// P2.5d: the interpose components New wires (stub manager over the
+	// the interpose components New wires (stub manager over the
 	// AddressSpace stub region; empty interposition table).
 	e.stubMgr = interpose.NewStubManager(e.as, stubEnc, be)
 	e.itab = interpose.NewInterposeTable()
-	// P3.5: the boot resolver chain exactly as New wires it.
+	// the boot resolver chain exactly as New wires it.
 	e.resolver = loader.ChainResolvers(
 		interpose.NewHostResolver(e.itab, e.stubMgr),
 		e.dl.GlobalResolver(),

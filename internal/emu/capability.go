@@ -65,15 +65,14 @@ type ContextManager interface {
 
 // CacheInvalidator invalidates the engine's translated/JIT'd code cache.
 // Called after writing new code into an executable region (self-modifying
-// code) and after installing an interposition entry hook (P2.5d): unicorn
+// code) and after installing an interposition entry hook unicorn
 // instruments hook callouts at TB translation time, so a block translated
 // before the hook existed would never fire it unless the cache is flushed.
 type CacheInvalidator interface {
 	FlushCache() error
 }
 
-// CodeCacheController is the execution-hook companion contract (P3.5,
-// DESIGN.md §3.1): after installing a NEW execution hook over [start, end),
+// CodeCacheController is the execution-hook companion contract (DESIGN.md §3.1): after installing a NEW execution hook over [start, end),
 // already-translated blocks may not contain the hook callout (unicorn
 // instruments hooks at TB translation time), so the interpose/stub layer
 // must invalidate the affected range through this capability instead of
@@ -83,7 +82,7 @@ type CodeCacheController interface {
 	FlushCodeCache(start, end GuestAddr) error
 }
 
-// RegFileReader is the whole-register-file dump capability (P7.5c): one call
+// RegFileReader is the whole-register-file dump capability one call
 // returns the guest's general-purpose register file, cheap enough for
 // per-instruction consumers (the full tracer) — individual RegReads would
 // pay the purego boundary per register. The FILE SHAPE is arch business,
@@ -103,7 +102,7 @@ type RegWrite struct {
 	Value uint64
 }
 
-// RegBatchWriter is the OPTIONAL batch register-write capability (P9.5a):
+// RegBatchWriter is the OPTIONAL batch register-write capability
 // one host↔engine crossing for a whole set of writes instead of one per
 // register. Purely a performance seam — the fallback (a RegWrite loop)
 // is bit-for-bit equivalent, so consumers probe it and degrade freely;

@@ -1,4 +1,4 @@
-// Tiny Darwin/ARM64E (Mach-O arm64e) shared library — the P5c touchstone
+// Tiny Darwin/ARM64E (Mach-O arm64e) shared library — the touchstone
 // fixture for golem's arch x platform x format matrix: same ARM64 CPU and
 // Darwin platform as hello_darwin_arm64, but the ARM64E variant with
 // CHAINED FIXUPS (LC_DYLD_CHAINED_FIXUPS, DYLD_CHAINED_PTR_ARM64E) instead

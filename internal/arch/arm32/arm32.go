@@ -1,6 +1,6 @@
 // Package arm32 assigns the abstract emu.Reg ids for the ARM32 (armv7
 // EABI) register set — the third architecture of the arch/platform
-// abstraction (P6), mirroring internal/arch/arm64 and internal/arch/amd64.
+// abstraction, mirroring internal/arch/arm64 and internal/arch/amd64.
 //
 // Like the other arch packages, these numbers are the single source of
 // truth for register identity: callers write arm32.R0 & co., and each CPU
@@ -21,8 +21,8 @@
 //
 // Scope note: this package deliberately ships ONLY the register constants
 // at this stage. The Arch/CallABI/StubEncoder/CPUFeatures quad and its
-// registration are P6b's work; the constants exist now so parallel agents
-// (P6c transport, P6d loader) can import them.
+// registration are that port's work; the constants exist now so parallel agents
+// (transport, P6d loader) can import them.
 //
 // Dependency direction: arm32 -> emu, never emu -> arm32.
 package arm32
@@ -48,7 +48,7 @@ const (
 	R15
 	CPSR
 	// TPIDRURW is the ARM32 Linux thread-pointer register (CP15 c13,c0,3 —
-	// the user read/write thread ID register). Appended AFTER the frozen P6
+	// the user read/write thread ID register). Appended AFTER the frozen
 	// set (the "unicorn mapping needs" the block doc reserves): every id
 	// above keeps its number; TPIDRURW is id 113.
 	TPIDRURW

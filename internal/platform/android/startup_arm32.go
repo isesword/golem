@@ -12,7 +12,7 @@ import (
 )
 
 // StartupABI32 is the ARM32 (ILP32) variant of the Android personality's
-// platform.StartupABI (P6d). The auxv CONTENT rules are identical to the
+// platform.StartupABI . The auxv CONTENT rules are identical to the
 // 64-bit StartupABI (same AT_* keys, HWCAP exclusively from
 // StartupContext.Features, deterministic AT_RANDOM, data-block-not-exec-
 // frame landing form — see startup.go for the rationale); the REAL

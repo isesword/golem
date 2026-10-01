@@ -11,7 +11,7 @@ import (
 	"github.com/isesword/golem/internal/platform"
 )
 
-// The Android personality registers its factory at link time (P5b.5): the
+// The Android personality registers its factory at link time the
 // composition root resolves platform.Android -> this factory and binds the
 // complete Runtime below. emulator holds no Android-specific selection
 // logic beyond this registration.
@@ -41,9 +41,9 @@ func (factory) Bind(ctx platform.BindContext) (*platform.Runtime, error) {
 	}
 	// Startup and AuxvLookup are bound to the SAME StartupABI instance, so
 	// the interposed getauxval serves exactly the vector BuildInitialState
-	// materialized — the P4d single-source invariant, with no emulator-side
+	// materialized — the single-source invariant, with no emulator-side
 	// type assertion. The pointer WIDTH of the auxv wire format is
-	// arch-dependent (P6d): ARM32 gets the 8-byte-pair Elf32_auxv_t builder.
+	// arch-dependent ARM32 gets the 8-byte-pair Elf32_auxv_t builder.
 	var startup platform.StartupABI
 	var auxvLookup func(typ uint64) uint64
 	switch ctx.ArchID {
@@ -55,10 +55,10 @@ func (factory) Bind(ctx platform.BindContext) (*platform.Runtime, error) {
 		startup, auxvLookup = s, s.Lookup
 	}
 	// Bionic runtime libraries and the TLS slot init are arch-keyed. The
-	// asset tree ships BOTH widths: AArch64 under lib64/, ARM32 (P7: real
+	// asset tree ships BOTH widths: AArch64 under lib64/, ARM32 (real
 	// API-23 armeabi-v7a bionic) under lib/. On ARM64 the lib64 set loads
 	// for real; on any other target the boot's machine-mismatch skip (the
-	// P5a.5 convention) drops whatever does not match — AMD64 therefore
+	// .5 convention) drops whatever does not match — AMD64 therefore
 	// still boots libc-less, while ARM32 gets its real libc/libm/libdl
 	// (naming note: the ARM32 tree keeps the image's original libc++.so /
 	// libstdc++.so names, unlike lib64's libcpp/libstdcpp). The TLS slot
@@ -70,7 +70,7 @@ func (factory) Bind(ctx platform.BindContext) (*platform.Runtime, error) {
 	}
 	initGuest := initBionicTLS
 	if ctx.ArchID == arch.IDARM {
-		// liblog too: the P7 NDK-built fixtures DT_NEEDED it (real
+		// liblog too: the NDK-built fixtures DT_NEEDED it (real
 		// __android_log_print — usually interposed by the caller). The
 		// ARM64 list deliberately stays three-library (boot red line).
 		runtimeLibs = []string{
@@ -82,7 +82,7 @@ func (factory) Bind(ctx platform.BindContext) (*platform.Runtime, error) {
 		initGuest = initBionicTLS32
 	}
 	// The guest-visible utsname identity is per-arch personality data
-	// (P7.5b): bionic's uname()-based checks read `machine` to pick library
+	// : bionic's uname()-based checks read `machine` to pick library
 	// directories, so it must match the target (aarch64 / armv7l /
 	// x86_64). The kernel handler only encodes it.
 	uname := &kernel.UnameInfo{

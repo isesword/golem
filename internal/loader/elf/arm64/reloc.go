@@ -1,6 +1,6 @@
 // Package arm64 implements the ELF/AArch64 Relocator: the relocation
 // SEMANTICS (what each R_AARCH64_* code writes into guest memory), split out
-// of loader.Plan in P3 (DESIGN.md §3.3). Memory layout — segment mapping,
+// of loader.Plan in (DESIGN.md §3.3). Memory layout — segment mapping,
 // shareability, protections — stays in loader.Plan; this package only knows
 // how one relocation entry is applied.
 //
@@ -26,7 +26,7 @@ type relocator struct{}
 
 // Apply writes one relocation into guest memory. r.Offset is image-relative;
 // base is the per-engine load bias; res resolves imported symbols through the
-// P3.5 SymbolResolver contract — the result is always a guest address, so a
+// .5 SymbolResolver contract — the result is always a guest address, so a
 // host-interposed symbol is indistinguishable from a guest one here.
 func (relocator) Apply(b emu.Backend, img *loader.Image, r loader.Reloc, base uint64, res loader.SymbolResolver) error {
 	target := base + r.Offset

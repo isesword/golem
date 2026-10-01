@@ -14,7 +14,7 @@ import (
 // address in LR (r14) — interworking, so control transfers are BX
 // semantics (bit0 of the target selects ARM/Thumb state via CPSR.T).
 //
-// The typed argument model (P6, Architecture Exception #1) is load-bearing
+// The typed argument model (Architecture Exception #1) is load-bearing
 // here, unlike on the 64-bit conventions: ArgWord/ArgPtr occupy ONE 32-bit
 // slot; ArgU64/ArgI64 occupy TWO slots and, per AAPCS32 stage C, must land
 // in an EVEN-numbered register pair (r0:r1 or r2:r3) — skipping r1 when it
@@ -87,7 +87,7 @@ func layout(args []arch.CallArg) ([]placement, uint64) {
 // caller's ISA state for the interworking return), SP dropped by the
 // 8-aligned spill area, and PC ← req.Entry with BX semantics (bit0 into
 // CPSR.T, PC even — Thumb functions work; see setPCBX).
-// P9.5a: the plain register writes (args, SP, LR) are collected into one
+// the plain register writes (args, SP, LR) are collected into one
 // set and flushed in a single batch when the backend has the
 // RegBatchWriter capability (identical loop otherwise). setPCBX stays a
 // separate trailing call — it is a STATEFUL write (CPSR.T + PC from one
@@ -287,7 +287,7 @@ func setPCBX(b emu.Backend, addr uint64) error {
 	return nil
 }
 
-// ReadReturnAddress (P9 observation semantics): at function entry the
+// ReadReturnAddress (observation semantics): at function entry the
 // in-flight call returns to R14 — verbatim, bit0 may carry the return
 // site's Thumb state exactly as ReturnFromCall consumes it.
 func (aapcs32) ReadReturnAddress(b emu.Backend) (emu.GuestAddr, error) {

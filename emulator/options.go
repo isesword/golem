@@ -13,7 +13,7 @@ import (
 	"github.com/isesword/golem/internal/target"
 )
 
-// Option mutates the boot Config at New time (functional options, P4a —
+// Option mutates the boot Config at New time (functional options —
 // DESIGN.md §3.6 invariant 4: platform personality config must not inflate
 // the platform-agnostic Config struct). Options apply in order, before the
 // legacy shim runs.
@@ -26,7 +26,7 @@ type Option func(*Config) error
 // error instead of silently picking one.
 //
 // The option boundary accepts ANY platform.Config and routes it by
-// PlatformID() only (P5b.5 — the core never dispatches platform configs via
+// PlatformID() only (— the core never dispatches platform configs via
 // any + type-switch): the config's platform must match the platform the
 // SOPath probe derives, checked once in the normalization step; the platform
 // factory's Bind then asserts its own concrete config type.
@@ -47,7 +47,7 @@ func WithPlatformConfig(c platform.Config) Option {
 // probed platform: an android.Config with a Mach-O target (or a
 // darwin.Config with an ELF target) is a boot-time error, not a silent
 // mis-wiring. The matching is PlatformID() routing, not a type-switch
-// (P5b.5).
+// .
 //
 // Android precedence: an explicit WithPlatformConfig wins; Config.Android is
 // then required to be zero (setting both is an ambiguity error, not a silent
@@ -64,8 +64,8 @@ func normalizePlatformConfig(cfg *Config, tgt *target.Target) error {
 		return nil
 	}
 	// No explicit platform config: the legacy shim converts the deprecated
-	// Config.Android fields into an android.Config exactly once, here (P4a
-	// compatibility semantics preserved — only the storage location moved,
+	// Config.Android fields into an android.Config exactly once, here
+	// (compatibility semantics preserved — only the storage location moved,
 	// from the acfg field to the single pcfg slot).
 	if legacyAndroidUsed(cfg.Android) {
 		if tgt.Platform != platform.Android {
@@ -113,15 +113,15 @@ func legacyReplaceFns(fns map[string]func(h *Hook) uint64) map[string]interpose.
 // single source of truth for arch/format/platform from here on.
 //
 // Arch precedence: an explicit Config.Arch wins over the probed header;
-// without either, everything is ARM64 (the pre-P4 default). Platform is
-// DERIVED FROM THE PROBED FORMAT (P5b): Mach-O -> Darwin, ELF -> Android;
-// without an SOPath there is nothing to probe and the pre-P5 default
+// without either, everything is ARM64 (the legacy default). Platform is
+// DERIVED FROM THE PROBED FORMAT Mach-O -> Darwin, ELF -> Android;
+// without an SOPath there is nothing to probe and the legacy default
 // (Android) applies.
 func resolveTarget(cfg Config) (*target.Target, error) {
 	id := cfg.Arch
 	variant := arch.VariantGeneric
 	format := loader.FormatELF
-	plat := platform.Android // pre-P5 default; the probe may refine it
+	plat := platform.Android // legacy default; the probe may refine it
 	if cfg.SOPath != "" {
 		fh, err := os.Open(cfg.SOPath)
 		if err != nil {
@@ -142,14 +142,14 @@ func resolveTarget(cfg Config) (*target.Target, error) {
 		}
 	}
 	if id == 0 {
-		id = arch.IDARM64 // pre-P4 semantics: everything is ARM64
+		id = arch.IDARM64 // legacy semantics: everything is ARM64
 	}
 	cpuArch, callABI, stubEnc, feats, err := arch.Resolve(id, variant)
 	if err != nil {
 		return nil, err
 	}
 	// The platform is carried in the Target so no lower layer ever re-derives
-	// it. Features (P4d) is the quad's CPUFeatures — the single HWCAP source
+	// it. Features is the quad's CPUFeatures — the single HWCAP source
 	// of truth the Android StartupABI and the interposed getauxval both
 	// derive from (the Darwin StartupABI deliberately never consults it).
 	return &target.Target{

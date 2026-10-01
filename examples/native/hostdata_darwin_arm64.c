@@ -1,4 +1,4 @@
-// Tiny Darwin/ARM64 data-export module — the P5c e2e's cross-module bind
+// Tiny Darwin/ARM64 data-export module — the e2e's cross-module bind
 // target. The arm64e fixture imports host_value as DATA (a non-auth chained
 // bind entry); loading this module first puts the export into the
 // DynamicLinker's global scope, so the bind resolves through the exact

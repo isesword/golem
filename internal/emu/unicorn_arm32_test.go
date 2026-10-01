@@ -177,7 +177,7 @@ func TestUnicornARM32TLS(t *testing.T) {
 	}
 }
 
-// TestUnicornARM32ReadGPRegs pins the ARM32 RegFileReader dump (P8, exposed
+// TestUnicornARM32ReadGPRegs pins the ARM32 RegFileReader dump (exposed
 // by real-library validation): 17 entries in native file order
 // (r0..r12, sp, lr, pc, cpsr), each agreeing with the individually-read
 // register.
@@ -227,7 +227,7 @@ func TestUnicornARM32ReadGPRegs(t *testing.T) {
 	}
 }
 
-// TestUnicornARM32VFPEnabled pins the P8 engine-creation CPACR write: an
+// TestUnicornARM32VFPEnabled pins the engine-creation CPACR write: an
 // ARMv7 engine must execute VFP (cp10) instructions out of the box — real
 // third-party libraries (Termux libsqlite3) use VLDR/NEON deep inside
 // ordinary call paths, and the reset state disables cp10/cp11.
@@ -247,7 +247,7 @@ func TestUnicornARM32VFPEnabled(t *testing.T) {
 	}
 }
 
-// TestUnicornARM32WriteRegs pins the P9.5a batch-write capability live:
+// TestUnicornARM32WriteRegs pins the batch-write capability live:
 // a single WriteRegs lands every value where individual RegReads see it.
 func TestUnicornARM32WriteRegs(t *testing.T) {
 	be := newARM32(t)

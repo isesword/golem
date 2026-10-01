@@ -8,7 +8,7 @@ import (
 )
 
 // SyscallPersonality bundles one guest architecture's syscall ABI pieces for
-// the kernel.Context injection (P5a.5): the register transport, the number→
+// the kernel.Context injection the register transport, the number→
 // handler dispatch table, the guest struct codecs, and the syscall numbers
 // the emulator's cooperative scheduler intercepts (futex / nanosleep). The
 // arch-keyed selection lives HERE — per-arch knowledge is the platform

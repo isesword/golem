@@ -23,7 +23,7 @@ import (
 
 // gpRegNames indexes the AArch64 register-file order the RegFileReader
 // capability dumps (x0..x30, sp, pc, nzcv); gpRegNamesARM32 the ARM32 file
-// (r0..r12, sp, lr, pc, cpsr — P8, exposed by real-library validation).
+// (r0..r12, sp, lr, pc, cpsr —, exposed by real-library validation).
 var gpRegNames = [34]string{
 	"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10",
 	"x11", "x12", "x13", "x14", "x15", "x16", "x17", "x18", "x19", "x20",
@@ -118,7 +118,7 @@ func (t *insnTracer) onInsn(pc uint64) {
 			fmt.Printf("[SNAP] dumped [%#x,%#x) at traceN=%d\n", SnapLo, SnapHi, traceN)
 		}
 	}
-	// P7.5c: the register-file dump is a capability now — an engine without
+	// the register-file dump is a capability now — an engine without
 	// it (or an arch it refuses) traces nothing rather than crashing.
 	rr, ok := t.e.be.(emu.RegFileReader)
 	if !ok {

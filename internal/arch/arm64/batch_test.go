@@ -26,7 +26,7 @@ func (r *batchRec) WriteRegs(ws []emu.RegWrite) error {
 	return nil
 }
 
-// TestPrepareCallBatchEqualsLoop pins the P9.5a equivalence contract: the
+// TestPrepareCallBatchEqualsLoop pins the equivalence contract: the
 // batch path and the per-register fallback must flush the IDENTICAL write
 // set in the IDENTICAL order (the two paths cannot drift).
 func TestPrepareCallBatchEqualsLoop(t *testing.T) {

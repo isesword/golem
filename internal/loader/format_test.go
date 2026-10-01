@@ -66,7 +66,7 @@ func macho64Header(cputype, subtype uint32) []byte {
 
 // TestSniffMachOARM64: a Mach-O arm64 dylib header sniffs to
 // (FormatMachO, arch.IDARM64, VariantGeneric) — the same arch identity the
-// ELF probe reports for AArch64, from a different container format (P5b).
+// ELF probe reports for AArch64, from a different container format .
 func TestSniffMachOARM64(t *testing.T) {
 	f, id, v, err := Sniff(bytes.NewReader(macho64Header(0x0100000c, 0))) // CPU_TYPE_ARM64 / ALL
 	if err != nil {
@@ -79,7 +79,7 @@ func TestSniffMachOARM64(t *testing.T) {
 
 // TestSniffMachOARM64E: CPU_SUBTYPE_ARM64E (=2, here with the
 // CPU_SUBTYPE_LIB64 capability bit set, as real toolchains emit) maps to
-// VariantARM64E. The arm64 package registers that variant (P5c) with the
+// VariantARM64E. The arm64 package registers that variant with the
 // same quad as VariantGeneric, so the probe resolves end to end.
 func TestSniffMachOARM64E(t *testing.T) {
 	f, id, v, err := Sniff(bytes.NewReader(macho64Header(0x0100000c, 0x80000002)))

@@ -8,7 +8,7 @@ import (
 	"github.com/isesword/golem/internal/emu"
 )
 
-// P3.5 resolver-chain tests (DESIGN.md §3.3). The three canonical chain
+// .5 resolver-chain tests (DESIGN.md §3.3). The three canonical chain
 // elements live in loader (DynamicLinker.GlobalResolver) and interpose
 // (HostResolver / UnresolvedStubResolver); these tests pin the contract the
 // composition root relies on: chain ORDER, the ErrSymbolUnresolved decline

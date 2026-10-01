@@ -47,7 +47,7 @@ func (b *jniStubBE) StartCount(emu.GuestAddr, emu.GuestAddr, uint64) error { ret
 func (b *jniStubBE) Stop() error                                           { return nil }
 func (b *jniStubBE) Close() error                                          { return nil }
 
-// TestGuestJNIArrayCaps pins the P7.6 policy on the JNI array surface: a
+// TestGuestJNIArrayCaps pins the policy on the JNI array surface: a
 // guest-supplied length never sizes a host allocation (NewByteArray over
 // cap refuses with JNI NULL), and the array-region bounds are uint64-safe —
 // the old int(start+ln) WRAPPED for huge values (2^63+2^63 → 0) and sliced

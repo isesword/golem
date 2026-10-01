@@ -142,7 +142,7 @@ func TestMemMapPtrReadOnlyRejectsGuestWrite(t *testing.T) {
 
 	fired := 0
 	var typ, faultAddr uint64
-	inv, ok := c.(InvalidMemHooker) // capability probe (P2.5a)
+	inv, ok := c.(InvalidMemHooker) // capability probe
 	if !ok {
 		t.Fatal("backend lacks the InvalidMemHooker capability")
 	}

@@ -13,7 +13,7 @@ import (
 // that is aapcs64 (callabi.go); the trampoline encoding is stubEncoder
 // (stub.go), and the CPU feature set is cpuFeatures (features.go). All four
 // are registered together for (IDARM64, VariantGeneric) AND (IDARM64,
-// VariantARM64E) — P5c: ARM64E is the same engine architecture, calling
+// VariantARM64E) —: ARM64E is the same engine architecture, calling
 // convention, stub encoding and feature set; the variant difference
 // (authenticated chained fixups) is the loader's business, so the quad is
 // deliberately NOT forked.
@@ -34,7 +34,7 @@ func (cpuArch) PtrSize() int { return 8 }
 // Caps reports the AArch64 address-space limits golem assumes: 64-bit
 // pointers, the 39-bit user VA of the standard ARM64 Linux 4 KiB-page
 // configuration. The platform LayoutPolicy validates against these before
-// planning a memory.Layout (P4c).
+// planning a memory.Layout .
 func (cpuArch) Caps() arch.AddressSpaceCaps {
 	return arch.AddressSpaceCaps{
 		PointerBits: 64,
@@ -57,7 +57,7 @@ func (cpuArch) SetTLSBase(b emu.Backend, addr emu.GuestAddr) error {
 // recovery is explicitly out of scope here (DESIGN.md invariant 9).
 func (cpuArch) NormalizeCodeAddr(addr emu.GuestAddr) emu.GuestAddr { return addr }
 
-// ReadRole implements arch.RoleReader (P9): register roles by ABI meaning.
+// ReadRole implements arch.RoleReader register roles by ABI meaning.
 // CPU-state observation — valid at any PC. RoleFP reads X29, which has no
 // abstract id (the frozen set is sparse), through the register-file dump.
 func (cpuArch) ReadRole(b emu.Backend, role arch.RegisterRole) (uint64, error) {
@@ -89,5 +89,5 @@ func (cpuArch) ReadRole(b emu.Backend, role arch.RegisterRole) (uint64, error) {
 	}
 }
 
-// arm64 implements the P9 role observer.
+// arm64 implements the role observer.
 var _ arch.RoleReader = cpuArch{}

@@ -3,7 +3,7 @@
 // golem: callers write arm64.X0 & co., and each CPU backend translates the
 // abstract emu.Reg to its engine's own numbering (e.g. UC_ARM64_REG_*).
 //
-// The constants were carved out of internal/emu unchanged in P0 of the
+// The constants were carved out of internal/emu unchanged in of the
 // arch-platform abstraction — the iota order (and therefore the numeric
 // values) is frozen; the unicorn backend's regMap keys on these NUMBERS (it
 // cannot import this package: arm64 imports emu for emu.Reg, so the reverse
@@ -32,9 +32,9 @@ const (
 	LR // X30
 	NZCV
 	TPIDR_EL0
-	// X16 is the Darwin syscall-number register (P5b: the BSD syscall ABI
+	// X16 is the Darwin syscall-number register (the BSD syscall ABI
 	// passes the number in x16, unlike Linux's x8). Appended AFTER the frozen
-	// P0 set — every id above keeps its number; X16 is id 17.
+	// set — every id above keeps its number; X16 is id 17.
 	X16
 )
 

@@ -1,4 +1,4 @@
-// P5a relocation-path tests for the (FormatELF, ArchAMD64) Relocator,
+// relocation-path tests for the (FormatELF, ArchAMD64) Relocator,
 // mirroring the ARM64 resolver_e2e tests: RELATIVE lands base+addend,
 // GLOB_DAT/JUMP_SLOT/R_X86_64_64 resolve through the SymbolResolver contract
 // (a host-interposed symbol writes its STUB guest address), a weak undefined

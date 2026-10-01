@@ -61,7 +61,7 @@ func (cpuArch) SetTLSBase(b emu.Backend, addr emu.GuestAddr) error {
 // must not feed it an address whose bit0 they still need.
 func (cpuArch) NormalizeCodeAddr(addr emu.GuestAddr) emu.GuestAddr { return addr &^ 1 }
 
-// ReadRole implements arch.RoleReader (P9): register roles by ABI meaning.
+// ReadRole implements arch.RoleReader register roles by ABI meaning.
 // CPU-state observation — valid at any PC.
 func (cpuArch) ReadRole(b emu.Backend, role arch.RegisterRole) (uint64, error) {
 	switch role {
@@ -80,5 +80,5 @@ func (cpuArch) ReadRole(b emu.Backend, role arch.RegisterRole) (uint64, error) {
 	}
 }
 
-// arm32 implements the P9 role observer.
+// arm32 implements the role observer.
 var _ arch.RoleReader = cpuArch{}

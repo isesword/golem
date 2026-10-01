@@ -1,12 +1,12 @@
 //go:build unicorn && (darwin || linux)
 
-// P6e acceptance: the FULL emulator boot flow (emulator.New → LoadLibrary →
+// acceptance: the FULL emulator boot flow (emulator.New → LoadLibrary →
 // CallSymbol) on an Android/ARM32 target — the THIRD architecture end to
 // end: probe (EM_ARM) → Target(Android + ARM + ELF32) → unicorn ARM32
 // backend → 32-bit LayoutPolicy → ELF32 map + REL relocations (implicit
 // addend) → SymbolResolver → FinalizeImage → StartupABI32 (Elf32 auxv) →
 // calls. The fixture is -nostdlib armv7 (zig cc), with the AArch64 bionic
-// dropped by the boot's machine-mismatch skip (P5a.5 convention).
+// dropped by the boot's machine-mismatch skip (convention).
 //
 // What this test pins beyond "it boots":
 //   - AAPCS32 pair semantics on REAL compiler output: add64lohi(u32, u64)
@@ -14,9 +14,9 @@
 //     places b there; the naive word entry misplaces it (asserted wrong).
 //   - Thumb interworking: thumb_add's export value carries bit0; the call
 //     chain (PrepareCall setPCBX + backend Thumb entry) must decode Thumb.
-//   - REL relocation kinds the P6c relocator covers: R_ARM_RELATIVE (the
+//   - REL relocation kinds the relocator covers: R_ARM_RELATIVE (the
 //     fptr_table rebase), R_ARM_ABS32 (the host_magic bind), R_ARM_GLOB_DAT.
-//   - The ARM32 Linux syscall ABI: r7 number, svc #0 (P6d transport/table).
+//   - The ARM32 Linux syscall ABI: r7 number, svc #0 (transport/table).
 package emulator
 
 import (
@@ -95,7 +95,7 @@ func TestBootAndroidARM32EndToEnd(t *testing.T) {
 	if naive := call("add64lohi", 1, 0x1122334455667788); naive == want64 {
 		t.Fatalf("word-entry add64lohi = %#x — must DIFFER from %#x (b truncated to r1, pair never set)", naive, uint64(want64))
 	}
-	// The typed entry places a in r0 and b in the r2:r3 pair — the P6
+	// The typed entry places a in r0 and b in the r2:r3 pair — the
 	// Architecture Exception #1 payoff on real compiler output.
 	typed, err := e.CallSymbolArgs("add64lohi",
 		arch.CallArg{Value: 1, Kind: arch.ArgWord},
@@ -106,7 +106,7 @@ func TestBootAndroidARM32EndToEnd(t *testing.T) {
 	if typed != want64 {
 		t.Fatalf("add64lohi(1, 0x1122334455667788) = %#x, want %#x (a=r0, b=r2:r3)", typed, uint64(want64))
 	}
-	// P9: the Portable typed call lands the SAME pair — Uint64() builds a
+	// the Portable typed call lands the SAME pair — Uint64() builds a
 	// U64-kinded Value, which converts to ArgU64, so callers get r2:r3
 	// placement without touching arch types.
 	v9, err := e.CallSymbol("add64lohi", Uint32(1), Uint64(0x1122334455667788))
@@ -136,7 +136,7 @@ func TestBootAndroidARM32EndToEnd(t *testing.T) {
 	if got := call("thumb_add", 3, 4); got != 10 {
 		t.Fatalf("thumb_add(3,4) = %d, want 10 (Thumb decode via the bit0 chain)", got)
 	}
-	// Real Linux syscall on ARM32: getpid, number in r7, svc #0 — the P6d
+	// Real Linux syscall on ARM32: getpid, number in r7, svc #0 — the
 	// transport/table path.
 	if got := call("guest_getpid"); got != 4242 {
 		t.Fatalf("guest_getpid() = %d, want 4242", got)

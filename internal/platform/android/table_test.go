@@ -14,7 +14,7 @@ func handlerID(h kernel.Handler) uintptr { return reflect.ValueOf(h).Pointer() }
 
 // TestARM64SyscallTableBinding pins the Android/AArch64 number -> semantic
 // handler binding against the asm-generic unistd values, as migrated verbatim
-// from the kernel's retired Android table constructor in P4b. The literal
+// from the kernel's retired Android table constructor in. The literal
 // numbers here are the pin: if a SYS_* constant's value or a binding line
 // ever drifts, the expected key set or handler identity stops matching.
 func TestARM64SyscallTableBinding(t *testing.T) {

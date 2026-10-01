@@ -1,7 +1,7 @@
 package kernel
 
 // Handlers is the kernel's complete semantic handler set: one field per
-// emulated syscall SEMANTIC, with no syscall numbers attached (P4b: the
+// emulated syscall SEMANTIC, with no syscall numbers attached (the
 // number -> handler binding lives in platform/android). Fields are nil only
 // when a semantic is genuinely unimplemented.
 type Handlers struct {

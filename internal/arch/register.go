@@ -7,7 +7,7 @@ import (
 	"github.com/isesword/golem/internal/emu"
 )
 
-// This file is the P9 register-ROLE vocabulary: the Public Semantic API's
+// This file is the register-ROLE vocabulary: the Public Semantic API's
 // answer to "which register holds the link register" without the caller
 // naming X30/R14/[rsp] themselves. Roles are ABI concepts; per-arch names
 // stay in the arch packages.
@@ -48,7 +48,7 @@ func (r RegisterRole) String() string {
 // observation and is valid at any PC where the hook fires.
 var ErrUnsupportedRole = errors.New("arch: register role not supported by this architecture")
 
-// RoleReader is the OPTIONAL per-arch register-role observer (P9, invariant
+// RoleReader is the OPTIONAL per-arch register-role observer (invariant
 // 14 style: the arch core does not grow for it — quads that can serve roles
 // implement this small interface and consumers probe it). Role reads are
 // CPU-state observation: valid at ANY hook kind, at any PC.

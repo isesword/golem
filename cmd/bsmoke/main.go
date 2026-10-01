@@ -47,7 +47,7 @@ func main() {
 	must(be.RegWrite(arm64.X0, 10), "set x0")
 
 	hookRan := false
-	ih, ok := be.(emu.InterruptHooker) // capability probe (P2.5a)
+	ih, ok := be.(emu.InterruptHooker) // capability probe
 	if !ok {
 		fmt.Println("FAIL engine lacks the InterruptHooker capability")
 		os.Exit(1)

@@ -111,7 +111,7 @@ func TestQuadRegistration(t *testing.T) {
 	}
 }
 
-// TestEmptyFeatures pins the P5a stage behavior: the amd64 CPUFeatures
+// TestEmptyFeatures pins the stage behavior: the amd64 CPUFeatures
 // implementation is an EMPTY feature set, so the Linux auxv bitmaps are
 // AT_HWCAP=0 / AT_HWCAP2=0 (advertise no optional CPU features).
 func TestEmptyFeatures(t *testing.T) {

@@ -11,7 +11,7 @@ import "github.com/isesword/golem/internal/kernel"
 // implements / that an arm32 bionic is likely to invoke on the call path
 // are listed, mirroring the ARM64 table's selection.
 //
-// P6d: like the other tables, the number -> semantic-handler binding lives
+// like the other tables, the number -> semantic-handler binding lives
 // here in the platform package; kernel exposes semantics only.
 const (
 	SYSA_exit              = 1

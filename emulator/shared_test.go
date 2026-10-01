@@ -9,7 +9,7 @@ import (
 )
 
 // Phase B integration: read-only module pages shared via uc_mem_map_ptr.
-// P2.5d: Replace is Function Interposition (an execution hook), so it no
+// Replace is Function Interposition (an execution hook), so it no
 // longer privatizes — the shared pages stay shared in every engine, and
 // per-engine isolation comes from hooks being per-engine state.
 

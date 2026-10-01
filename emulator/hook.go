@@ -1,6 +1,6 @@
 package emulator
 
-// P9 Public Semantic API — hook context. The facade layer over the frozen
+// Public Semantic API — hook context. The facade layer over the frozen
 // core: callers ask for WHAT they want to know (arguments, return address,
 // register roles); how the CPU actually delivers it stays in the arch
 // packages. See the Portable-vs-Advanced split in doc.go.
@@ -56,7 +56,7 @@ func (k HookKind) String() string {
 // ErrUnsupportedRole: the architecture could answer; the context cannot.
 var ErrContextUnavailable = errors.New("emulator: not answerable in this hook context")
 
-// HookContext is the Portable semantic view of a hook firing (P9). Hook
+// HookContext is the Portable semantic view of a hook firing . Hook
 // implements it; consumers should type callbacks against this interface so
 // the same code ports across ARM64 / ARM32 / AMD64.
 type HookContext interface {
@@ -89,7 +89,7 @@ var _ HookContext = (*Hook)(nil)
 func (h *Hook) Kind() HookKind { return h.kind }
 
 // ReadRole implements HookContext: read a register by ABI role through the
-// arch's RoleReader (P9). Loudly unsupported roles never return a silent
+// arch's RoleReader . Loudly unsupported roles never return a silent
 // zero.
 func (h *Hook) ReadRole(role RegisterRole) (uint64, error) {
 	rr, ok := h.e.target.Arch.(arch.RoleReader)

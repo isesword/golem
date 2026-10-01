@@ -8,7 +8,7 @@ import (
 	"github.com/isesword/golem/internal/memory"
 )
 
-// P3.5 HostResolver / UnresolvedStubResolver tests (DESIGN.md §3.8): the
+// .5 HostResolver / UnresolvedStubResolver tests (DESIGN.md §3.8): the
 // interpose→loader adapter contract — host symbol → stub guest address with
 // Kind SymbolHostStub, stub reuse across repeated resolutions, decline on
 // unbound names, and the weak-undefined ELF rule in the terminal fallback.
@@ -89,7 +89,7 @@ func TestHostResolverStubReuse(t *testing.T) {
 // Test ③: weak undefined resolves to address 0 WITHOUT error and WITHOUT
 // consuming a stub slot (ELF semantics); a strong unresolved symbol still
 // gets the documented lenient fallback stub (golem's historical semantics —
-// kept deliberately, see DESIGN.md §6 P3.5 notes), deduped by name.
+// kept deliberately, see DESIGN.md §6 notes), deduped by name.
 func TestUnresolvedStubResolverWeakVsStrong(t *testing.T) {
 	_, fr, _, as := newResolverFixture(t)
 

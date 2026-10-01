@@ -1,13 +1,13 @@
 // Package arm64 implements the Mach-O/ARM64 Relocator: the relocation
 // SEMANTICS of the dyld rebase/bind opcodes the loader/macho parser expands
-// into loader.Reloc entries (P5b), mirroring loader/elf/arm64. Memory layout
+// into loader.Reloc entries, mirroring loader/elf/arm64. Memory layout
 // — segment mapping, shareability, protections — stays in loader.Plan; this
 // package only knows how one relocation entry is applied.
 //
 // Registers itself under (FormatMachO, emu.ArchARM64) via init(); import it
 // (blank) from the composition root. ARM64E authenticated (chained) fixups
 // are deliberately NOT here: the parser rejects LC_DYLD_CHAINED_FIXUPS at
-// load time, so a relocator never meets them (the Variant-gated P5c world).
+// load time, so a relocator never meets them (the Variant-gated world).
 package arm64
 
 import (
@@ -25,7 +25,7 @@ type relocator struct{}
 
 // Apply writes one relocation into guest memory. r.Offset is image-relative;
 // base is the per-engine load bias; res resolves imported symbols through the
-// P3.5 SymbolResolver contract — the result is always a guest address, so a
+// .5 SymbolResolver contract — the result is always a guest address, so a
 // host-interposed symbol is indistinguishable from a guest one here.
 func (relocator) Apply(b emu.Backend, img *loader.Image, r loader.Reloc, base uint64, res loader.SymbolResolver) error {
 	target := base + r.Offset

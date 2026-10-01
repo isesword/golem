@@ -9,7 +9,7 @@ import (
 	"github.com/isesword/golem/internal/loader"
 )
 
-// P3.5 wiring tests: the emulator's boot resolver chain — HostResolver
+// .5 wiring tests: the emulator's boot resolver chain — HostResolver
 // (InterposeTable) → DynamicLinker global scope → UnresolvedStubResolver —
 // replaces the old resolveSymbol if-else. These tests pin the assembled
 // semantics end to end, including the trap-path dispatch back into the
@@ -96,7 +96,7 @@ func TestBootResolverChainSemantics(t *testing.T) {
 }
 
 // JNIEnv/JavaVM stubs (StubHostCall kind, non-"host:" names) must still fall
-// through to the unresolved-stub path when not in jniDispatch — the P3.5
+// through to the unresolved-stub path when not in jniDispatch — the.5
 // trap-dispatch rewrite must not misclassify them.
 func TestJavaVMStubStillFallsThrough(t *testing.T) {
 	be := &trapBE{}

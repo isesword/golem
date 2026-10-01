@@ -27,7 +27,7 @@ const BrkBase = 0x30000000
 // MaxGuestIO bounds every guest-supplied byte count that would become a
 // HOST allocation or copy (getrandom fill, writable-fd write capture, JNI
 // byte arrays). 64 MiB is far above any legitimate bionic/JNI traffic and
-// far below OOM territory. Policy (P7.6): a guest length never converts
+// far below OOM territory. Policy a guest length never converts
 // directly into a host allocation size — over-cap requests fail loudly
 // (errno / JNI NULL / pending exception) instead of allocating.
 const MaxGuestIO = 64 << 20
@@ -36,7 +36,7 @@ const MaxGuestIO = 64 << 20
 // It is deliberately NOT a wire encoding: how an Errno reaches the guest
 // (Linux: x0 = -errno; Darwin: x0 = +errno + carry flag) is the transport's
 // business. The numeric values below are the Linux asm-generic assignments;
-// a Darwin transport must translate them to Darwin's numbering (P5b).
+// a Darwin transport must translate them to Darwin's numbering .
 type Errno int
 
 const (
@@ -218,7 +218,7 @@ type Context struct {
 	// The emulator installs a profile-backed clock here when a device liveness
 	// profile is configured, so syscall-time and JNI-time agree.
 	Clock Clock
-	// Uname is the guest-visible utsname identity (P7.5b), supplied by the
+	// Uname is the guest-visible utsname identity, supplied by the
 	// platform personality as pure data and injected at wiring time. The
 	// uname handler only encodes it — deciding WHO the guest is (sysname,
 	// machine, release) is platform business. nil = the platform bound no
@@ -430,7 +430,7 @@ func SysWrite(c *Context, f *SyscallFrame) Result {
 	// writable file fd -> store into the overlay
 	if f := c.fdTable()[int32(fd)]; f != nil && f.writable {
 		if n > MaxGuestIO {
-			return Result{Errno: EINVAL} // P7.6: a guest count never sizes a host alloc
+			return Result{Errno: EINVAL} // a guest count never sizes a host alloc
 		}
 		d, err := c.B.MemRead(emu.GuestAddr(buf), n)
 		if err != nil {
@@ -841,7 +841,7 @@ func SysGetrandom(c *Context, f *SyscallFrame) Result {
 	a := f.Args
 	n := a[1]
 	if n > MaxGuestIO {
-		return Result{Errno: EINVAL} // P7.6: a guest count never sizes a host alloc
+		return Result{Errno: EINVAL} // a guest count never sizes a host alloc
 	}
 	buf := make([]byte, n)
 	if c.TrueRandom {
@@ -878,7 +878,7 @@ func SysMprotect(c *Context, f *SyscallFrame) Result {
 
 func pageUp(x uint64) uint64 { return (x + 0xfff) &^ 0xfff }
 
-// UnameInfo is the platform-supplied utsname identity (P7.5b): per-arch
+// UnameInfo is the platform-supplied utsname identity per-arch
 // personality data selected at Bind time (e.g. Android: aarch64 / armv7l /
 // x86_64), injected into Context by the composition root. The utsname LAYOUT
 // is identical on every Linux architecture (fixed 65-byte fields), so the

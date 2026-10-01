@@ -1,7 +1,7 @@
 // Package amd64 assigns the abstract emu.Reg ids for the AMD64 (x86-64)
 // register set and registers the (Arch, CallABI, StubEncoder, CPUFeatures)
 // quad for (IDAMD64, VariantGeneric) — the second architecture of the
-// arch/platform abstraction (P5a), mirroring internal/arch/arm64.
+// arch/platform abstraction, mirroring internal/arch/arm64.
 //
 // Like arm64's ids, these numbers are the single source of truth for register
 // identity: callers write amd64.RAX & co., and each CPU backend translates

@@ -1,6 +1,6 @@
 package emulator
 
-// P9 Public Semantic API — register roles. Read a register by WHAT IT MEANS
+// Public Semantic API — register roles. Read a register by WHAT IT MEANS
 // in the ABI (link register, frame pointer, TLS base), never by its
 // per-architecture name. Role reads are CPU-state observation: valid at any
 // hook kind, at any PC.

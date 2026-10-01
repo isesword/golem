@@ -12,7 +12,7 @@ import (
 )
 
 // Factory builds one platform's complete Runtime from a minimal BindContext
-// (P5b.5, DESIGN.md §3.4/§4). The composition root (emulator.New) resolves
+// (DESIGN.md §3.4/§4). The composition root (emulator.New) resolves
 // the factory registered under the probed Target.Platform and binds it; the
 // emulator itself holds NO per-platform selection logic (no switch on
 // platform.ID), so a new platform personality is added by registering a new
@@ -43,7 +43,7 @@ type BindContext struct {
 	Config Config
 }
 
-// Runtime is the composition product of a platform Factory (P5b.5): the
+// Runtime is the composition product of a platform Factory the
 // complete platform personality, produced ONCE at boot and consumed as pure
 // data by the emulator. It is deliberately a struct of data, not a fat
 // interface and not three separate registries: every field is either a value
@@ -53,26 +53,26 @@ type BindContext struct {
 // platform identity the emulator dispatches on.
 type Runtime struct {
 	// Startup builds the guest process initial state once per emulator
-	// (P4d, invariant 10): the auxv data block on Linux-flavoured
+	// (invariant 10): the auxv data block on Linux-flavoured
 	// platforms, an exec-style initial stack frame on Darwin.
 	Startup StartupABI
 	// AuxvLookup serves getauxval(type) from Startup's built vector —
 	// typically Startup's own Lookup method bound at Bind time, so the
 	// interposed getauxval and the data block can never drift apart (the
-	// P4d single-source invariant, without the emulator type-asserting the
+	// single-source invariant, without the emulator type-asserting the
 	// StartupABI). nil = the platform has no auxv; the emulator then binds
 	// no getauxval host function at all.
 	AuxvLookup func(typ uint64) uint64
 	// StackTopReserve is the SP-headroom constant the boot sets the initial
-	// SP from and Startup builds against (P4d): it travels with the
+	// SP from and Startup builds against it travels with the
 	// platform so the two never drift.
 	StackTopReserve uint64
 
 	// Layout plans the initial guest address space from arch capabilities
-	// plus user overrides (P4c) — pure data, no Map/Alloc/Reserve.
+	// plus user overrides — pure data, no Map/Alloc/Reserve.
 	Layout LayoutPolicy
 
-	// Syscall personality (P5a.5 shape): the register transport, the
+	// Syscall personality (shape): the register transport, the
 	// number→handler dispatch table and the guest struct codecs the
 	// emulator injects into kernel.Context, plus the syscall numbers the
 	// cooperative scheduler intercepts before the kernel table sees them.
@@ -89,7 +89,7 @@ type Runtime struct {
 	// libraries; the guest then links against its own image plus host
 	// stubs only.
 	RuntimeLibs []string
-	// Uname is the guest-visible utsname identity (P7.5b), per-arch data
+	// Uname is the guest-visible utsname identity, per-arch data
 	// selected at Bind time (Android: aarch64 / armv7l / x86_64). The
 	// kernel's uname handler encodes exactly this — the identity is
 	// platform business, never a kernel-side constant. nil = the platform

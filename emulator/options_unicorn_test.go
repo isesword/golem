@@ -10,7 +10,7 @@ import (
 	"github.com/isesword/golem/internal/platform/android"
 )
 
-// End-to-end equivalence (P4a): booting through the functional-options path
+// End-to-end equivalence booting through the functional-options path
 // (WithPlatformConfig + android.NewConfig) must produce the same observable
 // behavior as the deprecated Config.Android legacy path — here the
 // ReplaceFns export interposition. The legacy twin is

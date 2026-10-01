@@ -1,6 +1,6 @@
 //go:build unicorn
 
-// AMD64 (x86-64) support for the unicorn backend (P5a): engine creation
+// AMD64 (x86-64) support for the unicorn backend engine creation
 // constants, the UC_X86_REG_* translation table, and the syscall-instruction
 // trap channel (UC_HOOK_INSN / UC_X86_INS_SYSCALL).
 //
@@ -106,7 +106,7 @@ func regMapAMD64(r Reg) int32 {
 //
 // On x86-64 the guest `syscall` instruction is NOT an interrupt: unicorn
 // raises UC_ERR_EXCEPTION for it unless a UC_HOOK_INSN hook for
-// UC_X86_INS_SYSCALL is installed (verified by live-engine probe, P5a). Host
+// UC_X86_INS_SYSCALL is installed (verified by live-engine probe). Host
 // stubs (`int3`) keep using the interrupt channel (UC_HOOK_INTR, intno 3) —
 // the two channels are independent by design.
 //

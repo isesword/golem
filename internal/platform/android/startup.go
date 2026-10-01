@@ -12,7 +12,7 @@ import (
 )
 
 // Linux auxv type numbers (ELF ABI; these values are part of the Linux user
-// ABI, same source the pre-P4d interposed getauxval hardcoded).
+// ABI, same source the legacy interposed getauxval hardcoded).
 const (
 	atNull   = 0
 	atPhdr   = 3
@@ -26,7 +26,7 @@ const (
 )
 
 // StackTopReserve is the headroom between the initial SP and the top of the
-// stack mapping — the exact geometry the emulator booted with before P4d
+// stack mapping — the exact geometry the emulator booted with originally
 // (SP = StackBase+StackSize-0x200). StartupABI owns this constant now
 // (invariant 10: the initial process image is platform's): the boot sets SP
 // from it, and BuildInitialState parks the auxv block just below it.
@@ -34,12 +34,12 @@ const StackTopReserve = 0x200
 
 // auxvRandomSeed is the FIXED seed for the auxv AT_RANDOM 16 bytes: they come
 // from kernel.DeterministicRandom — the same deterministic stream the
-// getrandom syscall serves (P4d: one deterministic randomness source) — not
+// getrandom syscall serves (one deterministic randomness source) — not
 // from an ad-hoc per-site byte string. Fixed seed => reproducible across runs,
 // exactly like the deterministic getrandom mode.
 const auxvRandomSeed = 0x676F6C656D2D6164 // "golem-ad" (Android), little-endian ASCII
 
-// StartupABI is the Android personality's platform.StartupABI (P4d, DESIGN.md
+// StartupABI is the Android personality's platform.StartupABI (DESIGN.md
 // §3.4/§6).
 //
 // Landing form — auxv DATA BLOCK, not an exec-style initial stack frame.
@@ -55,7 +55,7 @@ const auxvRandomSeed = 0x676F6C656D2D6164 // "golem-ad" (Android), little-endian
 //
 // The HWCAP/HWCAP2 bitmaps come exclusively from StartupContext.Features
 // (arch.CPUFeatures, carried by the immutable Target). With the current empty
-// arm64 feature set both are 0 — bit-identical to the pre-P4d behavior.
+// arm64 feature set both are 0 — bit-identical to the legacy behavior.
 type StartupABI struct {
 	auxv       []platform.AuxvEntry // the built vector, AT_NULL-terminated
 	randomAddr emu.GuestAddr        // what AT_RANDOM points at
@@ -73,8 +73,8 @@ var _ platform.StartupABI = (*StartupABI)(nil)
 //
 // ctx.Image may be nil (bionic-only boot, no main module yet): AT_PHDR /
 // AT_PHNUM / AT_ENTRY are then omitted and getauxval answers 0 for them, the
-// pre-P4d behavior for unknown keys. This lazy, metadata-less build is a
-// deliberate P4e decision, not an accident — see platform.StartupABI for the
+// legacy behavior for unknown keys. This lazy, metadata-less build is a
+// deliberate decision, not an accident — see platform.StartupABI for the
 // ordering rule.
 func (s *StartupABI) BuildInitialState(ctx *platform.StartupContext) error {
 	if s.built {
@@ -152,7 +152,7 @@ func (s *StartupABI) BuildInitialState(ctx *platform.StartupContext) error {
 // Auxv returns the built auxv vector (AT_NULL-terminated), nil before
 // BuildInitialState. The slice is shared — callers must not mutate it. The
 // interposed getauxval serves from exactly this vector, so auxv data and the
-// CPU-feature query can never drift apart (P4d single source of truth).
+// CPU-feature query can never drift apart (single source of truth).
 func (s *StartupABI) Auxv() []platform.AuxvEntry { return s.auxv }
 
 // ATRandom returns the guest pointer AT_RANDOM carries (16 readable bytes in
@@ -160,7 +160,7 @@ func (s *StartupABI) Auxv() []platform.AuxvEntry { return s.auxv }
 func (s *StartupABI) ATRandom() emu.GuestAddr { return s.randomAddr }
 
 // Lookup is the getauxval semantics over the built vector: the value for tag
-// t, or 0 when the vector carries no such entry (the pre-P4d default).
+// t, or 0 when the vector carries no such entry (the legacy default).
 func (s *StartupABI) Lookup(t uint64) uint64 {
 	for _, en := range s.auxv {
 		if en.Type == t {

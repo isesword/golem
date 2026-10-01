@@ -8,7 +8,7 @@ import (
 	"github.com/isesword/golem/internal/emu"
 )
 
-// TestReadRole pins the P9 role reader (arch layer): PC/SP/LR/TLS are plain
+// TestReadRole pins the role reader (arch layer): PC/SP/LR/TLS are plain
 // register reads; RoleFP is X29, which has NO abstract id and therefore
 // travels through the register-file dump (file index 29).
 func TestReadRole(t *testing.T) {
@@ -52,7 +52,7 @@ func (r *regRec) ReadGPRegs() ([]uint64, error) {
 	return dump, nil
 }
 
-// TestReadReturnAddress pins the P9 observation semantic at the arch layer:
+// TestReadReturnAddress pins the observation semantic at the arch layer:
 // at function entry the call returns to X30.
 func TestReadReturnAddress(t *testing.T) {
 	_, c, _, _ := resolveQuad(t)

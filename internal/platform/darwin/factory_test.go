@@ -21,7 +21,7 @@ func TestFactoryRegistered(t *testing.T) {
 	}
 }
 
-// TestFactoryBindARM64 pins the Runtime the factory produces: the thin P5b
+// TestFactoryBindARM64 pins the Runtime the factory produces: the thin
 // Darwin personality as data — syscall pieces and layout present, every
 // Android-only surface provably absent.
 func TestFactoryBindARM64(t *testing.T) {
@@ -45,7 +45,7 @@ func TestFactoryBindARM64(t *testing.T) {
 	if len(rt.ReplaceFns) != 1 {
 		t.Fatalf("ReplaceFns = %v, want the config's map", rt.ReplaceFns)
 	}
-	// The absent surfaces are the P5b contract: no auxv, no runtime
+	// The absent surfaces are the contract: no auxv, no runtime
 	// libraries, no TLS init, no pthread stubs, no scheduler interception,
 	// no Java/device interop.
 	if rt.AuxvLookup != nil {

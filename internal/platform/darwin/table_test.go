@@ -7,7 +7,7 @@ import (
 )
 
 // TestTableBindings pins the XNU number -> semantic-handler binding and the
-// trace names. The table is deliberately minimal (P5b): every other number —
+// trace names. The table is deliberately minimal every other number —
 // and every Mach trap — misses and falls through to ENOSYS.
 func TestTableBindings(t *testing.T) {
 	tab := NewARM64SyscallTable(kernel.DefaultHandlers())

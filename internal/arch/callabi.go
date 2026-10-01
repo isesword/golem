@@ -10,8 +10,8 @@ type CallResult struct {
 	Value2 uint64
 }
 
-// ArgKind is the width/alignment class of one call argument (P6,
-// Architecture Exception #1). It exists because the pre-P6 []uint64 could
+// ArgKind is the width/alignment class of one call argument (Architecture
+// Exception #1). It exists because the legacy []uint64 could
 // not distinguish (uint32)1 from (uint64)1 — a distinction 32-bit ABIs
 // MUST make: AAPCS32 and the Linux EABI place a 64-bit argument in an
 // EVEN-NUMBERED register pair (r0:r1 or r2:r3), so a preceding 32-bit
@@ -21,7 +21,7 @@ type ArgKind uint8
 const (
 	// ArgWord is one machine word of the TARGET's natural width: a single
 	// 64-bit slot on 64-bit ABIs, one 32-bit register/stack word (the low
-	// half of Value) on 32-bit ABIs. This is the pre-P6 []uint64 semantics —
+	// half of Value) on 32-bit ABIs. This is the legacy []uint64 semantics —
 	// the default for callers with no width knowledge (plain integer args,
 	// guest register values forwarded verbatim).
 	ArgWord ArgKind = iota
@@ -42,17 +42,17 @@ const (
 )
 
 // CallArg is one typed call argument: the value plus its width/alignment
-// class (P6, Architecture Exception #1 — see ArgKind). 64-bit ABIs
+// class (Architecture Exception #1 — see ArgKind). 64-bit ABIs
 // (AAPCS64, SysV AMD64) treat every kind as a single 64-bit slot, so typed
 // and untyped calls are bit-identical there; the kind becomes load-bearing
-// on 32-bit ABIs (AAPCS32, P6b).
+// on 32-bit ABIs (AAPCS32).
 type CallArg struct {
 	Value uint64
 	Kind  ArgKind
 }
 
 // WordArgs maps plain 64-bit words to ArgWord CallArgs — the convenience
-// entry for callers with no width/alignment knowledge (exactly the pre-P6
+// entry for callers with no width/alignment knowledge (exactly the legacy
 // []uint64 semantics).
 func WordArgs(args ...uint64) []CallArg {
 	if len(args) == 0 {
@@ -83,7 +83,7 @@ type CallRequest struct {
 // lives here, not on the CPU — ARM has an LR register, AMD64 keeps the return
 // address on the stack (invariant 13).
 //
-// P5a.5 reshaped the interface around whole-call operations: call
+// .5 reshaped the interface around whole-call operations: call
 // establishment (PrepareCall), argument reads (ReadArgs) and result access
 // (WriteResult/ReadResult) are convention-level transactions, so callers
 // never name an argument/result/link register. Register-shaped questions are
@@ -92,13 +92,13 @@ type CallRequest struct {
 // convention whose arguments do not map to plain registers is not forced to
 // invent fake ones.
 //
-// P6 (Architecture Exception #1) typed the arguments: PrepareCall consumes
+// (Architecture Exception #1) typed the arguments: PrepareCall consumes
 // []CallArg. Implementations for 64-bit conventions (AAPCS64, SysV AMD64)
-// place every ArgKind in one 64-bit slot — bit-identical to the pre-P6
+// place every ArgKind in one 64-bit slot — bit-identical to the legacy
 // behavior; a 32-bit convention (AAPCS32) interprets ArgWord/ArgPtr as one
 // 32-bit word and ArgU64/ArgI64 as an even register pair / 8-byte stack
 // slot. ReadArgs still reports plain words (the pair interpretation is the
-// reader's convention detail, P6b).
+// reader's convention detail).
 type CallABI interface {
 	// PrepareCall establishes a call frame for req on the current thread's
 	// existing stack and registers:
@@ -138,7 +138,7 @@ type CallABI interface {
 	// back to the guest caller through ReturnFromCall.
 	ReturnFromCall(b emu.Backend) error
 
-	// ReadReturnAddress is the P9 OBSERVATION semantic — "where does the
+	// ReadReturnAddress is the OBSERVATION semantic — "where does the
 	// in-flight call return to", per convention:
 	//
 	//	ARM64:       X30 (LR)

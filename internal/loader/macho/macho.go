@@ -1,5 +1,5 @@
 // Package macho parses a Mach-O object into a format-agnostic loader.Image
-// (P5b): LC_SEGMENT_64 load segments, the LC_SYMTAB symbol table, and the
+// : LC_SEGMENT_64 load segments, the LC_SYMTAB symbol table, and the
 // classic LC_DYLD_INFO(_ONLY) rebase/bind opcode streams expanded into
 // loader.Reloc entries. Pure stdlib (debug/macho) for the container; the
 // dyld opcode streams are decoded here byte by byte (debug/macho does not
@@ -60,7 +60,7 @@ const (
 	lcReqDyld           = 0x80000000
 	lcDyldInfo          = 0x22
 	lcDyldInfoOnly      = lcReqDyld | 0x22
-	lcDyldChainedFixups = 0x34 // LC_DYLD_CHAINED_FIXUPS — decoded in chained.go (P5c)
+	lcDyldChainedFixups = 0x34 // LC_DYLD_CHAINED_FIXUPS — decoded in chained.go
 	lcMain              = 0x28 // LC_MAIN (always carries LC_REQ_DYLD in practice)
 
 	rebaseOpDone             = 0x00
@@ -140,7 +140,7 @@ func Parse(path string) (*loader.Image, error) {
 	for _, l := range f.Loads {
 		switch lc := l.(type) {
 		case *debugmacho.Segment:
-			// P7.5d: same contract as the ELF parser — a segment claiming
+			// same contract as the ELF parser — a segment claiming
 			// more file bytes than the file HAS is corrupt/truncated;
 			// refuse with a parse error instead of slicing out of range at
 			// Plan time.
@@ -238,7 +238,7 @@ func Parse(path string) (*loader.Image, error) {
 		}
 		img.Relocs = append(img.Relocs, binds...)
 	}
-	// Chained fixups (P5c): the LC_DYLD_CHAINED_FIXUPS payload expands into
+	// Chained fixups the LC_DYLD_CHAINED_FIXUPS payload expands into
 	// the same loader.Reloc contract (chained.go), so the registered
 	// relocator applies it unchanged.
 	if chainedSize > 0 {
@@ -258,7 +258,7 @@ func Parse(path string) (*loader.Image, error) {
 	return img, nil
 }
 
-// machoDyldInfo mirrors the LC_DYLD_INFO(_ONLY) payload (only the fields P5b
+// machoDyldInfo mirrors the LC_DYLD_INFO(_ONLY) payload (only the fields it
 // consumes).
 type machoDyldInfo struct {
 	rebaseOff, rebaseSize uint32

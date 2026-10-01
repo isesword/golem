@@ -7,7 +7,7 @@ import (
 )
 
 // testLayout mirrors the Android/AArch64 LayoutPolicy output numerically
-// (P4c) so these tests also pin the real region arithmetic: the module
+// so these tests also pin the real region arithmetic: the module
 // window, brk heap and mmap arena tile [0x12000000, 0x60000000) contiguously
 // and abut the stub region.
 var testLayout = Layout{
@@ -65,7 +65,7 @@ func TestAddressSpaceBumpAlloc(t *testing.T) {
 
 func TestAddressSpaceAllocExhaustion(t *testing.T) {
 	as := NewAddressSpace(testLayout)
-	// The module window ends exactly at the heap region (P4c ModuleRegion
+	// The module window ends exactly at the heap region (ModuleRegion
 	// semantics): an allocation that would cross ModuleRegion.End must fail,
 	// not spill into the heap — even before anything is reserved.
 	mw := testLayout.ModuleRegion
@@ -87,9 +87,9 @@ func TestAddressSpaceAllocExhaustion(t *testing.T) {
 	}
 }
 
-// TestAddressSpaceModuleWindowIsTight pins the P4c ModuleRegion semantics:
+// TestAddressSpaceModuleWindowIsTight pins the ModuleRegion semantics:
 // the module bump window ends at the heap base, so the exhaustion check
-// fires at exactly the address where the pre-P4c arena would have collided
+// fires at exactly the address where the legacy arena would have collided
 // with the heap reservation — same boundary, now explicit region data.
 func TestAddressSpaceModuleWindowIsTight(t *testing.T) {
 	as := NewAddressSpace(testLayout)
@@ -170,7 +170,7 @@ func TestAddressSpaceReserveConflicts(t *testing.T) {
 func TestAddressSpaceReservedSubArenasBlockBump(t *testing.T) {
 	as := NewAddressSpace(testLayout)
 	// Register the brk heap and mmap arena from the Layout's region data,
-	// exactly as the emulator does at boot (P4c: no boundary arithmetic at
+	// exactly as the emulator does at boot (no boundary arithmetic at
 	// the call site).
 	if err := as.Reserve(emu.GuestAddr(testLayout.HeapRegion.Addr), testLayout.HeapRegion.Size, PurposeHeap); err != nil {
 		t.Fatal(err)

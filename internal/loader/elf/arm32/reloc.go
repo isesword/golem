@@ -1,7 +1,6 @@
 // Package arm32 implements the ELF/ARM (32-bit, armv7 EABI) Relocator: the
 // relocation SEMANTICS (what each R_ARM_* code writes into guest memory),
-// the ARM32 counterpart of loader/elf/arm64 and loader/elf/amd64 (P6c,
-// DESIGN.md §3.3). Memory layout — segment mapping, shareability,
+// the ARM32 counterpart of loader/elf/arm64 and loader/elf/amd64 (DESIGN.md §3.3). Memory layout — segment mapping, shareability,
 // protections — stays in loader.Plan; this package only knows how one
 // relocation entry is applied.
 //
@@ -11,7 +10,7 @@
 // REL, not RELA: 32-bit ARM dynamic objects carry DT_REL (SHT_REL), whose
 // entries have NO explicit addend. The addend handling is PER TYPE (AAELF
 // Table 4-9, and bionic's linker agrees — verified against the real lld +
-// API-23 bionic behavior, P7):
+// API-23 bionic behavior):
 //
 //	R_ARM_RELATIVE (23):  *P = B + A   (A = stored word — a genuine addend)
 //	R_ARM_ABS32    (2):   *P = S + A   (A = stored word)
@@ -23,7 +22,7 @@
 //	                                   image-relative PLT trampoline address
 //	                                   for LAZY binding; the dynamic linker
 //	                                   overwrites it with S. Adding it is the
-//	                                   classic RELA-habit bug — P7 hit it for
+//	                                   classic RELA-habit bug — hit it for
 //	                                   real: every PLT call landed S+0x690.)
 //
 // (B = load bias, S = resolved symbol value, A = addend.) TLS relocations
@@ -48,7 +47,7 @@ type relocator struct{}
 
 // Apply writes one relocation into guest memory. r.Offset is image-relative;
 // base is the per-engine load bias; res resolves imported symbols through the
-// P3.5 SymbolResolver contract — the result is always a guest address, so a
+// .5 SymbolResolver contract — the result is always a guest address, so a
 // host-interposed symbol is indistinguishable from a guest one here.
 //
 // The addend is read from the target's stored word ONLY for the types whose

@@ -406,7 +406,7 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 			}
 		}
 	case jniNewByteArray:
-		// P7.6: a guest-supplied length never sizes a host allocation —
+		// a guest-supplied length never sizes a host allocation —
 		// over-cap refuses with JNI NULL (the JNI contract's own failure
 		// answer for NewByteArray), never a giant make().
 		if ln := e.jarg(b, 1); ln > kernel.MaxGuestIO {
@@ -437,7 +437,7 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 	case jniGetByteArrayRegion: // (jarray, start, len, buf)
 		data := e.gbytes(e.jarg(b, 1))
 		start, ln, buf := e.jarg(b, 2), e.jarg(b, 3), e.jarg(b, 4)
-		// P7.6: uint64-safe bounds — the old int(start+ln) WRAPPED for huge
+		// uint64-safe bounds — the old int(start+ln) WRAPPED for huge
 		// guest values (2^63+2^63 → 0) and sliced out of range. Out of
 		// range = pending exception, like ART's
 		// ArrayIndexOutOfBoundsException — never a silent skip.
@@ -451,7 +451,7 @@ func (e *Emulator) handleJNI(idx int, b emu.Backend) {
 		start, ln, buf := e.jarg(b, 2), e.jarg(b, 3), e.jarg(b, 4)
 		if o != nil {
 			if bs, ok := o.Value.([]byte); ok {
-				// P7.6: uint64-safe bounds (same wrap as Get); the guard
+				// uint64-safe bounds (same wrap as Get); the guard
 				// also bounds the MemRead host allocation below, since ln
 				// is guest-controlled and bs is already ≤ MaxGuestIO.
 				if start > uint64(len(bs)) || ln > uint64(len(bs))-start {

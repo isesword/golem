@@ -1,10 +1,10 @@
 //go:build unicorn && (darwin || linux)
 
-// P7 acceptance: the REAL-WORLD Android/ARM32 runtime — a full boot with
+// acceptance: the REAL-WORLD Android/ARM32 runtime — a full boot with
 // the API-23 armeabi-v7a bionic (real libc/libm/libdl/liblog mapped and
 // relocated from the asset tree) under an NDK-built JNI library whose
 // DT_NEEDED chain resolves through the loaded modules. This is the
-// product-level step past P6e's architecture proof:
+// product-level step past the arm32 boot proof above:
 //
 //	boot (4 bionic libs + fixture) -> JNI_OnLoad runs (the emulator's
 //	JavaVM contract) -> native calls -> REAL libc work (malloc/snprintf/
@@ -80,7 +80,7 @@ func TestBootAndroidARM32RealBionicJNI(t *testing.T) {
 	if got := call("Java_golem_p7_Native_heapRoundTrip", env, 0, 7); got != 15 {
 		t.Fatalf("heapRoundTrip(7) = %d, want 15 (malloc/snprintf/strlen/memcpy/free in real bionic)", got)
 	}
-	// Real syscall through the libc wrapper (r7/svc into the P6d table).
+	// Real syscall through the libc wrapper (r7/svc into the table).
 	if got := call("Java_golem_p7_Native_getpidViaLibc", env, 0); got != 4242 {
 		t.Fatalf("getpidViaLibc() = %d, want 4242", got)
 	}

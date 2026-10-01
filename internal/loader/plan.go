@@ -36,7 +36,7 @@ type Plan struct {
 	// only), which panicked the moment a shareable map followed a
 	// non-shareable one — ELF images happened to order text before data, so
 	// the mis-indexing stayed latent until Mach-O's __LINKEDIT (read-only,
-	// shareable) followed __DATA (writable) in P5b.
+	// shareable) followed __DATA (writable) in.
 }
 
 // MapOp is one segment mapping.
@@ -60,7 +60,7 @@ type RelocOp struct {
 // Apply executes the plan against a backend: maps segments (shareable ones
 // via MemMapPtr from the plan's shared host buffers), applies every
 // relocation with per-engine symbol resolution through the SymbolResolver
-// (P3.5), and finalizes the image (re-protects segments to their declared
+// and finalizes the image (re-protects segments to their declared
 // permissions). The full load lifecycle (DESIGN.md §3.9, invariant 11):
 //
 //	Map image → Relocate/bind → FinalizeImage (RW→RX) → runtime
@@ -97,7 +97,7 @@ func (p *Plan) apply(be emu.Backend, base uint64, res SymbolResolver, share bool
 		// Relocation SEMANTICS live in the (Format, Arch) Relocator
 		// (loader/elf/arm64, registered via init); the plan owns only the
 		// memory layout (maps, shareability, protections). Symbol resolution
-		// goes through the SymbolResolver contract (P3.5) — the Relocator
+		// goes through the SymbolResolver contract — the Relocator
 		// never sees anything but guest addresses.
 		rc, err := p.relocator()
 		if err != nil {
@@ -122,7 +122,7 @@ func (p *Plan) apply(be emu.Backend, base uint64, res SymbolResolver, share bool
 // relocations, rebasing, binding) are legal only BEFORE this point.
 //
 // The re-protection itself has always been the last step of plan application;
-// P3.5 names the boundary so it can be called — and tested — on its own.
+// .5 names the boundary so it can be called — and tested — on its own.
 // Shareable maps created via MemMapPtr were already at their final protection
 // (nothing wrote them), so they are skipped.
 func (p *Plan) FinalizeImage(be emu.Backend, base uint64) error {

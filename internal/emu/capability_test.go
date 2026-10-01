@@ -5,7 +5,7 @@ import (
 	"unsafe"
 )
 
-// P2.5a capability-probe tests (DESIGN.md invariant 14): consumers detect an
+// .5a capability-probe tests (DESIGN.md invariant 14): consumers detect an
 // optional engine ability by type-asserting the capability interface. A
 // backend that implements only the Backend core must fail EVERY capability
 // probe; one that implements a capability must pass exactly that probe.
@@ -114,7 +114,7 @@ func TestGuestAddr(t *testing.T) {
 	var _ MemWriteHookFunc = func(Backend, GuestAddr, int, int64) {}
 }
 
-// TestRegBatchWriterProbe: batch write is an OPTIONAL capability (P9.5a) —
+// TestRegBatchWriterProbe: batch write is an OPTIONAL capability —
 // a core-only backend must not satisfy it, a full-caps backend must.
 func TestRegBatchWriterProbe(t *testing.T) {
 	var core Backend = coreOnlyBE{}

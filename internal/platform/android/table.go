@@ -6,7 +6,7 @@ import "github.com/isesword/golem/internal/kernel"
 // handler set implements / that bionic is likely to invoke on the call path
 // are listed.
 //
-// P4b: the number -> semantic-handler binding lives here in the platform
+// the number -> semantic-handler binding lives here in the platform
 // package; kernel exposes semantics only (kernel.DefaultHandlers()) and has
 // no syscall-number knowledge.
 const (

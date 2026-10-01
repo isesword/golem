@@ -96,7 +96,7 @@ func TestParseFixture(t *testing.T) {
 	}
 }
 
-// TestParseRejectsChainedFixups retired in P5c: LC_DYLD_CHAINED_FIXUPS is
+// TestParseRejectsChainedFixups retired in: LC_DYLD_CHAINED_FIXUPS is
 // decoded now (chained.go); the minimal acceptance lives in
 // chained_test.go's TestParseChainedMinimal.
 

@@ -3,7 +3,7 @@
 // address-space LayoutPolicy, the StartupABI (auxv initial state), and the
 // typed boot Config.
 //
-// Assembly status (P5b.5): the platform.Factory lives in factory.go —
+// Assembly status the platform.Factory lives in factory.go —
 // registered under platform.Android from init(), it binds the complete
 // Runtime (startup/auxv, layout, syscall personality, runtime libraries,
 // bionic TLS init, ReplaceFns, pthread stubs, the Java/device interop
@@ -19,7 +19,7 @@ import (
 	"github.com/isesword/golem/internal/profile"
 )
 
-// Config is the Android personality's typed boot configuration (P4a,
+// Config is the Android personality's typed boot configuration (
 // DESIGN.md §3.6 invariant 4): the pieces that only make sense for an
 // Android-flavoured guest, carried to the composition root as a
 // platform.Config so emulator.Config stays platform-agnostic.

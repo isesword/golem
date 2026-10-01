@@ -7,7 +7,7 @@ import (
 )
 
 // TestPersonalityForARM64: the only supported combination — transport, table
-// and codecs all present, scheduler interception numbers all zero (P5b does
+// and codecs all present, scheduler interception numbers all zero (does
 // no Darwin fiber scheduling).
 func TestPersonalityForARM64(t *testing.T) {
 	p, err := SyscallPersonalityFor(arch.IDARM64)

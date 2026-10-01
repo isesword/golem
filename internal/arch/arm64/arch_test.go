@@ -88,7 +88,7 @@ func TestQuadRegistration(t *testing.T) {
 	}
 }
 
-// TestARM64EQuadRegistration pins the P5c variant contract: (IDARM64,
+// TestARM64EQuadRegistration pins the variant contract: (IDARM64,
 // VariantARM64E) resolves to the SAME quad components as VariantGeneric —
 // ARM64E is one engine architecture; the variant difference (authenticated
 // chained fixups) is the loader's business, not a forked core Arch.
@@ -103,9 +103,9 @@ func TestARM64EQuadRegistration(t *testing.T) {
 	}
 }
 
-// TestEmptyFeatures pins the P4d behavior-invariant red line: the arm64
+// TestEmptyFeatures pins the behavior-invariant red line: the arm64
 // CPUFeatures implementation is an EMPTY feature set, so the Linux auxv
-// bitmaps are exactly the pre-P4d hardcoded values AT_HWCAP=0 / AT_HWCAP2=0
+// bitmaps are exactly the legacy hardcoded values AT_HWCAP=0 / AT_HWCAP2=0
 // (advertise no optional CPU features).
 func TestEmptyFeatures(t *testing.T) {
 	_, _, _, f := resolveQuad(t)

@@ -8,7 +8,7 @@ import (
 	"github.com/isesword/golem/internal/loader"
 )
 
-// HostResolver is the interpose→loader adapter (DESIGN.md §3.8, P3.5): it
+// HostResolver is the interpose→loader adapter (DESIGN.md §3.8): it
 // implements loader.SymbolResolver over the InterposeTable, so a symbol bound
 // via BindSymbol resolves to a StubManager-materialized guest trampoline. The
 // host callable itself never crosses the boundary — ResolvedSymbol carries
@@ -60,7 +60,7 @@ func (r *HostResolver) Resolve(req loader.ResolveRequest) (loader.ResolvedSymbol
 // null-checks weak symbols before calling them).
 //
 // Like HostResolver it dedups by name: N relocations against the same
-// unresolved import share one stub slot (pre-P3.5 each relocation allocated
+// unresolved import share one stub slot (legacy each relocation allocated
 // its own).
 type UnresolvedStubResolver struct {
 	stubs StubManager

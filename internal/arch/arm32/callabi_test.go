@@ -67,7 +67,7 @@ func prepare(t *testing.T, entry emu.GuestAddr, args ...arch.CallArg) *regRec {
 }
 
 // TestPrepareCallPairMatrix pins the AAPCS32 register-pair rules — the
-// whole reason Architecture Exception #1 exists (P6a cases):
+// whole reason Architecture Exception #1 exists (cases):
 //
 //	f(u32 a, u64 b)       -> a=r0, r1 SKIPPED (never written), b=r2:r3
 //	f(u64 a, u32 b)       -> a=r0:r1, b=r2

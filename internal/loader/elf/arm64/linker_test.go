@@ -1,7 +1,7 @@
-// End-to-end linker test, moved from internal/loader in P3: parses a real
+// End-to-end linker test, moved from internal/loader in: parses a real
 // AArch64 ELF via the loader facade (parser registered by loader/elf) and
 // applies it through the (FormatELF, ArchARM64) Relocator registered by this
-// package. Assertions are unchanged from the pre-P3 test.
+// package. Assertions are unchanged from the legacy test.
 package arm64_test
 
 import (
@@ -92,7 +92,7 @@ func (m *memBE) ptrPage(pg uint64) ([]byte, bool) {
 
 // (page() consults m.ptrs directly; ptrPage kept for direct range probes in tests.)
 //
-// P2.5a: Backend's core interface is frozen — hooks/context/cache are
+// Backend's core interface is frozen — hooks/context/cache are
 // capability interfaces the linker never touches, so the fake carries none.
 func (m *memBE) RegRead(emu.Reg) (uint64, error) { return 0, nil }
 func (m *memBE) RegWrite(emu.Reg, uint64) error  { return nil }

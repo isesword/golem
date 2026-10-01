@@ -6,7 +6,7 @@ import (
 	"github.com/isesword/golem/internal/emu"
 )
 
-// DynamicLinker is the P3.5 skeleton of the module-graph component
+// DynamicLinker is the skeleton of the module-graph component
 // (DESIGN.md §3.3: Format parses, Relocator applies, SymbolResolver finds one
 // symbol, DynamicLinker owns the module graph / load order / symbol scope).
 // Today it records loaded images in load order and maintains the GLOBAL
@@ -41,7 +41,7 @@ func NewDynamicLinker() *DynamicLinker {
 
 // AddModule records a freshly loaded image: appended to the load order and
 // its exports folded into the global scope FIRST-WINS (a later module's
-// export never displaces an earlier one — the pre-P3.5 e.syms semantics,
+// export never displaces an earlier one — the legacy e.syms semantics,
 // which is also how bionic's libc.so keeps priority over the target .so).
 func (dl *DynamicLinker) AddModule(name string, img *Image, base uint64) *LinkedModule {
 	m := &LinkedModule{Name: name, Image: img, Base: base}

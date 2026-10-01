@@ -15,14 +15,14 @@ import (
 // phase (overridable), reporting Go-heap and process-RSS growth at each
 // checkpoint. The phases isolate the factors:
 //
-//	P1 purego dlopen     — binding overhead: libunicorn mapping (lazy, RSS),
+//	purego dlopen — binding overhead: libunicorn mapping (lazy, RSS),
 //	                       3 static NewCallback trampolines, Go-side bindings.
-//	P3a rewrite+execute  — single engine, 100k× [mem_write(new instruction) +
+//	rewrite+execute — single engine, 100k× [mem_write(new instruction) +
 //	                       emu_start + 3 hook callbacks]: TB-cache / code-churn
 //	                       pressure with a persistent hook.
-//	P3b hook churn       — single engine, 100k× [hook add + remove]: the cbid
+//	hook churn — single engine, 100k× [hook add + remove]: the cbid
 //	                       registry and unicorn's hook allocation lifecycle.
-//	P4 engine churn      — 100k× full [create → map → run → close]: per-engine
+//	engine churn — 100k× full [create → map → run → close]: per-engine
 //	                       cost; a sustained RSS slope here is a true C leak.
 //
 // Go side is read from runtime.MemStats after forced GC; process side from
@@ -121,7 +121,7 @@ func TestUnicornMemory(t *testing.T) {
 			}
 		}
 		// demand-map: LDR from unmapped page, hook maps it inside the callback
-		inv, ok := b.(InvalidMemHooker) // capability probe (P2.5a)
+		inv, ok := b.(InvalidMemHooker) // capability probe
 		if !ok {
 			return fmt.Errorf("backend lacks the InvalidMemHooker capability")
 		}
@@ -161,7 +161,7 @@ func TestUnicornMemory(t *testing.T) {
 	cbRegLen := func() int { cbMu.Lock(); defer cbMu.Unlock(); return len(cbReg) }
 	noopHook := func(Backend, GuestAddr, uint32) {}
 
-	// ---- P3a: single engine, 100k× [rewrite instruction + execute] ----------
+	// ---- single engine, 100k× [rewrite instruction + execute] ----------
 	// Persistent code hook → 3 callback crossings per Start. This is the
 	// realistic hot-path shape (sign service reusing one engine).
 	be, err := NewNamed("", ArchARM64)
@@ -169,7 +169,7 @@ func TestUnicornMemory(t *testing.T) {
 		t.Skipf("no backend: %v", err)
 	}
 	defer be.Close()
-	ih, ok := be.(InstructionHooker) // capability probe (P2.5a)
+	ih, ok := be.(InstructionHooker) // capability probe
 	if !ok {
 		t.Fatal("backend lacks the InstructionHooker capability")
 	}
@@ -204,10 +204,10 @@ func TestUnicornMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// P3a2: does FlushCache reclaim the TB growth? 10k more rewrites after a
+	// does FlushCache reclaim the TB growth? 10k more rewrites after a
 	// full TB flush — if the slope flattens, the code cache recycles on flush
 	// and periodic FlushCache bounds long-lived engines that rewrite guest code.
-	ci, ok := be.(CacheInvalidator) // capability probe (P2.5a)
+	ci, ok := be.(CacheInvalidator) // capability probe
 	if !ok {
 		t.Fatal("backend lacks the CacheInvalidator capability")
 	}
@@ -234,7 +234,7 @@ func TestUnicornMemory(t *testing.T) {
 		map[bool]string{true: "TB cache recycles on flush — growth bounded",
 			false: "growth continues past flush"}[int64(f1.rss)-int64(f0.rss) < int64(hotN/10)*100])
 
-	// ---- P3b: single engine, 100k× [hook add + remove] ----------------------
+	// ---- single engine, 100k× [hook add + remove] ----------------------
 	var p3b []snap
 	p3b = append(p3b, take("P3b hook churn start"))
 	for i := 0; i < hotN; i++ {
@@ -253,7 +253,7 @@ func TestUnicornMemory(t *testing.T) {
 		t.Errorf("hook registry holds %d entries after P3b, want 0 (Go-side leak)", got)
 	}
 
-	// ---- P4: engine churn — 100k× full [create → use → close] ---------------
+	// ---- engine churn — 100k× full [create → use → close] ---------------
 	var churn []snap
 	for i := 0; i < churnN; i++ {
 		b, err := NewNamed("", ArchARM64)
@@ -301,7 +301,7 @@ func TestUnicornMemory(t *testing.T) {
 	t.Logf("     RSS slope             : %.0f B/lifecycle", float64(int64(churn[len(churn)-1].rss)-int64(churn[0].rss))/float64(churnN))
 	t.Logf("total workload             : %s", delta(s0, sEnd))
 
-	totalIters := int64(2*hotN + hotN/10 + churnN) // P3a + P3a2 + P3b + churn
+	totalIters := int64(2*hotN + hotN/10 + churnN) // + P3a2 + P3b + churn
 	heapSlope := float64(int64(sEnd.heap)-int64(s0.heap)) / float64(totalIters)
 	// GC pacing grows the retained heap under allocation churn (bounded, not a
 	// leak); a per-iteration slope stays tight even at 1M+ iterations.

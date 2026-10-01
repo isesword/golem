@@ -269,13 +269,13 @@ func (e *Emulator) wakeFutex(uaddr uint64) int {
 // handled the syscall (so the kernel layer is skipped). futex WAKE is honored on
 // any thread; WAIT/sleep only suspend a fiber (the main thread never blocks).
 //
-// P2: the frame arrives pre-decoded by the platform syscall transport
+// the frame arrives pre-decoded by the platform syscall transport
 // (onSyscallTrap decodes once per trap), and results are written back through
 // the same transport — no syscall-register identities (X8/X0/X1) appear here
 // anymore. The interception SEMANTICS are unchanged: the scheduler answers
 // these syscalls itself and the kernel table never sees them.
 //
-// P7.5b: an UNBOUND intercept number (0 — the platform personality's way of
+// an UNBOUND intercept number (0 — the platform personality's way of
 // saying "this platform intercepts nothing here", e.g. Darwin has no
 // futex/nanosleep fibers) NEVER matches. Before this guard, a guest issuing
 // syscall number 0 (BSD's indirect-syscall register value) on such a

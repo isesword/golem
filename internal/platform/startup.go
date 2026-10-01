@@ -26,7 +26,7 @@ type MemWriter interface {
 }
 
 // StartupContext is everything a StartupABI needs to build the process
-// initial state (P4d, DESIGN.md §3.4 invariant 10 — the initial process
+// initial state (DESIGN.md §3.4 invariant 10 — the initial process
 // image belongs to platform.StartupABI, which consumes loader metadata and
 // arch capabilities; it is NOT the loader Format's job):
 //
@@ -34,7 +34,7 @@ type MemWriter interface {
 //     image plus its load bias, from the loader (Image is nil when no main
 //     module exists — a bionic-only boot).
 //   - Features: the arch layer's CPUFeatures — the ONLY source of the
-//     AT_HWCAP/AT_HWCAP2 bitmaps (P4d red line).
+//     AT_HWCAP/AT_HWCAP2 bitmaps (red line).
 //   - AS/Stack: the address space and the already-mapped, already-reserved
 //     initial stack region the data block is materialized into (the block
 //     lives inside the stack mapping exactly like a real kernel's initial
@@ -44,7 +44,7 @@ type MemWriter interface {
 //   - Args/Env: the process argument/environment vectors. golem runs in
 //     load-.so-and-call mode (no exec), so the current Android landing form
 //     builds the auxv data block only and does not yet lay out
-//     argc/argv/envp; the fields exist so an exec-style form (P5+) can
+//     argc/argv/envp; the fields exist so an exec-style form can
 //     consume them without a contract change.
 type StartupContext struct {
 	Image    *loader.Image
@@ -57,7 +57,7 @@ type StartupContext struct {
 	Features arch.CPUFeatures
 }
 
-// StartupABI builds the guest process initial state (P4d, DESIGN.md §3.4 /
+// StartupABI builds the guest process initial state (DESIGN.md §3.4 /
 // §6): the auxv vector — whose HWCAP bitmap comes exclusively from
 // StartupContext.Features — plus the deterministic AT_RANDOM bytes, built
 // once per emulator from the final image metadata.
@@ -67,12 +67,12 @@ type StartupContext struct {
 // same vector (see platform/android/startup.go for why this is a data block
 // and not an exec-style initial stack frame).
 //
-// Build-time ordering rule (P4e, locked by emulator's boot-order tests):
+// Build-time ordering rule (locked by emulator's boot-order tests):
 // with a main image the build MUST run after that image's FinalizeImage and
 // before any of its init code executes; without a main image (bionic-only
 // boot) the build is deliberately deferred to the first getauxval.
 //
-// P4e note: the entry/SP pair this contract used to return was removed —
+// note: the entry/SP pair this contract used to return was removed —
 // golem enters guest code through CallFunc/CallSymbol, never by jumping to
 // an exec-style entry, and SP is set from the platform's StackTopReserve at
 // boot, so nothing consumed the values (no speculative state kept).

@@ -12,7 +12,7 @@ import (
 // below is a layout fact owned by this package; kernel code only ever sees
 // the semantic kernel.Stat/Timespec/... values.
 //
-// P5b reality check: the Darwin table (table.go) binds no syscall that
+// reality check: the Darwin table (table.go) binds no syscall that
 // touches a guest struct, so NONE of these codecs is exercised by the e2e
 // acceptance chain. They are implemented for real — the interface demands the
 // full set — but each layout is pinned by unit test here and re-verified the

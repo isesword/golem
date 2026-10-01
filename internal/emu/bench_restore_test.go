@@ -17,7 +17,7 @@ func openBE(tb testing.TB) Backend {
 }
 
 // contextManager asserts the ContextManager capability on the benchmark
-// backend (unicorn always implements it; the probe is the P2.5a pattern).
+// backend (unicorn always implements it; the probe is the pattern).
 func contextManager(tb testing.TB, be Backend) ContextManager {
 	tb.Helper()
 	cm, ok := be.(ContextManager)

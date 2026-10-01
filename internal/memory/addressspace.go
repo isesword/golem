@@ -77,7 +77,7 @@ func (r reservation) end() uint64 { return r.addr + r.size }
 //
 // Snapshot semantics: the bump cursors are deliberately NOT part of the
 // emulator's Snapshot/Restore — restore does not roll back module/stub
-// allocation (matching the pre-P2.5c emulator cursor fields, which were
+// allocation (matching the legacy emulator cursor fields, which were
 // likewise outside the snapshot).
 type AddressSpace struct {
 	layout Layout

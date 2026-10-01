@@ -8,7 +8,7 @@ import (
 	"github.com/isesword/golem/internal/emu"
 )
 
-// Symbol resolution, a first-class loader component (P3.5, DESIGN.md §3.3).
+// Symbol resolution, a first-class loader component (DESIGN.md §3.3).
 //
 // The loader owns the RESOLUTION CONTRACT (consumer-owned interface): who
 // asks (Requester), what is asked for (Name/Version/Binding/Visibility), and
@@ -134,7 +134,7 @@ type ResolvedSymbol struct {
 }
 
 // SymbolResolver resolves one imported symbol to a guest-visible address
-// (P3.5, consumer-owned in loader per DESIGN.md §3.3). Implementations:
+// (consumer-owned in loader per DESIGN.md §3.3). Implementations:
 // DynamicLinker.GlobalResolver (guest exports), interpose.HostResolver (host
 // replacements), interpose.UnresolvedStubResolver (documented fallback).
 // A resolver that does not know the symbol returns an error wrapping

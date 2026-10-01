@@ -4,7 +4,7 @@ import (
 	"github.com/isesword/golem/internal/arch"
 )
 
-// P9 Public Semantic API — values. A Value carries an integer with its ABI
+// Public Semantic API — values. A Value carries an integer with its ABI
 // KIND, so callers stop caring whether "a 64-bit argument" is one register
 // (ARM64), an even register pair (ARM32), or stack spill slot #6 (AMD64).
 // The kind is interpreted by the CallABI at the boundary; on the public

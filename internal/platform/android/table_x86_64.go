@@ -7,7 +7,7 @@ import "github.com/isesword/golem/internal/kernel"
 // handler set implements / that an x86-64 bionic is likely to invoke on the
 // call path are listed, mirroring the ARM64 table's selection.
 //
-// P5a: like the ARM64 table, the number -> semantic-handler binding lives in
+// like the ARM64 table, the number -> semantic-handler binding lives in
 // the platform package; kernel exposes semantics only.
 const (
 	SYSX_read              = 0

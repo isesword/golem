@@ -4,7 +4,7 @@ package emu
 
 import "testing"
 
-// TestInstallTrapAdapter exercises the P0 InstallTrap adapter on a real
+// TestInstallTrapAdapter exercises the InstallTrap adapter on a real
 // engine: two handlers registered under different kinds both fire on SVC,
 // each receiving the kind it was REGISTERED under (no runtime discrimination
 // yet), and Remove detaches a registration.

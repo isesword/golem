@@ -1,6 +1,6 @@
 //go:build unicorn
 
-// ARM32 (armv7) support for the unicorn backend (P6b): engine creation
+// ARM32 (armv7) support for the unicorn backend engine creation
 // constants, the UC_ARM_REG_* translation table, and the CP15 thread-pointer
 // register path.
 //
@@ -63,7 +63,7 @@ func regMapARM32(r Reg) int32 {
 	}
 }
 
-// arm32RegIDs is the ARM32 register file order for ReadGPRegs (P8, exposed by
+// arm32RegIDs is the ARM32 register file order for ReadGPRegs (exposed by
 // real-library validation): r0..r12, sp, lr, pc, cpsr — 17 entries. Same
 // contract as the AArch64 file: native order, consumed with the arch
 // package's register model.

@@ -83,7 +83,7 @@ func (m *memBE) MemMapPtr(addr emu.GuestAddr, size uint64, _ int, host unsafe.Po
 	return nil
 }
 
-// P2.5a: Backend's core interface is frozen — hooks/context/cache are
+// Backend's core interface is frozen — hooks/context/cache are
 // capability interfaces the linker never touches, so the fake carries none.
 func (m *memBE) RegRead(emu.Reg) (uint64, error) { return 0, nil }
 func (m *memBE) RegWrite(emu.Reg, uint64) error  { return nil }

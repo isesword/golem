@@ -8,7 +8,7 @@ import (
 )
 
 // SyscallPersonality bundles one guest architecture's syscall ABI pieces for
-// the kernel.Context injection (mirroring the Android shape, P5a.5): the
+// the kernel.Context injection (mirroring the Android shape): the
 // register transport, the number→handler dispatch table, the guest struct
 // codecs, and the syscall numbers the emulator's cooperative scheduler
 // intercepts. The arch-keyed selection lives HERE — per-arch knowledge is the
@@ -19,11 +19,11 @@ type SyscallPersonality struct {
 	Table     *kernel.Table
 	Codecs    kernel.StructCodecs
 
-	// Scheduler interception numbers. P5b does NO fiber scheduling for
+	// Scheduler interception numbers. does NO fiber scheduling for
 	// Darwin guests: XNU has no futex, and its sleep/wait primitives (psynch)
 	// are not modelled. All three stay 0 — which collides with BSD's
 	// indirect-syscall number 0 in theory, but arm64 compilers never emit it
-	// (the number is always materialized into x16 directly), and no P5b guest
+	// (the number is always materialized into x16 directly), and no guest
 	// issues it. If Darwin fiber scheduling ever lands, these become the real
 	// __psynch_* numbers.
 	Futex          uint64

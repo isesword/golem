@@ -13,7 +13,7 @@ func resolveCallABI(t *testing.T) arch.CallABI {
 	return c
 }
 
-// TestArgRegsVsSyscallABI pins the two-ABI separation (P5a requirement): the
+// TestArgRegsVsSyscallABI pins the two-ABI separation (requirement): the
 // SysV FUNCTION call's 4th integer argument is RCX, while the Linux x86-64
 // SYSCALL ABI's 4th argument is R10 (the `syscall` instruction itself
 // clobbers RCX with the return RIP). The two conventions share five

@@ -10,7 +10,7 @@ import (
 // frozen contract: internal/emu's unicorn backend (regMap) translates them by
 // NUMBER — it cannot import this package (import cycle) — so a silent
 // renumbering here would corrupt register access without any compile error.
-// The values match the constants deleted from internal/emu in P0, one for one.
+// The values match the constants deleted from internal/emu in, one for one.
 func TestFrozenRegIDs(t *testing.T) {
 	cases := []struct {
 		name string
@@ -34,7 +34,7 @@ func TestFrozenRegIDs(t *testing.T) {
 		{"LR", LR, 14},
 		{"NZCV", NZCV, 15},
 		{"TPIDR_EL0", TPIDR_EL0, 16},
-		{"X16", X16, 17}, // appended in P5b; the P0 ids above stay frozen
+		{"X16", X16, 17}, // appended in; the preexisting ids above stay frozen
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {

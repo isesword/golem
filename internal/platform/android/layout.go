@@ -9,7 +9,7 @@ import (
 )
 
 // Layout geometry of the Android/AArch64 guest process — the exact values
-// the emulator has booted with since P1 made them explicit data. Module,
+// the emulator has booted with since made them explicit data. Module,
 // heap and mmap windows tile [0x12000000, 0x60000000) contiguously; stubs,
 // stack and TLS sit clear above. The heap and mmap bases are not restated
 // here: they reference kernel.BrkBase (the kernel's program-break origin)
@@ -25,7 +25,7 @@ const (
 	legacyTLSSize    = 0x00010000
 )
 
-// 32-bit geometry (P6e): the module/heap/mmap/stub windows are IDENTICAL to
+// 32-bit geometry the module/heap/mmap/stub windows are IDENTICAL to
 // the 64-bit layout — they tile [0x12000000, 0x60100000), comfortably below
 // the ARM Linux 3G/1G user ceiling (arch/arm32 MaxUserVA = 0xBF000000) —
 // while the stack and TLS move down from their 64-bit spots (0xC0000000 /
@@ -36,11 +36,11 @@ const (
 	legacyTLSBase32   = 0xB1000000 // 64 KiB TLS block
 )
 
-// LayoutPolicy is the Android personality's platform.LayoutPolicy (P4c,
+// LayoutPolicy is the Android personality's platform.LayoutPolicy (
 // DESIGN.md §3.4): it plans the initial guest address space — pure geometry,
 // no Map/Alloc/Reserve. For AArch64 it produces exactly the legacy layout the
-// emulator booted with before P4c (behavior-invariant red line); for ARM32
-// (P6e) the same tiling with the 32-bit stack/TLS spots. The policy stays
+// emulator booted with before (behavior-invariant red line); for ARM32
+// the same tiling with the 32-bit stack/TLS spots. The policy stays
 // EXPLICIT about the target's address-space caps: every region must fit
 // below MaxUserVA — a cap that cannot hold the geometry is a loud error,
 // never a silent mis-map.
@@ -49,7 +49,7 @@ type LayoutPolicy struct{}
 var _ platform.LayoutPolicy = LayoutPolicy{}
 
 // Resolve plans the Android guest address-space layout. The module window is
-// [moduleBase, heapBase): the pre-P4c ModuleSize shim (stubBase−moduleBase,
+// [moduleBase, heapBase): the legacy ModuleSize shim (stubBase−moduleBase,
 // an informal upper bound over an arena that also contained the heap and
 // mmap sub-arenas) is retired in favor of explicit, adjacent Module/Heap/Mmap
 // regions — the bump allocator's exhaustion check at the module window end
@@ -95,7 +95,7 @@ func (LayoutPolicy) Resolve(t platform.TargetInfo, o platform.LayoutOverrides) (
 	default:
 		return memory.Layout{}, fmt.Errorf("android layout: unsupported pointer width %d (need 64 or 32)", c.PointerBits)
 	}
-	// Explicit fit check (P6e): every region must end at or below the
+	// Explicit fit check every region must end at or below the
 	// target's user-VA ceiling — e.g. a 32-bit cap below the stub window is
 	// a loud, named error, never a silently truncated map.
 	for name, end := range map[string]uint64{

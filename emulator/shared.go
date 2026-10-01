@@ -16,7 +16,7 @@ import (
 // anonymous memory; relocations are applied per engine.
 //
 // Safety: a shared range is read-only to the guest (unicorn enforces it) and
-// must never be written by the HOST either. P2.5d made that structural
+// must never be written by the HOST either. made that structural
 // (DESIGN.md §8 "privatize 退役"): the only host writer into module .text was
 // ReplaceE's entry patch, and function replacement is now Function
 // Interposition — an execution hook on the entry address that touches no

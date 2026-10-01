@@ -10,7 +10,7 @@ import (
 	"github.com/isesword/golem/internal/loader"
 )
 
-// Chained-fixups tests (P5c). Bit layouts follow the SDK's
+// Chained-fixups tests . Bit layouts follow the SDK's
 // mach-o/fixup-chains.h; the synthetic payloads below are built field by
 // field so a layout drift fails loudly here.
 
@@ -185,7 +185,7 @@ func TestChainedWalkRebaseBind(t *testing.T) {
 	}
 }
 
-// TestARM64ERebaseHigh8BitPlacement pins the P7.6 bit-placement fix: the
+// TestARM64ERebaseHigh8BitPlacement pins the bit-placement fix: the
 // high8 field occupies bits 43-50 of the RAW chain entry but reconstructs
 // at bits 56-63 of the pointer (dyld/Loader.cpp shifts value<<13; mach_o
 // ChainedFixups writes high8<<56). high8=0 must stay a pure pass-through.
@@ -365,7 +365,7 @@ func TestChainedAuthAddrDivRejected(t *testing.T) {
 
 // TestParseChainedMinimal drives the full Parse path with a minimal but
 // valid chained-fixups Mach-O: header + LC_SEGMENT_64 + LC_DYLD_CHAINED_
-// FIXUPS — the P5c replacement for the old "rejected" pin.
+// FIXUPS — the replacement for the old "rejected" pin.
 func TestParseChainedMinimal(t *testing.T) {
 	// File layout: header+cmds at 0, segment payload at 0x1000 (one rebase
 	// entry), fixups payload at 0x2000.
@@ -544,7 +544,7 @@ func TestParseChainedFixtureARM64E(t *testing.T) {
 	}
 }
 
-// --- DYLD_CHAINED_PTR_64 (format 2, P5d) ------------------------------------
+// --- DYLD_CHAINED_PTR_64 (format 2) ------------------------------------
 //
 // Bit layouts per the SDK's fixup-chains.h — DIFFERENT from format 1:
 // rebase is target:36 | high8:8 | reserved:7 | next:12 (4-BYTE stride) with

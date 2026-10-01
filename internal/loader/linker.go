@@ -10,7 +10,7 @@ import (
 // Apply maps the image's PT_LOAD segments into the backend at `base` and
 // performs all dynamic relocations (via the Relocator registered for the
 // image's (Format, Arch) — e.g. loader/elf/arm64), resolving every imported
-// symbol through the given SymbolResolver (P3.5). After this the module's
+// symbol through the given SymbolResolver . After this the module's
 // code/data is live in guest memory; init_array still needs to be executed
 // by the caller.
 // Legacy single-engine entry point: delegates to Plan + Plan.Apply with
@@ -26,7 +26,7 @@ func (img *Image) Apply(be emu.Backend, base uint64, res SymbolResolver) error {
 }
 
 // SymValue resolves a relocation's symbol per engine: defined symbols =>
-// base+value, imported (undef) => via the SymbolResolver (P3.5: the one
+// base+value, imported (undef) => via the SymbolResolver (the one
 // resolution contract — host replacements, guest exports and the unresolved
 // fallback all sit behind it, and the resolver only ever returns guest
 // addresses). Used by Relocator implementations (loader/<format>/<arch>).

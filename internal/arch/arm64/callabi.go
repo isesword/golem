@@ -42,9 +42,9 @@ func (aapcs64) ResultReg(i int) (emu.Reg, bool) {
 // 0..7 in X0..X7, args 8+ at [SP, #(i-8)*8] after decrementing SP by a
 // 16-aligned spill area (AAPCS64 keeps SP 16-aligned at public interfaces),
 // LR ← req.Return, PC ← req.Entry. Every ArgKind occupies one 64-bit slot
-// (P6: AAPCS64 has no sub-word or paired placement).
+// (AAPCS64 has no sub-word or paired placement).
 //
-// P9.5a: the whole write SET is collected first, then flushed in ONE batch
+// the whole write SET is collected first, then flushed in ONE batch
 // when the backend has the RegBatchWriter capability — the no-capability
 // loop writes the identical set in the identical order, so the two paths
 // cannot drift.
@@ -159,7 +159,7 @@ func (aapcs64) ReturnFromCall(b emu.Backend) error {
 	return nil
 }
 
-// ReadReturnAddress (P9 observation semantics): at function entry the
+// ReadReturnAddress (observation semantics): at function entry the
 // in-flight call returns to X30.
 func (aapcs64) ReadReturnAddress(b emu.Backend) (emu.GuestAddr, error) {
 	v, err := b.RegRead(LR)

@@ -42,7 +42,7 @@ type Config struct {
 	// NoSharedModules opts out of Phase B page sharing: by default, read-only
 	// segments of every loaded module are mapped zero-copy from ONE set of
 	// host buffers (uc_mem_map_ptr), so a pool of engines loads each .so's
-	// read-only pages into physical RAM exactly once. Since P2.5d guest .text
+	// read-only pages into physical RAM exactly once. Since guest .text
 	// is immutable (function replacement is interposition via an execution
 	// hook, not a memory patch), nothing ever writes a shared range. Set true
 	// to disable (fresh anonymous memory per engine, pre-Phase-B behavior).
@@ -69,9 +69,9 @@ type Config struct {
 	// fixed Unix time (seconds) instead of the host clock — for deterministic,
 	// reproducible runs (e.g. reverse-engineering a time-dependent signature).
 	Epoch int64
-	// Arch explicitly selects the guest CPU architecture (P4a). 0 = probe
+	// Arch explicitly selects the guest CPU architecture . 0 = probe
 	// SOPath's header (loader.Sniff) when set, else default to ARM64 — the
-	// pre-P4 behavior. An explicit value wins over the probe.
+	// legacy behavior. An explicit value wins over the probe.
 	Arch arch.ID
 	// TCGBufferMiB caps the CPU engine's translation (JIT) buffer, in MiB,
 	// applied during construction — BEFORE boot runs any guest code, because
@@ -87,7 +87,7 @@ type Config struct {
 	// Android is the Android personality of the emulated process (JNI
 	// handler, dex metadata, symbol replacements, system properties).
 	//
-	// Deprecated: P4a moved this personality to the typed platform config —
+	// Deprecated: moved this personality to the typed platform config —
 	// use android.NewConfig(android.WithJNI(...), ...) with the
 	// WithPlatformConfig option instead. This field is read exactly once, by
 	// the options normalization (legacy shim), which converts it to an
@@ -96,10 +96,10 @@ type Config struct {
 	Android AndroidConfig
 
 	// LayoutOverrides optionally overrides the platform's default guest
-	// address-space layout (P4c). Platform-agnostic by design, so it sits at
+	// address-space layout . Platform-agnostic by design, so it sits at
 	// the Config top level rather than inside a platform personality. The
 	// zero value means "platform defaults" and is currently the only
-	// supported value (reserved for P5+).
+	// supported value (reserved for future platform variants).
 	LayoutOverrides platform.LayoutOverrides
 
 	// pcfg is the normalized platform config, set by WithPlatformConfig or
@@ -107,7 +107,7 @@ type Config struct {
 	// New's options normalization. Never set it directly; it is unexported
 	// so positional Config literals outside this package already fail to
 	// compile. nil after normalization = the platform factory's Bind
-	// supplies the platform defaults (P5b.5).
+	// supplies the platform defaults .
 	pcfg platform.Config
 }
 
@@ -116,7 +116,7 @@ type Config struct {
 // future iOS personality can sit next to them without polluting the
 // platform-agnostic top-level Config.
 //
-// Deprecated: P4a re-homed this personality as android.Config — build it with
+// Deprecated: re-homed this personality as android.Config — build it with
 // android.NewConfig(android.WithJNI(...), ...) and pass it via
 // emulator.WithPlatformConfig. This struct remains as the legacy shim input
 // and is converted exactly once during options normalization.
@@ -173,21 +173,21 @@ type Emulator struct {
 	fs     *vfs.VFS
 	kctx   *kernel.Context
 
-	arch    arch.Arch            // CPU properties, from e.target (P2.5b; always ARM64 until P5)
+	arch    arch.Arch            // CPU properties, from e.target (always ARM64 in legacy boots)
 	callABI arch.CallABI         // function calling convention (AAPCS64) — args/results/return flow
-	target  *target.Target       // immutable single source of truth for arch/format/platform (P4a, DESIGN.md §4)
+	target  *target.Target       // immutable single source of truth for arch/format/platform (DESIGN.md §4)
 	layout  memory.Layout        // guest address-space layout in use
-	as      *memory.AddressSpace // single guest VA allocation entry (P2.5c, invariant 12)
+	as      *memory.AddressSpace // single guest VA allocation entry (invariant 12)
 
-	// P2.5d (DESIGN.md §3.8, invariant 11): all guest trampolines are owned by
+	// .5d (DESIGN.md §3.8, invariant 11): all guest trampolines are owned by
 	// the StubManager; exported-symbol replacement is Function Interposition
 	// via the InterposeTable + a per-entry execution hook — guest .text is
 	// never patched.
 	stubMgr interpose.StubManager
 	itab    interpose.InterposeTable
 
-	// Boot-cached role registers (P1, DESIGN.md §8: no interface walks on hot
-	// paths). After the P5a.5 CallABI reshape only the Arch's own PC/SP remain
+	// Boot-cached role registers (DESIGN.md §8: no interface walks on hot
+	// paths). After the CallABI reshape only the Arch's own PC/SP remain
 	// cached: argument/result/return-address flow goes through the CallABI's
 	// whole-call operations (PrepareCall/ReadArgs/WriteResult/ReadResult), so
 	// no call-convention register identity is cached here anymore. Callers
@@ -201,7 +201,7 @@ type Emulator struct {
 	aForm   bool    // 当前 JNI 调用为 Call*MethodA（jvalue 数组）形式
 	scCount int     // syscalls in current CallFunc (runaway guard)
 
-	// P3.5 (DESIGN.md §3.3): symbol resolution is a first-class loader
+	// .5 (DESIGN.md §3.3): symbol resolution is a first-class loader
 	// component. dl owns the module graph + global symbol scope; resolver is
 	// the boot chain — host replacement symbols (InterposeTable via
 	// interpose.HostResolver) → global guest exports (dl.GlobalResolver) →
@@ -215,7 +215,7 @@ type Emulator struct {
 	getEnvStub   uint64         // JavaVM->GetEnv svc stub (special-cased)
 	jniDispatch  map[uint64]int // JNIEnv stub addr -> JNINativeInterface index
 	classRefs    map[string]dvm.Ref
-	shared       []sharedRange          // guest ranges mapped via MemMapPtr (Phase B page sharing; P2.5d: diagnostic tracking, the privatize-on-write compensation retired with text patching)
+	shared       []sharedRange          // guest ranges mapped via MemMapPtr (Phase B page sharing;: diagnostic tracking, the privatize-on-write compensation retired with text patching)
 	poisonErr    error                  // set when a failed address-space transition leaves the emulator unusable
 	pendingPanic any                    // panic recovered inside a guarded backend callback; poisons at the next run boundary
 	classMeta    *dvm.Class             // java/lang/Class
@@ -227,18 +227,18 @@ type Emulator struct {
 	pinGen       uint64                 // bumped per host-initiated native call
 	pendingExc   bool                   // a pending JNI exception (Throw/ThrowNew)
 
-	// P4d/P5b.5: the platform Runtime is the factory's composition product —
+	// the platform Runtime is the factory's composition product —
 	// the complete personality as data (startup ABI, layout, syscall
 	// personality, runtime libraries, ReplaceFns, optional interop
 	// surface), bound once in New from the probed Target.Platform and
 	// consumed below as feature tests, never dispatched on identity.
 	rt *platform.Runtime
 
-	// P4d (DESIGN.md §3.4, invariant 10): the process initial state is built
+	// (DESIGN.md §3.4, invariant 10): the process initial state is built
 	// ONCE by the platform's StartupABI — Android materializes the auxv data
 	// block (HWCAP from target.Features, PHDR/ENTRY from the main image
 	// metadata, deterministic AT_RANDOM) and the interposed getauxval serves
-	// from that same vector via auxvLookup; Darwin (P5b) materializes an
+	// from that same vector via auxvLookup; Darwin materializes an
 	// exec-style initial stack frame (argc/argv/envp/apple) and has no auxv
 	// at all. auxvLookup is nil exactly when the platform has no auxv.
 	startup      platform.StartupABI
@@ -255,7 +255,7 @@ type Emulator struct {
 	yieldAddr   uint64 // futex uaddr the fiber parked on
 
 	// Scheduler interception numbers, from the platform's SyscallPersonality
-	// (P5a.5 — the numbers differ per guest arch; the emulator holds data,
+	// (— the numbers differ per guest arch; the emulator holds data,
 	// not arch knowledge).
 	sysFutex          uint64
 	sysNanosleep      uint64
@@ -317,13 +317,13 @@ func (e *Emulator) MemStats() (regions int, mmapTop uint64) {
 // New boots an emulator: prepares the address space, maps bionic, and (if
 // Config.SOPath is set) loads + initializes the main library.
 //
-// Boot follows the DESIGN.md §4 sequence, as explicitly staged below (P4e
+// Boot follows the DESIGN.md §4 sequence, as explicitly staged below (the
 // boot-sequence consolidation — the stages are ordered statements in this
 // function, locked by the invariant tests in boot_order_test.go):
 //
 //	stage 1  apply functional options (the Config.Android legacy shim runs
 //	         inside the platform-config normalization, after the probe —
-//	         the config must match the PROBED platform, P5b)
+//	         the config must match the PROBED platform)
 //	stage 2  lightweight probe (loader.Sniff: SO header only — no mapping,
 //	         no relocation, no backend)
 //	stage 3  resolve Arch + CallABI + StubEncoder + Features + Format +
@@ -350,7 +350,7 @@ func (e *Emulator) MemStats() (regions int, mmapTop uint64) {
 //	stage 12 post-boot: interpose exported ReplaceFns symbols; New returns
 //	         with guest execution now allowed
 //
-// opts are P4a functional options (WithPlatformConfig, ...); existing callers
+// opts are functional options (WithPlatformConfig, ...); existing callers
 // passing just a Config are unaffected.
 func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	// §4 stage 1: apply functional options.
@@ -367,15 +367,15 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	if err != nil {
 		return nil, err
 	}
-	// Then normalize the platform config against the PROBED platform (P5b):
+	// Then normalize the platform config against the PROBED platform
 	// this is the legacy shim's only read site of Config.Android, and the
 	// platform config <-> target platform match check (PlatformID routing,
-	// P5b.5). A nil pcfg afterwards means "platform defaults", supplied by
+	// ). A nil pcfg afterwards means "platform defaults", supplied by
 	// the factory's Bind below.
 	if err := normalizePlatformConfig(&cfg, tgt); err != nil {
 		return nil, err
 	}
-	// §4 stages 3–4 seam (P5b.5): resolve the platform factory registered
+	// §4 stages 3–4 seam resolve the platform factory registered
 	// under the probed Target.Platform and bind the complete platform
 	// Runtime — ONE struct of data, consumed below as feature tests. The
 	// emulator holds no per-platform selection logic: the registry consumes
@@ -390,7 +390,7 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 		return nil, fmt.Errorf("platform %s: %w", tgt.Platform, err)
 	}
 	// §4 stage 4: the bound Runtime's LayoutPolicy plans the initial guest
-	// address space (pure geometry — no Map/Alloc/Reserve here, P4c). This
+	// address space (pure geometry — no Map/Alloc/Reserve here). This
 	// precedes backend creation so a layout failure never leaves an engine
 	// behind.
 	layout, err := rt.Layout.Resolve(
@@ -431,7 +431,7 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 		pid = defaultPid
 	}
 	// §4 stage 7: the Emulator skeleton — including the AddressSpace, the
-	// single guest VA allocation entry (P2.5c, invariant 12) planned by the
+	// single guest VA allocation entry (invariant 12) planned by the
 	// stage-4 LayoutPolicy.
 	e = &Emulator{
 		cfg:         cfg,
@@ -455,20 +455,20 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 		fields:      map[dvm.Ref]*fieldRef{},
 		arrayPins:   map[uint64]pinEntry{},
 	}
-	// P2.5d: trampolines and interposition state live in the interpose
+	// trampolines and interposition state live in the interpose
 	// package (DESIGN.md §3.8); the stub manager draws slots from the
 	// AddressSpace's stub region and encodes them with the StubEncoder.
 	e.stubMgr = interpose.NewStubManager(e.as, tgt.Stubs, be)
 	e.itab = interpose.NewInterposeTable()
-	// P4d/P5b.5: the bound Runtime's StartupABI builds the process initial
+	// the bound Runtime's StartupABI builds the process initial
 	// state once the main image's metadata is complete (LoadLibrary) or,
-	// bionic-only, lazily at the first getauxval — a deliberate P4e rule,
+	// bionic-only, lazily at the first getauxval — a deliberate rule,
 	// see ensureStartup. auxvLookup serves the interposed getauxval from
 	// the SAME StartupABI instance the factory bound (nil when the platform
 	// has no auxv, e.g. Darwin).
 	e.startup = rt.Startup
 	e.auxvLookup = rt.AuxvLookup
-	// P3.5: the boot symbol-resolution chain — host replacement symbols
+	// the boot symbol-resolution chain — host replacement symbols
 	// (InterposeTable via the HostResolver adapter) → global guest exports
 	// (DynamicLinker scope) → unresolved fallback stub. The historical
 	// resolveSymbol order, as composable loader.SymbolResolvers.
@@ -494,7 +494,7 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 		}
 	}()
 	// §4 stage 8: platform runtime components, consumed from the bound
-	// Runtime as feature tests (P5b.5) — a non-nil Interop wires the JNI
+	// Runtime as feature tests — a non-nil Interop wires the JNI
 	// handler and dex metadata, the Runtime's own data decides which
 	// platform host functions registerHostFns binds. No platform identity
 	// is dispatched on here.
@@ -529,7 +529,7 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	registerHostFns(e) // binds exactly what the Runtime's data opts into
 	for name, hf := range replaceFns {
 		hf := hf
-		// Import-override path (P3.5): bind by NAME in the InterposeTable —
+		// Import-override path bind by NAME in the InterposeTable —
 		// the HostResolver then binds every unresolved import of that name to
 		// a host stub at link time. (The pre-boot e.syms branch of the old
 		// first pass was dead: no module is loaded yet, so no export can
@@ -540,7 +540,7 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 			_ = em.callABI.WriteResult(b, arch.CallResult{Value: ret})
 		}))
 	} // libc functions we implement in Go (need no libc init)
-	// P2/P4b/P5a.5/P5b.5: the syscall transport ABI, dispatch table, guest
+	// the syscall transport ABI, dispatch table, guest
 	// struct codecs and scheduler interception numbers come from the bound
 	// Runtime — resolved by the platform's factory from the Target's machine
 	// identity, injected here as pure data. The kernel and the emulator hold
@@ -564,7 +564,7 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 
 	// §4 stage 9: materialize the layout — reserve fixed regions, then map
 	// them. Every guest VA range is registered with the AddressSpace first
-	// (P2.5c, invariant 12: the single VA allocation entry); the backend
+	// (invariant 12: the single VA allocation entry); the backend
 	// MemMap calls below only back ranges the AddressSpace owns.
 	l := e.layout
 	if err := e.as.Reserve(emu.GuestAddr(l.StackBase), l.StackSize, memory.PurposeStack); err != nil {
@@ -577,7 +577,7 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	// their existing internal management this stage; only their region
 	// OWNERSHIP moves into the AddressSpace, so the module bump allocator can
 	// never drift into them. Both windows come from the Layout the platform's
-	// LayoutPolicy planned (P4c) — no boundary arithmetic here.
+	// LayoutPolicy planned — no boundary arithmetic here.
 	if err := e.as.Reserve(emu.GuestAddr(l.HeapRegion.Addr), l.HeapRegion.Size, memory.PurposeHeap); err != nil {
 		return nil, fmt.Errorf("reserve heap: %w", err)
 	}
@@ -594,7 +594,7 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 		return nil, fmt.Errorf("map tls: %w", err)
 	}
 	// SP near top of stack (16-aligned); the headroom reserve travels with
-	// the platform Runtime (P4d/P5b.5, invariant 10): Android's StartupABI
+	// the platform Runtime (invariant 10): Android's StartupABI
 	// parks the auxv block just below it, Darwin's lays out the exec-style
 	// initial frame with argc AT that SP.
 	_ = be.RegWrite(e.spReg, l.StackBase+l.StackSize-rt.StackTopReserve)
@@ -615,7 +615,7 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	}
 
 	// §4 stage 10: install runtime hooks/traps. Two kind-annotated channels
-	// through the backend's core InstallTrap (P5a.5 — the raw InterruptHooker
+	// through the backend's core InstallTrap (— the raw InterruptHooker
 	// path is gone from the emulator):
 	//
 	//   - TrapHostCall → onStubTrap: host-call trampolines (svc stubs on
@@ -630,7 +630,7 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	//
 	// Every Go callback handed to the backend goes through the panic guard
 	// (guard.go): a panic must never escape across the purego trampoline.
-	// InvalidMemHooker stays a capability probe (P2.5a): an engine without it
+	// InvalidMemHooker stays a capability probe an engine without it
 	// fails New with ErrUnsupported, matching the old unconditional-method
 	// error path.
 	//
@@ -670,7 +670,7 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	// modules are only in the DynamicLinker's global scope now. Names bound
 	// as import overrides during linking are not in the scope (they resolved
 	// to stubs) and are naturally skipped; exported symbols get an
-	// interposition entry hook (P2.5d).
+	// interposition entry hook .
 	for name, hf := range replaceFns {
 		if addr, ok := e.dl.LookupGlobal(name); ok {
 			if err := e.interposeE(uint64(addr), hf); err != nil {
@@ -699,7 +699,7 @@ func (e *Emulator) boot() error {
 	for _, rel := range e.rt.RuntimeLibs {
 		path := e.cfg.AssetRoot + "/" + rel
 		name := filepath.Base(rel)
-		// P5a.5 transitional: the asset tree only ships AArch64 bionic
+		// .5 transitional: the asset tree only ships AArch64 bionic
 		// (sdk23/lib64), so on a non-ARM64 target these modules would fail
 		// the LoadModule machine check. Pre-parse via CompileOnce (cached,
 		// no double parse) and skip with a verbose note instead of erroring;
@@ -733,7 +733,7 @@ func (e *Emulator) LoadLibrary(path string) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	// P4d/P4e (DESIGN.md §4, locked by boot_order_test.go): build the process
+	// (DESIGN.md §4, locked by boot_order_test.go): build the process
 	// initial state — the auxv data block — once the first LoadLibrary'd
 	// image's metadata is complete. Ordering: this runs AFTER the image's
 	// FinalizeImage (inside LoadModule above) and BEFORE RunInit executes any
@@ -767,7 +767,7 @@ func (e *Emulator) LoadModule(path, name string) (*Module, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", name, err)
 	}
-	// P5a.5: refuse to map an image built for a different machine — running
+	// refuse to map an image built for a different machine — running
 	// foreign instructions would fault deep inside guest execution with no
 	// diagnosable cause. (boot's bionic loop pre-filters via CompileOnce and
 	// skips instead, because the asset tree is AArch64-only for now.)
@@ -775,7 +775,7 @@ func (e *Emulator) LoadModule(path, name string) (*Module, error) {
 		return nil, fmt.Errorf("load %s: image machine %v does not match target %v", name, img.Machine, e.target.ID)
 	}
 	// Module bases bump upward through the AddressSpace, keeping the 1 MiB
-	// inter-module gap of the pre-P2.5c module cursor.
+	// inter-module gap of the legacy module cursor.
 	span := (img.LoadSpan + 0xfff) &^ 0xfff
 	baseAddr, err := e.as.Alloc(memory.PurposeModule, span+0x100000)
 	if err != nil {
@@ -802,13 +802,13 @@ func (e *Emulator) LoadModule(path, name string) (*Module, error) {
 }
 
 // ensureStartup builds the process initial state — the auxv data block —
-// through the platform's StartupABI exactly once per emulator (P4d, DESIGN.md
+// through the platform's StartupABI exactly once per emulator (DESIGN.md
 // §3.4 invariant 10). img/base carry the main image's startup metadata
 // (PHDR/ENTRY); a nil img (bionic-only boot, first getauxval before any
 // LoadLibrary) builds the vector without AT_PHDR/AT_PHNUM/AT_ENTRY, which
-// then read as 0 — the pre-P4d default for unknown keys.
+// then read as 0 — the legacy default for unknown keys.
 //
-// Build-time ordering rule (P4e, pinned and locked by boot_order_test.go):
+// Build-time ordering rule (pinned and locked by boot_order_test.go):
 //   - WITH a main image: the build runs inside LoadLibrary, after the
 //     image's FinalizeImage (LoadModule → plan.Apply) and BEFORE RunInit
 //     executes any guest init code — the auxv is complete from the first
@@ -855,7 +855,7 @@ func (e *Emulator) ensureStartup(img *loader.Image, base uint64) error {
 }
 
 // bindHostFn binds a Go-implemented function (libc override or ReplaceFns
-// import override) by symbol name in the InterposeTable (P3.5): the
+// import override) by symbol name in the InterposeTable the
 // HostResolver materializes one guest stub per name at link time, and the
 // trap path dispatches back here via the stub descriptor. The hostFn keeps
 // its historical contract — it writes the result register itself; the
@@ -868,7 +868,7 @@ func (e *Emulator) bindHostFn(name string, fn hostFn) {
 }
 
 // makeStub emits a trampoline at a fresh stub address through the StubManager
-// (P2.5d): the slot comes from the AddressSpace's stub region and the bytes
+// : the slot comes from the AddressSpace's stub region and the bytes
 // from the architecture's StubEncoder (arm64: `svc #0 ; ret`, which traps to
 // onStubTrap, which returns to the caller). Used for unresolved imports,
 // host functions and JNI table slots. Trap identity is decided by ADDRESS
@@ -876,7 +876,7 @@ func (e *Emulator) bindHostFn(name string, fn hostFn) {
 // — see arch.StubEncoder.
 func (e *Emulator) makeStub(name string, kind arch.StubKind) uint64 {
 	// No error channel exists on the resolution path, so allocation/encoding
-	// failures (e.g. stub-region exhaustion) panic, as before P2.5d.
+	// failures (e.g. stub-region exhaustion) panic, as before.
 	a, err := e.stubMgr.Allocate(kind, name)
 	if err != nil {
 		panic(fmt.Sprintf("makeStub %s: %v", name, err))
@@ -939,7 +939,7 @@ func (e *Emulator) Sym(name string) (uint64, bool) {
 
 // trapStubAddr maps the engine-reported trap PC back to the trapping
 // instruction's address — for a stub trap, the stub's entry — through the
-// Target's StubEncoder (P5a.5: the emulator holds no per-arch trap-offset
+// Target's StubEncoder (the emulator holds no per-arch trap-offset
 // constant like the old hardcoded pc-4).
 func (e *Emulator) trapStubAddr(b emu.Backend) emu.GuestAddr {
 	pc, _ := b.RegRead(e.pcReg)
@@ -972,7 +972,7 @@ func (e *Emulator) onStubTrap(b emu.Backend, _ emu.TrapKind) {
 		e.handleJNI(idx, b)
 		return
 	}
-	// Go-implemented libc function / ReplaceFns import override (P3.5): the
+	// Go-implemented libc function / ReplaceFns import override the
 	// stub was materialized by the HostResolver under the name
 	// "host:<symbol>"; recover the bound HostFunc from the InterposeTable.
 	// The hostFn contract is self-written result register, so the HostFunc's
@@ -986,7 +986,7 @@ func (e *Emulator) onStubTrap(b emu.Backend, _ emu.TrapKind) {
 		}
 	}
 	// Unresolved-import placeholder / unbound trampoline: count the hit by
-	// name (the pre-P2.5d stubHits semantics) and return an optimistic 0.
+	// name (the legacy stubHits semantics) and return an optimistic 0.
 	if desc, ok := e.stubMgr.Hit(stub); ok {
 		if e.cfg.Verbose {
 			fmt.Printf("[stub] %s() -> 0\n", desc.Name)
@@ -1051,12 +1051,12 @@ func (e *Emulator) onSyscallTrap(b emu.Backend, _ emu.TrapKind) {
 // sentinel as the return address, so emulation stops when the callee returns.
 //
 // This is the WORD convenience entry: every argument becomes
-// CallArg{Value, ArgWord} (the pre-P6 semantics). Callers with width/
+// CallArg{Value, ArgWord} (the legacy semantics). Callers with width/
 // alignment knowledge (64-bit arguments on 32-bit targets) use
 // CallFuncArgs.
 func (e *Emulator) CallFunc(addr uint64, args ...uint64) (uint64, error) {
 	if len(args) <= 8 {
-		// P9.5b: stack array — arch.WordArgs would heap-allocate the slice
+		// stack array — arch.WordArgs would heap-allocate the slice
 		// per call (memprofile: ~6% of call-path alloc objects). The array
 		// stays on the stack: CallFuncArgs/PrepareCall never retain Args.
 		var a [8]arch.CallArg
@@ -1068,7 +1068,7 @@ func (e *Emulator) CallFunc(addr uint64, args ...uint64) (uint64, error) {
 	return e.CallFuncArgs(addr, arch.WordArgs(args...)...)
 }
 
-// CallFuncArgs is the typed variant of CallFunc (P6, Architecture
+// CallFuncArgs is the typed variant of CallFunc (Architecture
 // Exception #1): each argument carries its ArgKind, which the target's
 // CallABI interprets (a no-op on 64-bit ABIs; load-bearing on 32-bit).
 func (e *Emulator) CallFuncArgs(addr uint64, args ...arch.CallArg) (uint64, error) {
@@ -1109,7 +1109,7 @@ func (e *Emulator) CallFuncArgs(addr uint64, args ...arch.CallArg) (uint64, erro
 }
 
 // CallSymbol calls an exported function by name with typed Values (the
-// Portable Call API, P9): kind-carrying arguments so callers never handle
+// Portable Call API): kind-carrying arguments so callers never handle
 // register pairs (ARM32 U64) or spill slots (AMD64 args 7+) themselves.
 // Plain integers: pass Uint64(n).
 func (e *Emulator) CallSymbol(name string, args ...Value) (uint64, error) {
@@ -1118,7 +1118,7 @@ func (e *Emulator) CallSymbol(name string, args ...Value) (uint64, error) {
 		return 0, fmt.Errorf("symbol %q not found", name)
 	}
 	if len(args) <= 16 {
-		// P9.5b: stack array — valuesToCallArgs would heap-allocate (see
+		// stack array — valuesToCallArgs would heap-allocate (see
 		// CallFunc). Nothing in the call path retains Args.
 		var a [16]arch.CallArg
 		for i, v := range args {
@@ -1130,7 +1130,7 @@ func (e *Emulator) CallSymbol(name string, args ...Value) (uint64, error) {
 }
 
 // CallSymbolArgs is the Advanced typed variant of CallSymbol — arch.CallArg
-// is the internal vocabulary Value fronts (P9). See CallFuncArgs.
+// is the internal vocabulary Value fronts . See CallFuncArgs.
 func (e *Emulator) CallSymbolArgs(name string, args ...arch.CallArg) (uint64, error) {
 	addr, ok := e.Sym(name)
 	if !ok {
@@ -1151,7 +1151,7 @@ func (e *Emulator) CallOffset(m *Module, offset uint64, args ...Value) (uint64, 
 		return 0, fmt.Errorf("CallOffset: no module (set Config.SOPath or pass a module)")
 	}
 	if len(args) <= 16 {
-		// P9.5b stack array, as in CallSymbol.
+		// .5b stack array, as in CallSymbol.
 		var a [16]arch.CallArg
 		for i, v := range args {
 			a[i] = v.callArg()
@@ -1213,7 +1213,7 @@ func putU64(be emu.Backend, addr, val uint64) error {
 // InitArrayPtrs reads the module's init_array function pointers from guest
 // memory AFTER relocation (on AArch64 the file section is zeros; RELATIVE
 // addends written by the linker hold the real, base-relative pointers).
-// Entry width follows the TARGET's pointer size (P7: 4 bytes on ARM32 —
+// Entry width follows the TARGET's pointer size (4 bytes on ARM32 —
 // the stride used to be a hardcoded 8). On ARM32 an entry may carry the
 // Thumb bit0; CallFunc's setPCBX interprets it, so entries are returned
 // verbatim.
@@ -1243,7 +1243,7 @@ func (e *Emulator) InitArrayPtrs(m *Module) ([]uint64, error) {
 // unusable state. The FIRST poison wins. The state-mutating entry points
 // refuse it instead of operating on inconsistent state: CallFunc/
 // CallFuncArgs, callNative, RunThreads, ReplaceE (interposeE), Alloc/
-// MustAlloc, Restore (P7.5b: the guard set is audited — read-only
+// MustAlloc, Restore (the guard set is audited — read-only
 // inspection entries such as the memory helpers and Snapshot stay available
 // on purpose, for post-mortem debugging of a poisoned instance). Use for
 // failures whose rollback cannot be verified (e.g. an address-space remap

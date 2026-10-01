@@ -1,5 +1,5 @@
 // Package arch is the CPU-architecture layer of golem's arch/platform
-// abstraction (DESIGN.md §3.2). It separates two concerns that the pre-P2.5b
+// abstraction (DESIGN.md §3.2). It separates two concerns that the legacy
 // arch.ABI interface mixed (invariant 13):
 //
 //   - Arch    — pure CPU properties: role registers PC/SP, pointer size, byte
@@ -15,8 +15,8 @@
 // registry (registry.go).
 //
 // This package deliberately contains NO syscall-transport knowledge (number
-// register, -errno encoding — that is platform's SyscallTransport, P2), no
-// relocations (loader, P3), and no layout policy (platform, P4/P5).
+// register, -errno encoding — that is platform's SyscallTransport), no
+// relocations (loader), and no layout policy (platform).
 //
 // Dependency direction: arch -> emu, never emu -> arch.
 package arch
@@ -36,7 +36,7 @@ const (
 	IDARM64 ID = 183
 	// IDAMD64 is ELF EM_X86_64.
 	IDAMD64 ID = 62
-	// IDARM is ELF EM_ARM (32-bit armv7 EABI, P6).
+	// IDARM is ELF EM_ARM (32-bit armv7 EABI).
 	IDARM ID = 40
 )
 
@@ -79,7 +79,7 @@ type Arch interface {
 	ByteOrder() binary.ByteOrder
 
 	// Caps reports the address-space capabilities a platform LayoutPolicy
-	// plans against (P4c).
+	// plans against .
 	Caps() AddressSpaceCaps
 
 	// SetTLSBase points the thread-pointer register (TPIDR_EL0 on arm64) at

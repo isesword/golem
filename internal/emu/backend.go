@@ -15,7 +15,7 @@
 // in this module is written against this interface so it compiles and is
 // testable without a C toolchain (a pure-Go build registers no backend).
 //
-// P2.5a (DESIGN.md invariants 14/15):
+// .5a (DESIGN.md invariants 14/15):
 //
 //   - Backend is the CORE interface — registers, memory, run/stop, trap
 //     install, close. It is a freeze candidate: it must NOT grow methods for
@@ -39,7 +39,7 @@ var ErrNoBackend = errors.New("emu: no CPU backend compiled in (build with -tags
 
 // ErrUnsupported is the sentinel a backend returns (wrapped) for an operation
 // the engine cannot perform — e.g. per-instruction code hooks on an engine
-// without them. Since P2.5a the PRIMARY absence signal for an optional
+// without them. Since the PRIMARY absence signal for an optional
 // capability is a failed type assertion on the capability interface
 // (capability.go); ErrUnsupported remains for a capability that exists but
 // cannot perform a specific operation, and callers rewrite assertion failures
@@ -97,7 +97,7 @@ type MemWriteHookFunc func(b Backend, addr GuestAddr, size int, value int64)
 // capability defined today.
 type Backend interface {
 	// Registers. Per-register access only — the WHOLE-FILE dump is the
-	// optional RegFileReader capability (P7.5c: it used to be a core method
+	// optional RegFileReader capability (it used to be a core method
 	// with an AArch64-baked [34]uint64 shape, which is exactly the kind of
 	// arch shape a frozen core must not carry).
 	RegRead(reg Reg) (uint64, error)
@@ -121,7 +121,7 @@ type Backend interface {
 	// each receiving the kind it was registered under.
 	//
 	// Runtime kind discrimination is deliberately NOT done via svc immediates
-	// (P1 design decision: immediates are not a cross-arch contract — AMD64
+	// (design decision: immediates are not a cross-arch contract — AMD64
 	// has no equivalent encoding). Instead, trampoline identity is decided by
 	// address: traps whose PC lies in the stub region resolve through
 	// interpose.StubManager metadata; anything else is a guest syscall.

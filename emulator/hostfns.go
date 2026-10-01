@@ -8,10 +8,10 @@ import (
 )
 
 // registerHostFns registers the libc functions the bound platform Runtime
-// opts into (P5b.5 — pure feature tests on Runtime data, no platform
+// opts into (— pure feature tests on Runtime data, no platform
 // dispatch): we implement them in Go because the guest libc's versions need
 // a fully bootstrapped libc (which we don't run). They override the real
-// exports during symbol resolution — since P3.5 by NAME, via
+// exports during symbol resolution — since by NAME, via
 // InterposeTable.BindSymbol + the HostResolver element of the boot resolver
 // chain. A Runtime carrying none of these features binds nothing at all
 // (e.g. Darwin today).
@@ -111,16 +111,16 @@ func hostPthreadCreate(e *Emulator, b emu.Backend) {
 func hostRet0(e *Emulator, b emu.Backend) { e.hostResult(b, 0) }
 
 // hostGetauxval implements getauxval(type) without bionic's __libc_auxv.
-// Since P4d it has ZERO per-key knowledge: it serves the auxv vector the
+// Since it has ZERO per-key knowledge: it serves the auxv vector the
 // platform StartupABI built (ensureStartup), reached through the Runtime's
-// AuxvLookup (P5b.5 — bound to the SAME StartupABI instance by the factory,
+// AuxvLookup (— bound to the SAME StartupABI instance by the factory,
 // so data block and query can never drift, and no type assertion is needed
 // here). The vector's HWCAP bits derive from the Target's arch.CPUFeatures —
 // auxv data block and CPU-feature query share one source of truth. In a
 // bionic-only boot the first getauxval may precede any LoadLibrary; the
 // vector is then built lazily without main-image metadata (AT_PHDR/
 // AT_PHNUM/AT_ENTRY read as 0, the historical default). That lazy build is
-// the deliberate P4e rule — see ensureStartup for the pinned ordering
+// the deliberate rule — see ensureStartup for the pinned ordering
 // contract. Unknown keys answer 0, as before.
 func hostGetauxval(e *Emulator, b emu.Backend) {
 	args := e.hostArgs(b, 1)
@@ -140,6 +140,6 @@ func hostGetauxval(e *Emulator, b emu.Backend) {
 	}
 	// auxvLookup is non-nil by construction here: getauxval is bound
 	// (registerHostFns) exactly when the platform Runtime carries an
-	// AuxvLookup — a platform with no auxv (Darwin, P5b) never binds it.
+	// AuxvLookup — a platform with no auxv (Darwin) never binds it.
 	e.hostResult(b, v)
 }

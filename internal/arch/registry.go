@@ -7,7 +7,7 @@ import "fmt"
 // regEntry is the full target quad registered under one (ID, Variant): the
 // CPU properties, the calling convention, the stub encoder, and the CPU
 // feature set (DESIGN.md §3.2 — a Target composes exactly one of each;
-// CPUFeatures joined the triple in P4d, making it a quad).
+// CPUFeatures joined the triple in, making it a quad).
 type regEntry struct {
 	arch     Arch
 	callABI  CallABI

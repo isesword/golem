@@ -8,7 +8,7 @@ import (
 	"github.com/isesword/golem/internal/emu"
 )
 
-// TestReadRole pins the AMD64 P9 role reader. The load-bearing case is the
+// TestReadRole pins the AMD64 role reader. The load-bearing case is the
 // NEGATIVE one: RoleLR is unsupported (x86-64 has no link register — the
 // return address lives on the stack), answered with ErrUnsupportedRole,
 // never a silent zero.

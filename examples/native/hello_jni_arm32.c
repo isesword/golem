@@ -1,4 +1,4 @@
-// Real-bionic ARMv7 JNI fixture (P7) — built with the NDK's
+// Real-bionic ARMv7 JNI fixture — built with the NDK's
 // armv7a-linux-androideabi23-clang against the platform libc/liblog, so the
 // whole chain is REAL: DT_NEEDED libc.so/liblog.so resolved from the
 // loaded bionic modules, crt init via init_array, libc heap/string calls,

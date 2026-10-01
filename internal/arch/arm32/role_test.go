@@ -8,7 +8,7 @@ import (
 	"github.com/isesword/golem/internal/emu"
 )
 
-// TestReadRole pins the ARM32 P9 role reader: every role is a plain
+// TestReadRole pins the ARM32 role reader: every role is a plain
 // register read (R11 = FP, R14 = LR, R13 = SP, R15 = PC, TPIDRURW = TLS).
 func TestReadRole(t *testing.T) {
 	a, _, _, _ := resolveQuad(t)

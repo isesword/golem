@@ -1,6 +1,6 @@
 // Package amd64 implements the ELF/x86-64 Relocator: the relocation SEMANTICS
 // (what each R_X86_64_* code writes into guest memory), the AMD64 counterpart
-// of loader/elf/arm64 (P5a, DESIGN.md §3.3). Memory layout — segment mapping,
+// of loader/elf/arm64 (DESIGN.md §3.3). Memory layout — segment mapping,
 // shareability, protections — stays in loader.Plan; this package only knows
 // how one relocation entry is applied.
 //
@@ -29,7 +29,7 @@ type relocator struct{}
 
 // Apply writes one relocation into guest memory. r.Offset is image-relative;
 // base is the per-engine load bias; res resolves imported symbols through the
-// P3.5 SymbolResolver contract — the result is always a guest address, so a
+// .5 SymbolResolver contract — the result is always a guest address, so a
 // host-interposed symbol is indistinguishable from a guest one here.
 //
 // x86-64 note: GLOB_DAT/JUMP_SLOT/R_X86_64_64 all compute S+A (symbol value

@@ -1,10 +1,10 @@
 //go:build unicorn && (darwin || linux)
 
-// P5d acceptance: the FULL emulator boot flow (emulator.New → LoadLibrary →
+// acceptance: the FULL emulator boot flow (emulator.New → LoadLibrary →
 // CallSymbol) on a Darwin/ARM64 target whose Mach-O carries
 // LC_DYLD_CHAINED_FIXUPS in pointer format DYLD_CHAINED_PTR_64 (2) — the
-// modern chained container for PLAIN arm64, against P5b's classic opcodes
-// and P5c's arm64e format 1. The fixture is the SAME source as P5b's
+// modern chained container for PLAIN arm64, against the classic opcodes
+// and the arm64e format 1. The fixture is the SAME source as that fixture's
 // (hello_darwin_arm64.c), so every behavior assertion is identical; only
 // the fixup container differs: the rebase (fptr_table[0] -> seven) and the
 // bind (host_fp <- host_magic) arrive through the format 2 chain decoder
@@ -51,7 +51,7 @@ func TestBootDarwinARM64ChainedEndToEnd(t *testing.T) {
 		Engine: "unicorn",
 		Pid:    4242,
 		// No AssetRoot: the Darwin boot must not touch the Android asset
-		// tree (P5b ships no Darwin runtime libraries).
+		// tree (ships no Darwin runtime libraries).
 	}, WithPlatformConfig(darwin.NewConfig(
 		darwin.WithReplaceFns(map[string]interpose.HostFunc{
 			"host_magic": func(ctx interpose.CallContext) uint64 {

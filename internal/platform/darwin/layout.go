@@ -8,7 +8,7 @@ import (
 )
 
 // Layout geometry of the Darwin/ARM64 guest process. The values are chosen
-// fresh for Darwin — the point of P5b is that a second platform picks its OWN
+// fresh for Darwin — the point of is that a second platform picks its OWN
 // geometry instead of inheriting Android's — with module/heap/mmap tiling
 // [0x40000000, 0x70000000) contiguously and stubs, stack and TLS clear above.
 // The window deliberately sits above kernel.BrkBase (0x30000000): the Darwin
@@ -29,7 +29,7 @@ const (
 	tlsSize    = 0x00010000
 )
 
-// LayoutPolicy is the Darwin personality's platform.LayoutPolicy (P4c shape,
+// LayoutPolicy is the Darwin personality's platform.LayoutPolicy (shape,
 // DESIGN.md §3.4): it plans the initial guest address space — pure geometry,
 // no Map/Alloc/Reserve.
 type LayoutPolicy struct{}

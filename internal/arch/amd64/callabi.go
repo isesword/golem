@@ -17,7 +17,7 @@ import (
 // This is the FUNCTION call ABI only. The Linux x86-64 syscall ABI is a
 // different convention (number in RAX, 4th argument in R10 — NOT RCX, which
 // the `syscall` instruction itself clobbers) and lives in platform/android's
-// LinuxAMD64Transport; the two must never be merged (P5a requirement: the
+// LinuxAMD64Transport; the two must never be merged (requirement: the
 // RCX-vs-R10 difference is pinned by TestArgRegsVsSyscallABI).
 type sysV64 struct{}
 
@@ -65,7 +65,7 @@ func (sysV64) ResultReg(i int) (emu.Reg, bool) {
 //
 // Nothing below the new RSP is written: the 128-byte red zone of the frame
 // being created stays intact.
-// P9.5a: the register writes (args, RSP, RIP) are collected into one set
+// the register writes (args, RSP, RIP) are collected into one set
 // and flushed in a single batch when the backend has the RegBatchWriter
 // capability — the no-capability loop writes the identical set in the
 // identical order, so the two paths cannot drift.
@@ -186,7 +186,7 @@ func (sysV64) ReadResult(b emu.Backend) (arch.CallResult, error) {
 //
 // Stack discipline note: the 128-byte red zone below RSP is NOT emulated —
 // no golem component may treat [RSP-128, RSP) as scratch space (pinned by the
-// P5a stack-semantics tests).
+// stack-semantics tests).
 func (sysV64) ReturnFromCall(b emu.Backend) error {
 	rsp, err := b.RegRead(RSP)
 	if err != nil {
@@ -205,7 +205,7 @@ func (sysV64) ReturnFromCall(b emu.Backend) error {
 	return nil
 }
 
-// ReadReturnAddress (P9 observation semantics): at function entry (before
+// ReadReturnAddress (observation semantics): at function entry (before
 // any prologue) the return address is the 8-byte little-endian word at
 // [RSP] — x86-64 keeps it on the stack, not in a register (invariant 13).
 func (sysV64) ReadReturnAddress(b emu.Backend) (emu.GuestAddr, error) {

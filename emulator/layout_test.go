@@ -7,9 +7,9 @@ import (
 	"github.com/isesword/golem/internal/platform/android"
 )
 
-// TestResolveLayoutMatchesAndroidPolicy pins the P4c/P5b.5 composition-root
+// TestResolveLayoutMatchesAndroidPolicy pins the composition-root
 // wiring: the layout New boots with must be exactly what the bound Runtime's
-// LayoutPolicy resolves for the Target — the numbers of the retired pre-P4c
+// LayoutPolicy resolves for the Target — the numbers of the retired legacy
 // layout helper, carried by the policy, with zero user overrides. The policy
 // now reaches the composition root through the platform registry: resolve
 // the factory for the probed platform, Bind, consume Runtime.Layout.
@@ -53,7 +53,7 @@ func TestResolveLayoutMatchesAndroidPolicy(t *testing.T) {
 
 // TestResolveLayoutUnknownPlatform: a Target whose platform has no
 // registered factory fails loudly at the composition root's platform.Resolve
-// (P5b.5) — before any layout is planned.
+// — before any layout is planned.
 func TestResolveLayoutUnknownPlatform(t *testing.T) {
 	if _, err := platform.Resolve(platform.ID(99)); err == nil {
 		t.Fatal("unknown platform must error, not invent a layout")

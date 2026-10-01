@@ -1,6 +1,6 @@
 //go:build unicorn && (darwin || linux)
 
-// P5b acceptance: the FULL emulator boot flow (emulator.New → LoadLibrary →
+// acceptance: the FULL emulator boot flow (emulator.New → LoadLibrary →
 // CallSymbol) on a Darwin/ARM64 target — the same ARM64 CPU as the Android
 // targets, everything else flipped: Mach-O container (dyld rebase/bind
 // opcodes instead of RELA), Darwin platform (x16 syscall number, svc #0x80,
@@ -34,7 +34,7 @@ func TestBootDarwinARM64EndToEnd(t *testing.T) {
 		Engine: "unicorn",
 		Pid:    4242,
 		// No AssetRoot: the Darwin boot must not touch the Android asset
-		// tree (P5b ships no Darwin runtime libraries).
+		// tree (ships no Darwin runtime libraries).
 	}, WithPlatformConfig(darwin.NewConfig(
 		darwin.WithReplaceFns(map[string]interpose.HostFunc{
 			"host_magic": func(ctx interpose.CallContext) uint64 {

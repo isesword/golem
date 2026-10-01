@@ -12,7 +12,7 @@ import (
 // know nothing about object formats) and does NOT own memory layout (that
 // stays in Plan — segment mapping, shareability, protections).
 //
-// base is the per-engine load bias; res is the SymbolResolver (P3.5) every
+// base is the per-engine load bias; res is the SymbolResolver every
 // imported symbol goes through — guest exports and host-interposed symbols
 // are the same shape to the Relocator (a guest address, never a host
 // callable). r.Offset is image-relative; the Relocator computes the final

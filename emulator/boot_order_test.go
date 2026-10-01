@@ -12,7 +12,7 @@ import (
 	"github.com/isesword/golem/internal/emu"
 )
 
-// P4e boot-sequence invariant tests (DESIGN.md §4 "三条禁止条件" + TCG
+// boot-sequence invariant tests (DESIGN.md §4 "三条禁止条件" + TCG
 // timing). An instrumented fake CPU backend is registered under a test-only
 // engine name, so the FULL New() boot — probe, target resolution, layout,
 // backend creation, region mapping, image load/link/finalize, StartupABI —
@@ -151,7 +151,7 @@ func (b *bootBE) Close() error {
 	return nil
 }
 
-// Capability probe New performs (P2.5a): without it, New fails.
+// Capability probe New performs without it, New fails.
 func (b *bootBE) HookMemInvalid(fn emu.MemInvalidHookFunc) (emu.HookHandle, error) {
 	b.inv = fn
 	return bootHook{}, nil

@@ -17,9 +17,9 @@ var arm64Caps = arch.AddressSpaceCaps{
 }
 
 // TestLayoutPolicyPinsLegacyNumbers is the behavior-invariant red line of
-// P4c: the Android LayoutPolicy must reproduce, field by field, the exact
-// guest address geometry the emulator booted with before P4c (the retired
-// pre-P4c layout helper plus the heap/mmap boundaries New used to splice by
+// the Android LayoutPolicy must reproduce, field by field, the exact
+// guest address geometry the emulator booted with before (the retired
+// legacy layout helper plus the heap/mmap boundaries New used to splice by
 // hand from kernel.BrkBase / memory.MmapBase).
 func TestLayoutPolicyPinsLegacyNumbers(t *testing.T) {
 	l, err := LayoutPolicy{}.Resolve(
@@ -30,7 +30,7 @@ func TestLayoutPolicyPinsLegacyNumbers(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 
-	// The pre-P4c constants, restated literally so this test fails if the
+	// The legacy constants, restated literally so this test fails if the
 	// policy drifts from the historical numbers.
 	want := memory.Layout{
 		ModuleRegion: memory.Region{Addr: 0x12000000, Size: 0x1E000000},
@@ -48,7 +48,7 @@ func TestLayoutPolicyPinsLegacyNumbers(t *testing.T) {
 	}
 
 	// The heap/mmap bases must stay tied to the single definition sites the
-	// pre-P4c code used: kernel.BrkBase and memory.MmapBase. And the regions
+	// legacy code used: kernel.BrkBase and memory.MmapBase. And the regions
 	// must tile contiguously: module window end == heap base == the address
 	// where the old module-arena bump allocator collided with the heap
 	// reservation; mmap window end == stub base == the old arena top
@@ -107,7 +107,7 @@ func TestLayoutPolicyRejectsUnsupportedInputs(t *testing.T) {
 	}
 }
 
-// TestLayoutPolicyARM32 is the P6e three-state pin for 32-bit targets:
+// TestLayoutPolicyARM32 is the three-state pin for 32-bit targets:
 // ACCEPT the ARM Linux 3G/1G caps (32-bit geometry, everything below
 // MaxUserVA 0xBF000000), keep the 64-bit layout byte-identical, and fail
 // LOUDLY when a 32-bit ceiling cannot hold the geometry.

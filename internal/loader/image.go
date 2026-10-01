@@ -47,7 +47,7 @@ type Reloc struct {
 
 // Sym is a dynamic symbol (imported when Undef, else exported). Bind/Type
 // keep the ELF vocabulary; other formats map onto the closest equivalent.
-// Visibility uses the format-agnostic SymbolVisibility (P3.5; ELF STV_*).
+// Visibility uses the format-agnostic SymbolVisibility (ELF STV_*).
 type Sym struct {
 	Name       string
 	Value      uint64
@@ -87,7 +87,7 @@ type Image struct {
 
 	// Startup metadata (ELF program-header table + entry point). The format
 	// parser fills these; platform.StartupABI consumes them when building
-	// the process initial state (P4).
+	// the process initial state .
 	Entry    uint64 // image-relative entry address (e_entry)
 	PhdrAddr uint64 // image-relative vaddr of the program-header table (0 if not mapped)
 	PhdrNum  int    // number of program-header entries

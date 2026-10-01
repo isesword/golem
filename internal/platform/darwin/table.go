@@ -2,7 +2,7 @@ package darwin
 
 import "github.com/isesword/golem/internal/kernel"
 
-// XNU/ARM64 BSD syscall numbers (bsd/sys/syscall.h). P5b binds only the
+// XNU/ARM64 BSD syscall numbers (bsd/sys/syscall.h). binds only the
 // pid/uid family the e2e acceptance chain exercises; every other number —
 // and every Mach trap (negative) — falls through Dispatch to a logged ENOSYS,
 // which is how you discover the next syscall to implement when bringing a new

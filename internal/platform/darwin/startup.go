@@ -21,7 +21,7 @@ const StackTopReserve = 0x100
 // execve where argv[0] equals the path).
 const argv0 = "golem-guest"
 
-// StartupABI is the Darwin personality's platform.StartupABI (P5b).
+// StartupABI is the Darwin personality's platform.StartupABI .
 //
 // Landing form — EXEC-STYLE INITIAL STACK FRAME, not an auxv data block.
 // This is the deliberate counter-example to the Android StartupABI: XNU hands
@@ -41,7 +41,7 @@ const argv0 = "golem-guest"
 // stack top and the reserve are). There is intentionally no AT_RANDOM data
 // block and no host-side vector: Darwin guests query nothing of the sort.
 //
-// Decoupling proof (P5b acceptance): BuildInitialState NEVER reads
+// Decoupling proof (acceptance): BuildInitialState NEVER reads
 // ctx.Features — the HWCAP/auxv coupling is an Android property, and this
 // implementation builds the full initial state without it.
 type StartupABI struct {

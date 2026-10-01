@@ -8,7 +8,7 @@ import (
 	"github.com/isesword/golem/internal/kernel"
 )
 
-// This file is the P5b.5 synthetic-platform proof: a brand-new platform
+// This file is the synthetic-platform proof: a brand-new platform
 // personality — never linked into emulator's wiring — is registered,
 // resolved and bound through exactly the Register/Resolve/Bind contract the
 // composition root uses. Nothing outside this package changes for the

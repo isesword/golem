@@ -12,7 +12,7 @@ import (
 // 4-byte longs/pointers, 8-byte-aligned long long, little-endian. It is a
 // SEPARATE implementation from AsmGenericLP64Codecs / LinuxX8664Codecs — the
 // layouts were verified struct by struct against the kernel UAPI headers
-// (P6d):
+// :
 //
 //	struct          ARM32 UAPI (ILP32)                                    vs 64-bit
 //	stat (stat64)   st_mode@16, st_size@48, st_blksize@56 (u32),    → DIFFERS

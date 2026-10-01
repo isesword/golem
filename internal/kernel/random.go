@@ -7,7 +7,7 @@ package kernel
 //   - SysGetrandom (default, non-TrueRandom mode) derives a per-call seed
 //     from ALL syscall arguments plus a call counter, then streams from here;
 //   - platform StartupABI builds the auxv AT_RANDOM 16 bytes from here with a
-//     fixed seed (P4d — the initial stack's random canary shares the syscall
+//     fixed seed (— the initial stack's random canary shares the syscall
 //     path's deterministic source instead of carrying its own ad-hoc bytes).
 //
 // Deterministic so runs stay reproducible — and trivially distinguishable

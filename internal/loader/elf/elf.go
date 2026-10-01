@@ -1,4 +1,4 @@
-// Package elf parses an ELF shared object (ELFCLASS64 or ELFCLASS32 — P6c)
+// Package elf parses an ELF shared object (ELFCLASS64 or ELFCLASS32 —)
 // into a format-agnostic loader.Image: PT_LOAD segments, dynamic symbols,
 // RELA relocations (64-bit targets), REL relocations (32-bit targets such as
 // ARM32 — the addend is implicit, the word stored at the target), and Android
@@ -25,12 +25,12 @@ func init() { loader.RegisterParser(loader.FormatELF, Parse) }
 
 // machineArch maps ELF e_machine to the engine architecture. An unmapped
 // machine leaves Image.Arch zero, and the load fails at relocator resolution
-// with an explicit "no relocator registered" error (pre-P3 behavior also
+// with an explicit "no relocator registered" error (legacy behavior also
 // failed unsupported machines, at apply time).
 var machineArch = map[debugelf.Machine]emu.Arch{
 	debugelf.EM_AARCH64: emu.ArchARM64,
-	debugelf.EM_X86_64:  emu.ArchAMD64, // P5a
-	debugelf.EM_ARM:     emu.ArchARM,   // P6c (ELFCLASS32)
+	debugelf.EM_X86_64:  emu.ArchAMD64,
+	debugelf.EM_ARM:     emu.ArchARM, // (ELFCLASS32)
 }
 
 // Parse reads the ELF at path and builds the loader.Image. base is not
@@ -62,7 +62,7 @@ func Parse(path string) (*loader.Image, error) {
 		if p.Type != debugelf.PT_LOAD {
 			continue
 		}
-		// P7.5d: a segment claiming more file bytes than the file HAS is a
+		// a segment claiming more file bytes than the file HAS is a
 		// corrupt/truncated image — refuse here with a parse error, never
 		// slice out of range later in Plan (the loader rejects malformed
 		// binaries, it does not read as much as it can).
@@ -81,7 +81,7 @@ func Parse(path string) (*loader.Image, error) {
 	}
 	img.LoadSpan = pageUp(maxEnd)
 
-	// Startup metadata for platform.StartupABI (P4): entry point and the
+	// Startup metadata for platform.StartupABI entry point and the
 	// in-image address of the program-header table. PT_PHDR is authoritative;
 	// otherwise locate the phdr file range inside a PT_LOAD segment.
 	img.Entry = f.Entry
@@ -159,7 +159,7 @@ func Parse(path string) (*loader.Image, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", sec.Name, err)
 		}
-		// P7.5d: a relocation section whose byte length is not a whole
+		// a relocation section whose byte length is not a whole
 		// number of entries is malformed — reject loudly instead of
 		// silently dropping a ragged tail (the loader rejects; it does not
 		// read as much as it can). entrySz 0 = class/kind not parsed here

@@ -1,4 +1,4 @@
-// Tiny x86-64 (AMD64) shared library — the P5a touchstone fixture for
+// Tiny x86-64 (AMD64) shared library — the touchstone fixture for
 // golem's Android/AMD64 arch x platform x format assembly. No libc
 // dependency except the single explicit import below (host_magic), which the
 // tests interpose at link time (HostResolver stub) — exercising GOT
@@ -53,7 +53,7 @@ long guest_getpid(void) {
     return ret;
 }
 
-// Eight-argument SysV stack-spill probe (P5a.5): a..f arrive in
+// Eight-argument SysV stack-spill probe a..f arrive in
 // RDI/RSI/RDX/RCX/R8/R9, g/h on the stack at [entry RSP+8] / [entry RSP+16]
 // above the pushed return address. Naked on purpose: the asm observes the
 // EXACT entry state — no prologue may move RSP first — and records it in

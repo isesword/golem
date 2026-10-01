@@ -7,7 +7,7 @@ import (
 	"github.com/isesword/golem/internal/emu"
 )
 
-// P2.5a caller-side capability probes: with a backend that implements ONLY
+// .5a caller-side capability probes: with a backend that implements ONLY
 // the emu.Backend core interface, every capability-gated emulator entry point
 // must degrade to an error wrapping emu.ErrUnsupported — the same errors.Is
 // path as an engine that has the capability but refuses it.
@@ -40,7 +40,7 @@ func TestCapabilityProbeDegrades(t *testing.T) {
 			_, err := e.Trace(0x1000, 0x2000)
 			return err
 		},
-		// P2.5d: ReplaceE is interposition now — capability-gated on
+		// ReplaceE is interposition now — capability-gated on
 		// InstructionHooker like the other entry hooks.
 		"ReplaceE": func() error {
 			return e.ReplaceE(0x1000, func(*Hook) uint64 { return 0 })

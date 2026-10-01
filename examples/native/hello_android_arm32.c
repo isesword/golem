@@ -1,4 +1,4 @@
-// Tiny Android/ARM32 (ELF32, EM_ARM, armv7 EABI) shared library — the P6e
+// Tiny Android/ARM32 (ELF32, EM_ARM, armv7 EABI) shared library — the
 // touchstone fixture for golem's arch x platform x format matrix: the THIRD
 // architecture, exercising everything that is genuinely different at 32
 // bits — the AAPCS32 register-pair argument rules, Thumb interworking, REL
@@ -14,7 +14,7 @@
 
 long add(long a, long b) { return a + b; }
 
-// AAPCS32 register-pair probe (P6 Architecture Exception #1 made this
+// AAPCS32 register-pair probe (Architecture Exception #1 made this
 // expressible): the signature (u32, u64) forces a into r0 and b into the
 // r2:r3 pair with r1 SKIPPED — a loader/emulator that places b in r1:r2
 // (the naive []uint64 layout) gets a visibly wrong result. Uses both

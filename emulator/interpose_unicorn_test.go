@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// TestInterposeEntryHookE2E is the P2.5d acceptance test on a real backend:
+// TestInterposeEntryHookE2E is the acceptance test on a real backend:
 // replacing an exported function must (a) run the host function instead of
 // the guest body, (b) write the result back per the CallABI so nested guest
 // callers see it too, and (c) leave guest .text byte-identical — the

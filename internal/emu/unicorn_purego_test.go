@@ -45,7 +45,7 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 	// mid-emulation — the nesting path every real consumer depends on.
 	hookFires := 0
 	sawX0 := []uint64{}
-	ih, ok := be.(InstructionHooker) // capability probe (P2.5a)
+	ih, ok := be.(InstructionHooker) // capability probe
 	if !ok {
 		t.Fatal("backend lacks the InstructionHooker capability")
 	}
@@ -77,7 +77,7 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 	}
 
 	// Batch GP register read must agree with the individually-read X0
-	// (RegFileReader capability, P7.5c).
+	// (RegFileReader capability).
 	rr, ok := be.(RegFileReader)
 	if !ok {
 		t.Fatal("the arm64 unicorn backend must implement RegFileReader")
@@ -100,7 +100,7 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	const wantVal = uint64(0xDEADBEEFCAFEBABE)
-	inv, ok := be.(InvalidMemHooker) // capability probe (P2.5a)
+	inv, ok := be.(InvalidMemHooker) // capability probe
 	if !ok {
 		t.Fatal("backend lacks the InvalidMemHooker capability")
 	}
@@ -129,7 +129,7 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 	}
 
 	// Context save/restore round-trip.
-	cm, ok := be.(ContextManager) // capability probe (P2.5a)
+	cm, ok := be.(ContextManager) // capability probe
 	if !ok {
 		t.Fatal("backend lacks the ContextManager capability")
 	}
@@ -150,7 +150,7 @@ func TestUnicornPuregoSmoke(t *testing.T) {
 		t.Errorf("X0 after restore = %#x, want %d", got, 5+adds)
 	}
 
-	ci, ok := be.(CacheInvalidator) // capability probe (P2.5a)
+	ci, ok := be.(CacheInvalidator) // capability probe
 	if !ok {
 		t.Fatal("backend lacks the CacheInvalidator capability")
 	}

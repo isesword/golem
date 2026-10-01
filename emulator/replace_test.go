@@ -8,7 +8,7 @@ import (
 	"github.com/isesword/golem/internal/emu"
 )
 
-// hookBE is a test double for the P2.5d interposition paths: the emu.Backend
+// hookBE is a test double for the interposition paths: the emu.Backend
 // core (nil embedded — unimplemented ops panic) plus the InstructionHooker
 // capability, recording every HookCode range and injecting failures. RegRead/
 // RegWrite serve a tiny register file so the entry-hook dispatch can run.

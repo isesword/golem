@@ -26,8 +26,8 @@ func (e *Emulator) capabilityErr(op string, err error) error {
 	return err
 }
 
-// capabilityUnavailable is the probe half of capability gating (P2.5a,
-// DESIGN.md invariant 14): the engine does not implement the capability
+// capabilityUnavailable is the probe half of capability gating (DESIGN.md
+// invariant 14): the engine does not implement the capability
 // interface backing op at all. The error wraps emu.ErrUnsupported so callers
 // keep ONE errors.Is degrade path whether the capability is absent (type
 // assertion failed) or present but refused (backend returned ErrUnsupported).
@@ -68,7 +68,7 @@ const (
 //
 // The backing uc_mem_map failure is returned as an error AND the address-
 // space bookkeeping is rolled back (no phantom region, no consumed VA); a
-// failed ROLLBACK poisons the emulator (the space is inconsistent — P7.5b:
+// failed ROLLBACK poisons the emulator (the space is inconsistent —:
 // armed for real, not just claimed in the message). Call sites that cannot
 // propagate errors (guest-initiated JNI up-calls) use MustAlloc instead.
 func (e *Emulator) Alloc(size uint64, prot int) (uint64, error) {
@@ -105,7 +105,7 @@ func (e *Emulator) doAlloc(size uint64, prot int) (uint64, error) {
 			if err := e.be.MemMap(emu.GuestAddr(base), uint64(chunk), prot); err != nil {
 				// transaction: the bookkeeping region must not outlive a
 				// failed backend map; if the rollback itself fails the
-				// address space is inconsistent — POISON FOR REAL (P7.5b:
+				// address space is inconsistent — POISON FOR REAL (
 				// the message used to claim this without arming it).
 				if rb := e.mem.RollbackLast(base, uint64(chunk)); rb != nil {
 					return 0, e.poison(fmt.Sprintf("map arena chunk %#x", base),
@@ -216,14 +216,14 @@ func (e *Emulator) ReadCString(addr uint64) (string, error) { return e.ReadCStr(
 // call's result (written back per the target's CallABI).
 type Hook struct {
 	e    *Emulator
-	kind HookKind // where this hook fires — gates the P9 entry-scoped answers
+	kind HookKind // where this hook fires — gates the entry-scoped answers
 }
 
 // Emu returns the emulator, for memory access inside a Replace callback.
 func (h *Hook) Emu() *Emulator { return h.e }
 
 // Arg returns integer argument i (0-based) of the in-flight guest call as a
-// machine-word Value (Portable API, P9): read through the CallABI (register
+// machine-word Value (Portable API): read through the CallABI (register
 // portion first, then the stack spill area — the entry-state contract).
 //
 // Valid ONLY at function-entry hooks (ReplaceFns / ReplaceE / HookSymbol):
@@ -248,7 +248,7 @@ func (h *Hook) Arg(i int) (Value, error) {
 }
 
 // ReturnValue returns the value the in-flight call is RETURNING (Portable
-// API, P9). Only well-defined where the call has already PRODUCED its
+// API). Only well-defined where the call has already PRODUCED its
 // result — a function-EXIT context. golem installs no exit hooks yet
 // (HookFunctionExit is reserved), so every context answerable today fails
 // with ErrContextUnavailable rather than reading pre-call register junk.
@@ -264,7 +264,7 @@ func (h *Hook) ReturnValue() (Value, error) {
 }
 
 // ReturnAddress returns where the in-flight call will return to (Portable
-// API, P9) — per convention: X30 on ARM64, R14 on ARM32, [RSP] on AMD64.
+// API) — per convention: X30 on ARM64, R14 on ARM32, [RSP] on AMD64.
 // Valid ONLY at function-entry hooks; an instruction hook fired mid-frame
 // cannot know the caller, so it answers ErrContextUnavailable (use
 // ReadRole(RoleLR) for the raw link-register value where the architecture
@@ -284,7 +284,7 @@ func (h *Hook) ReturnAddress() (uint64, error) {
 // x0..x30, 31 = SP, 32 = PC, 33 = NZCV — via the RegFileReader capability.
 // ok=false means "this engine/arch has no register-file dump" (or i out of
 // range): a genuine zero value and a missing register stay distinguishable
-// (P7.5c — this used to answer a silent 0 for both). For call ARGUMENTS use
+// (— this used to answer a silent 0 for both). For call ARGUMENTS use
 // Arg: it covers registers and stack spill alike through the CallABI.
 func (h *Hook) Reg(i int) (uint64, bool) {
 	rr, ok := h.e.be.(emu.RegFileReader)
@@ -320,7 +320,7 @@ func (h *Hook) SP() uint64 { v, _ := h.e.be.RegRead(h.e.spReg); return v }
 func (h *Hook) SetPC(v uint64) { _ = h.e.be.RegWrite(h.e.pcReg, v) }
 
 // RegRead / RegWrite / MemRead / MemWrite make *Hook satisfy
-// interpose.CallContext (P2.5d): the interpose package cannot import
+// interpose.CallContext the interpose package cannot import
 // emulator, so the interposition callback contract is defined there and the
 // Hook — the emulator's own callback context — adapts to it.
 func (h *Hook) RegRead(r emu.Reg) (uint64, error)  { return h.e.be.RegRead(r) }
@@ -336,7 +336,7 @@ func (h *Hook) MemRead(a emu.GuestAddr, n uint64) ([]byte, error) {
 // function's return (X0).
 type ReplaceFunc func(h *Hook) uint64
 
-// Replace makes calls to the function at addr run fn instead. Since P2.5d
+// Replace makes calls to the function at addr run fn instead. Since.5d
 // (DESIGN.md §3.8, invariant 11) this is FUNCTION INTERPOSITION, not a code
 // patch: guest .text is immutable, so instead of overwriting the entry with a
 // trampoline the emulator binds fn in the InterposeTable and installs a
@@ -387,7 +387,7 @@ func (e *Emulator) interposeE(addr uint64, hf interpose.HostFunc) error {
 	// TIME: a TB translated before this hook was added (the function already
 	// ran once) would never fire it, so the affected code-cache range must be
 	// flushed after installing the hook — through the CodeCacheController
-	// capability (P3.5), not a backend-specific call. A failed flush leaves
+	// capability, not a backend-specific call. A failed flush leaves
 	// the hook installed-but-inert — remove it so a retry does not stack
 	// hooks. An engine with hooks but no CodeCacheController capability
 	// presumably does not cache translations (nothing to invalidate), so
@@ -449,7 +449,7 @@ func (e *Emulator) ReplaceSymbol(name string, fn ReplaceFunc) error {
 //
 // Inline hooks need per-instruction code hooks; an engine without the
 // InstructionHooker capability returns an error wrapping emu.ErrUnsupported.
-// (Replace uses the same capability since P2.5d — entry interception is an
+// (Replace uses the same capability since — entry interception is an
 // execution hook too, no longer an SVC trap patch.)
 func (e *Emulator) HookAddr(addr uint64, fn func(h *Hook)) (func(), error) {
 	return e.hookAddrKind(addr, fn, HookInstruction)
@@ -457,7 +457,7 @@ func (e *Emulator) HookAddr(addr uint64, fn func(h *Hook)) (func(), error) {
 
 // HookSymbol is HookAddr by exported symbol name. Unlike HookAddr it marks
 // the context as FUNCTION-ENTRY (an exported function symbol's address IS
-// the entry — the P9 semantic questions Arg/ReturnAddress are answerable);
+// the entry — the semantic questions Arg/ReturnAddress are answerable);
 // only hook function symbols with it, never data symbols.
 func (e *Emulator) HookSymbol(name string, fn func(h *Hook)) (func(), error) {
 	addr, ok := e.Sym(name)
@@ -468,7 +468,7 @@ func (e *Emulator) HookSymbol(name string, fn func(h *Hook)) (func(), error) {
 }
 
 // hookAddrKind is the shared per-address code-hook installer; kind labels
-// the P9 context the callback will observe.
+// the context the callback will observe.
 func (e *Emulator) hookAddrKind(addr uint64, fn func(h *Hook), kind HookKind) (func(), error) {
 	ih, ok := e.be.(emu.InstructionHooker)
 	if !ok {

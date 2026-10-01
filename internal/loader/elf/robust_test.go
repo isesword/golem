@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// P7.5d robustness contract: the loader REJECTS malformed binaries with a
+// .5d robustness contract: the loader REJECTS malformed binaries with a
 // parse error — it never slices out of range later (Plan) and never
 // silently drops a ragged relocation tail.
 
@@ -24,7 +24,7 @@ func writeCorruptELF32(t *testing.T, mutate func(buf []byte)) string {
 }
 
 // TestParseRejectsSegmentFileRangePastEOF: a PT_LOAD claiming more file
-// bytes than the file HAS must fail AT PARSE TIME — the pre-P7.5d behavior
+// bytes than the file HAS must fail AT PARSE TIME — the legacy behavior
 // was a slice-bounds panic in Image.Plan().
 func TestParseRejectsSegmentFileRangePastEOF(t *testing.T) {
 	// phdr[0].p_filesz @ 52+16: claim 0x10000 file bytes in a ~0x2b0 file.

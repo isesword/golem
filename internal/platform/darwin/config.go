@@ -1,9 +1,9 @@
-// Package darwin is the Darwin (macOS/XNU) OS-platform personality (P5b,
+// Package darwin is the Darwin (macOS/XNU) OS-platform personality (
 // DESIGN.md §3.4): the BSD-syscall transport + number table + guest struct
 // codecs, the guest address-space LayoutPolicy, the StartupABI (exec-style
 // initial stack frame — Darwin has no auxv), and the typed boot Config.
 //
-// P5b scope is deliberately thin: it exists to prove the platform seam is
+// scope is deliberately thin: it exists to prove the platform seam is
 // real — that loader, kernel, emu and the emulator's boot pipeline carry no
 // Android-shaped assumptions. The syscall table therefore binds only what the
 // e2e acceptance chain exercises (the pid/uid family); everything else falls
@@ -16,13 +16,13 @@ import (
 	"github.com/isesword/golem/internal/platform"
 )
 
-// Config is the Darwin personality's typed boot configuration (P4a shape,
+// Config is the Darwin personality's typed boot configuration (shape,
 // DESIGN.md §3.6 invariant 4): the pieces that only make sense for a
 // Darwin-flavoured guest, carried to the composition root as a
 // platform.Config so emulator.Config stays platform-agnostic.
 //
 // Unlike android.Config there is deliberately no JNI/Dex/profile surface:
-// a Darwin guest has no Java runtime and P5b models no device persona.
+// a Darwin guest has no Java runtime and models no device persona.
 // ReplaceFns is the same interposition contract as Android's (both binding
 // paths terminate in interpose.InterposeTable).
 type Config struct {

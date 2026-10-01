@@ -1,6 +1,6 @@
 package emu
 
-// This file holds the architecture/trap vocabulary introduced in P0 of the
+// This file holds the architecture/trap vocabulary introduced in of the
 // arch-platform abstraction: names only, no behavior change. Today the only
 // compiled backend (unicorn) supports exactly ArchARM64; the rest of the enum
 // reserves the design space for ARM32/AMD64 (see ARCHITECTURE.md).
@@ -43,7 +43,7 @@ const (
 )
 
 // TrapHandler fires when guest execution traps into the host. The kind
-// argument identifies the trap class. P0: the unicorn backend passes each
+// argument identifies the trap class.: the unicorn backend passes each
 // handler the kind it was REGISTERED under (no runtime discrimination yet —
 // see Backend.InstallTrap).
 type TrapHandler func(b Backend, kind TrapKind)

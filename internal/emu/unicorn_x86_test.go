@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// AMD64 behavioral tests on the real engine (P5a). Test-only aliases for the
+// AMD64 behavioral tests on the real engine . Test-only aliases for the
 // arch/amd64 register ids — this package cannot import internal/arch/amd64
 // (import cycle); arch/amd64's TestFrozenRegIDs pins the numbers.
 const (
@@ -174,7 +174,7 @@ func TestUnicornAMD64SyscallInsnTrap(t *testing.T) {
 
 // TestUnicornAMD64ReadGPRegsUnsupported pins that an AMD64 engine refuses the
 // ARM64 register-file shape with ErrUnsupported instead of returning garbage
-// in ARM slots (P7.5c: the dump is the RegFileReader capability; the shape is
+// in ARM slots (the dump is the RegFileReader capability; the shape is
 // arch business, never a core contract).
 func TestUnicornAMD64ReadGPRegsUnsupported(t *testing.T) {
 	be := newAMD64Backend(t)

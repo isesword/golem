@@ -6,7 +6,7 @@ import (
 	"github.com/isesword/golem/internal/platform"
 )
 
-// The Darwin personality registers its factory at link time (P5b.5): the
+// The Darwin personality registers its factory at link time the
 // composition root resolves platform.Darwin -> this factory and binds the
 // complete Runtime below. emulator holds no Darwin-specific selection
 // logic beyond this registration.
@@ -46,8 +46,8 @@ func (factory) Bind(ctx platform.BindContext) (*platform.Runtime, error) {
 		ReplaceFns:      cfg.ReplaceFns,
 		// Everything else stays absent by construction: no AuxvLookup (XNU
 		// has no auxv — the StartupABI builds an exec-style initial stack
-		// frame instead), no RuntimeLibs (P5b ships no dyld/libSystem), no
-		// InitGuest (Darwin's TLS layout is dyld's business and P5b models
+		// frame instead), no RuntimeLibs (ships no dyld/libSystem), no
+		// InitGuest (Darwin's TLS layout is dyld's business and models
 		// none of it), no PthreadStubs (no fiber scheduling — the psynch
 		// primitives are not modelled), no Interop (a Darwin guest has no
 		// Java runtime).

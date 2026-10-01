@@ -83,7 +83,7 @@ func TestRelRelativeReadModifyWrite(t *testing.T) {
 }
 
 // TestRelSymTypes pins the per-type addend rules (AAELF Table 4-9 + the
-// lld/bionic behavior P7 verified live): ABS32/TARGET1 add the stored word
+// lld/bionic behavior verified live): ABS32/TARGET1 add the stored word
 // (a genuine addend); GLOB_DAT/JUMP_SLOT write S and IGNORE the stored
 // word — JUMP_SLOT's stored word is lld's lazy PLT trampoline address,
 // never an addend.
@@ -114,7 +114,7 @@ func TestRelSymTypes(t *testing.T) {
 		}
 	})
 	t.Run("JUMP_SLOT overwrites the lazy PLT trampoline", func(t *testing.T) {
-		// The real-world P7 case: lld fills every .got.plt slot with the
+		// The real-world case: lld fills every .got.plt slot with the
 		// image-relative PLT address (0x690 in the NDK fixture) for lazy
 		// binding — adding it lands every PLT call at S+0x690.
 		be := newMemBE()

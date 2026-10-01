@@ -12,7 +12,7 @@ import (
 // exactly right.
 type stubBackend struct{ Backend }
 
-// TestFactoryReceivesArch pins the P0 contract: the Arch given to NewNamed is
+// TestFactoryReceivesArch pins the contract: the Arch given to NewNamed is
 // handed to the backend's Factory unchanged.
 func TestFactoryReceivesArch(t *testing.T) {
 	var got Arch
@@ -31,7 +31,7 @@ func TestFactoryReceivesArch(t *testing.T) {
 	}
 }
 
-// TestFactoryUnsupportedArch mirrors the unicorn backend's P0 behavior with a
+// TestFactoryUnsupportedArch mirrors the unicorn backend's behavior with a
 // stub factory: a non-ARM64 request must come back as an error that
 // errors.Is(ErrUnsupported) recognizes, and ARM64 must succeed.
 func TestFactoryUnsupportedArch(t *testing.T) {

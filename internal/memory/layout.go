@@ -4,7 +4,7 @@ package memory
 // the brk heap, the anonymous mmap arena, stub trampolines, the stack and
 // the TLS block live. It is pure data with no policy attached — who DECIDES
 // these numbers (a platform LayoutPolicy composing arch address-space
-// capabilities and user overrides) lives in platform/* (P4c); the memory
+// capabilities and user overrides) lives in platform/* ; the memory
 // package only carries the resulting geometry.
 //
 // Every region is a half-open range [Addr, Addr+Size). ModuleRegion is the

@@ -12,7 +12,7 @@ import (
 	"github.com/isesword/golem/internal/loader"
 )
 
-// P3.5 / invariant 11 on a REAL backend: FinalizeImage is the RW→RX boundary
+// .5 / invariant 11 on a REAL backend: FinalizeImage is the RW→RX boundary
 // of the load lifecycle (DESIGN.md §3.9). A .text page the linker wrote
 // during relocation (legal pre-finalize) must reject GUEST writes after
 // Plan.Apply completes, while the RW segment stays writable.
@@ -22,7 +22,7 @@ import (
 // enforcement this test exercises is the guest-executed store — which is the
 // writer invariant 11 actually cares about (guest code / a runaway pointer
 // must not be able to scribble over .text; host layers are bound by
-// convention plus the absence of any write path, checked by the P2.5d
+// convention plus the absence of any write path, checked by the.5d
 // interposition tests).
 func TestFinalizeImageMakesTextImmutable(t *testing.T) {
 	be, err := emu.NewNamed("unicorn", emu.ArchARM64)

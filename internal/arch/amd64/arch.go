@@ -59,7 +59,7 @@ func (cpuArch) SetTLSBase(b emu.Backend, addr emu.GuestAddr) error {
 // 5-level paging) is out of scope — Caps pins 4-level paging.
 func (cpuArch) NormalizeCodeAddr(addr emu.GuestAddr) emu.GuestAddr { return addr }
 
-// ReadRole implements arch.RoleReader (P9): register roles by ABI meaning.
+// ReadRole implements arch.RoleReader register roles by ABI meaning.
 // CPU-state observation — valid at any PC. RoleLR is deliberately
 // UNSUPPORTED: x86-64 has no link register (the return address lives on the
 // stack — the ABI-level answer is CallABI.ReadReturnAddress, not a role).
@@ -78,5 +78,5 @@ func (cpuArch) ReadRole(b emu.Backend, role arch.RegisterRole) (uint64, error) {
 	}
 }
 
-// amd64 implements the P9 role observer.
+// amd64 implements the role observer.
 var _ arch.RoleReader = cpuArch{}

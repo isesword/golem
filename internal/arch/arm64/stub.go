@@ -8,7 +8,7 @@ import (
 )
 
 // stubCode is `svc #0 ; ret` (AArch64, little-endian) — the exact bytes the
-// emulator hardcoded before P1.
+// emulator hardcoded before.
 //
 // Both stub kinds emit the SAME bytes on purpose: the emulator classifies a
 // trap by its source address (inside the stub region) plus its stub metadata

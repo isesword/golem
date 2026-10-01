@@ -9,10 +9,10 @@ import (
 	"github.com/isesword/golem/internal/arch"
 )
 
-// Format identifies an executable object format (P3 of the arch/platform
+// Format identifies an executable object format (of the arch/platform
 // abstraction, DESIGN.md §3.3). The Format owns object-file concerns only —
 // it does NOT carry the Startup ABI: Image exposes startup metadata
-// (PHDR/ENTRY), building auxv/initial stack/HWCAP is platform's job (P4).
+// (PHDR/ENTRY), building auxv/initial stack/HWCAP is platform's job .
 type Format uint8
 
 const (
@@ -33,7 +33,7 @@ func (f Format) String() string {
 }
 
 // Sniff probes the file header only: ident/header -> Format + arch.ID +
-// arch.Variant. It is deliberately lightweight — the first step of the P4
+// arch.Variant. It is deliberately lightweight — the first step of the
 // boot sequence, where the Arch must be known BEFORE a backend is created.
 // It must never map guest memory, apply relocations, initialize a backend,
 // or run constructors. An io.ReaderAt (e.g. *os.File or bytes.Reader)
@@ -102,7 +102,7 @@ const (
 // cpusubtype -> arch.ID + arch.Variant. ARM64E maps to VariantARM64E
 // (CPU_SUBTYPE_ARM64E with the CPU_SUBTYPE_MASK capability bits — including
 // LIB64 — masked off, per mach/machine.h); the arm64 package registers that
-// variant with the SAME quad as VariantGeneric (P5c: the variant difference
+// variant with the SAME quad as VariantGeneric (the variant difference
 // is authenticated chained fixups, which is the loader's business).
 func sniffMachO64(hdr []byte) (Format, arch.ID, arch.Variant, error) {
 	cputype := binary.LittleEndian.Uint32(hdr[4:])

@@ -25,7 +25,7 @@ func (t *schedTestTransport) EncodeResult(b emu.Backend, r kernel.Result) error 
 	return nil
 }
 
-// TestSchedulerUnboundInterceptNumbersNeverMatch pins the P7.5b guard: a
+// TestSchedulerUnboundInterceptNumbersNeverMatch pins the guard: a
 // Darwin-shaped personality leaves all three intercept numbers 0 (no
 // futex/nanosleep fibers on that platform). A guest syscall numbered 0 —
 // BSD's indirect-syscall register value — must fall through to the kernel

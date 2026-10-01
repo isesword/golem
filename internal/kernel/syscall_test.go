@@ -16,7 +16,7 @@ import (
 
 // fakeBE is an emu.Backend test double for the syscall layer: a register file
 // plus a sparse page store, so MemRead/MemWrite round-trip like a real engine.
-// It implements ONLY the Backend core interface (P2.5a): the kernel never calls
+// It implements ONLY the Backend core interface the kernel never calls
 // hooks or context ops, so the fake carries no capability interfaces — any
 // stray capability use is caught by a failed type assertion, not a stub return.
 // Core operations the kernel never calls return emu.ErrUnsupported.
@@ -24,7 +24,7 @@ type fakeBE struct {
 	regs  map[emu.Reg]uint64
 	pages map[uint64][]byte
 
-	regReads  int // P2 purity checks: handlers must not touch registers
+	regReads  int // purity checks: handlers must not touch registers
 	regWrites int
 
 	mapErr   error // MemMap fails while set
@@ -170,7 +170,7 @@ func (c *captureCodec) DecodeIovec(src []byte) (Iovec, error) {
 // Synthetic dispatch numbers for the kernel's internal tests: arbitrary small
 // integers, deliberately NOT the Android/AArch64 assignments. The dispatch
 // mechanism and handler semantics are number-agnostic; the real number ->
-// handler binding is pinned by platform/android's table tests (P4b).
+// handler binding is pinned by platform/android's table tests .
 const (
 	nrGetpid uint64 = iota + 1
 	nrGetppid
@@ -294,8 +294,8 @@ func newKernelCtxt(t testing.TB) *kernelCtxt {
 		cc: cc,
 		ctx: &Context{
 			B: be, Mem: memory.NewSpace(), VFS: v, Pid: testPid,
-			// P2: Dispatch requires the injected platform personality — a
-			// SYNTHETIC table (P4b: kernel tests no longer use the real
+			// Dispatch requires the injected platform personality — a
+			// SYNTHETIC table (kernel tests no longer use the real
 			// Android number binding) plus test-double transport/codecs; the
 			// real LinuxARM64Transport / AsmGenericLP64Codecs /
 			// NewARM64SyscallTable binding are pinned by the platform/android
@@ -303,7 +303,7 @@ func newKernelCtxt(t testing.TB) *kernelCtxt {
 			Transport: testTransport{},
 			Table:     syntheticTable(),
 			Codecs:    cc,
-			// P7.5b: the utsname identity is platform-supplied data; the
+			// the utsname identity is platform-supplied data; the
 			// test persona stands in for what the android factory binds.
 			Uname: &UnameInfo{
 				Sysname: "Linux", Nodename: "localhost",
@@ -534,7 +534,7 @@ func TestLseek(t *testing.T) {
 	}
 }
 
-// TestGuestLengthCaps pins the P7.6 policy: a guest-supplied byte count
+// TestGuestLengthCaps pins the policy: a guest-supplied byte count
 // never converts directly into a host allocation. Over-cap requests fail
 // loudly with an errno — without the guard, getrandom(MaxGuestIO+1) would
 // make() a 64 MiB host buffer from one guest register.
@@ -1039,7 +1039,7 @@ func TestInfoSyscalls(t *testing.T) {
 	if got := k.memAt(scratch+4*65, 7); string(got) != "aarch64" {
 		t.Errorf("uname machine = %q, want %q", got, "aarch64")
 	}
-	// P7.5b: a platform that binds uname without an identity is a wiring
+	// a platform that binds uname without an identity is a wiring
 	// bug — fail loudly instead of fabricating values. (k.call returns the
 	// transport wire encoding: Linux carries -errno.)
 	saved := k.ctx.Uname
@@ -1183,7 +1183,7 @@ func TestGetrandomDeterministicVaries(t *testing.T) {
 	}
 }
 
-// --- P2 boundary: handlers produce pure Results ----------------------------
+// --- boundary: handlers produce pure Results ----------------------------
 
 // Handlers consume a SyscallFrame and return a Result — they must never read
 // the syscall number / argument registers, never write the result register,

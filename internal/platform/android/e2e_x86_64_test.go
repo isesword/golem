@@ -1,6 +1,6 @@
 //go:build unicorn && (darwin || linux)
 
-// P5a acceptance chain, end to end on the real engine: an AMD64 ELF probe →
+// acceptance chain, end to end on the real engine: an AMD64 ELF probe →
 // Target quad resolution → AMD64 backend → AddressSpace (from the Android
 // LayoutPolicy over AMD64 caps) → ELF map+reloc through SymbolResolver →
 // FinalizeImage → Android StartupABI → SysV guest function calls → host
@@ -12,7 +12,7 @@
 // (probe, quad, backend, layout, link, startup, traps, calls) in isolation,
 // with per-step red-zone and stack-discipline assertions a full boot cannot
 // make. The same chain driven through emulator.New's real boot flow is
-// emulator/boot_amd64_unicorn_test.go (P5a.5).
+// emulator/boot_amd64_unicorn_test.go .
 package android
 
 import (
@@ -40,7 +40,7 @@ const helloSO = "../../../examples/native/hello_amd64.so"
 // rets, PC lands here and the engine stops.
 const sentinel = 0xFFFFFF00
 
-// TestAndroidAMD64AcceptanceChain assembles and runs the whole P5a chain.
+// TestAndroidAMD64AcceptanceChain assembles and runs the whole chain.
 func TestAndroidAMD64AcceptanceChain(t *testing.T) {
 	if _, err := os.Stat(helloSO); err != nil {
 		t.Skipf("fixture not present: %v", err)
@@ -183,7 +183,7 @@ func TestAndroidAMD64AcceptanceChain(t *testing.T) {
 		Table:     NewAMD64SyscallTable(kernel.DefaultHandlers()),
 		Codecs:    LinuxX8664Codecs{},
 	}
-	// Red-zone guard (P5a red line: the 128-byte red zone below RSP is not
+	// Red-zone guard (red line: the 128-byte red zone below RSP is not
 	// emulated, and NO golem component — WriteResult / ReturnFromCall /
 	// syscall Dispatch — may treat [RSP-128, RSP) as scratch). The band is
 	// re-poisoned before EVERY call (in the call driver below): across calls

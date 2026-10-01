@@ -16,7 +16,7 @@ import (
 // object (little-endian, EABI v5): ELF header + 2 program headers + sections
 // .dynsym/.dynstr/.rel.dyn/.init_array/.shstrtab. It exists to pin the
 // ELFCLASS32 parse paths (32-bit Phdr/Sym/REL layouts) without a real ARMv7
-// fixture (P6e brings those).
+// fixture (brings those).
 //
 // File layout:
 //
@@ -133,7 +133,7 @@ func writeTempELF32(t *testing.T) string {
 
 // TestParseELF32 pins the ELFCLASS32 parse: EM_ARM identity, 32-bit Phdr
 // extraction, the PhdrAddr fallback via the 32-bit e_phoff, dynamic symbols,
-// and — the P6c core — SHT_REL entries decoded with the 32-bit REL layout
+// and — the core — SHT_REL entries decoded with the 32-bit REL layout
 // (r_sym = r_info>>8, r_type = r_info&0xff, Addend 0 because the REL addend
 // is implicit in the target word).
 func TestParseELF32(t *testing.T) {

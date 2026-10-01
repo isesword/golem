@@ -22,7 +22,7 @@ func rd8le(b []byte) uint64 {
 }
 
 // reg reads register-file index i (AArch64 order) and REFUSES to run without
-// the engine's register-file dump — Hook.Reg answers (value, ok) since P7.5c,
+// the engine's register-file dump — Hook.Reg answers (value, ok) since,
 // and this oracle's logic is meaningless with fabricated zeros.
 func reg(h *emulator.Hook, i int) uint64 {
 	v, ok := h.Reg(i)

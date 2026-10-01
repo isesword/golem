@@ -122,7 +122,7 @@ var gpRegIDs = func() (ids [34]int32) {
 
 // regMap translates an abstract emu.Reg to its UC_ARM64_REG_* id.
 //
-// P0 known exception: the ARM64 register ids now live in internal/arch/arm64,
+// known exception: the ARM64 register ids now live in internal/arch/arm64,
 // but emu cannot import that package — arm64 imports emu (for emu.Reg), so
 // importing it back would be an import cycle. The switch therefore keys on
 // the id NUMBERS arch/arm64 assigns (X0..X10=0..10, X23=11, SP=12, PC=13,
@@ -145,7 +145,7 @@ func regMap(r Reg) int32 {
 		return ucRegNZCV
 	case 16: // arm64.TPIDR_EL0
 		return ucRegTPIDR
-	case 17: // arm64.X16 (P5b: Darwin syscall-number register)
+	case 17: // arm64.X16 (Darwin syscall-number register)
 		return ucRegX(16)
 	default:
 		return ucRegInvalid
@@ -164,7 +164,7 @@ var (
 	pRegRead   func(uc unsafe.Pointer, regid int32, val unsafe.Pointer) int32                       // uc_reg_read
 	pRegWrite  func(uc unsafe.Pointer, regid int32, val unsafe.Pointer) int32                       // uc_reg_write
 	pRegRdBat  func(uc unsafe.Pointer, regs unsafe.Pointer, vals unsafe.Pointer, count int32) int32 // uc_reg_read_batch (void** vals)
-	pRegWrBat  func(uc unsafe.Pointer, regs unsafe.Pointer, vals unsafe.Pointer, count int32) int32 // uc_reg_write_batch (void** vals) — P9.5a
+	pRegWrBat  func(uc unsafe.Pointer, regs unsafe.Pointer, vals unsafe.Pointer, count int32) int32 // uc_reg_write_batch (void** vals) —.5a
 	pMemMap    func(uc unsafe.Pointer, addr uint64, size uint64, prot uint32) int32
 	pMemMapPtr func(uc unsafe.Pointer, addr uint64, size uint64, prot uint32, ptr unsafe.Pointer) int32 // uc_mem_map_ptr
 	pMemUnmap  func(uc unsafe.Pointer, addr uint64, size uint64) int32
@@ -447,7 +447,7 @@ func newUnicornBackend(a Arch) (Backend, error) {
 		// ARMv7 RESET leaves VFP/NEON disabled (cp10/cp11 inaccessible); a
 		// real Linux kernel enables them lazily on first use, and bionic
 		// assumes they are on. Without this, the first VLDR/NEON
-		// instruction raises Undefined → UC_ERR_INSN_INVALID (P8: exposed
+		// instruction raises Undefined → UC_ERR_INSN_INVALID (exposed
 		// by real third-party ARMv7 libraries — Termux libsqlite3 hit a
 		// VLDR inside sqlite3_open→sqlite3_config's dispatch tail). Live
 		// probe pinned the semantics: THIS unicorn build gates VFP on
@@ -578,7 +578,7 @@ func (b *unicornBackend) RegWrite(r Reg, val uint64) error {
 }
 
 // ReadGPRegs is the RegFileReader capability: AArch64 dumps x0..x30, sp, pc,
-// nzcv; ARM32 dumps r0..r12, sp, lr, pc, cpsr (P8, real-library validation);
+// nzcv; ARM32 dumps r0..r12, sp, lr, pc, cpsr (real-library validation);
 // AMD64 answers ErrUnsupported loudly instead of borrowing either shape.
 func (b *unicornBackend) ReadGPRegs() ([]uint64, error) {
 	var ids []int32
@@ -702,7 +702,7 @@ func trampFor(htype int32) uintptr {
 
 // HookCode registers a code hook over [start, end].
 //
-// P10 range normalization: unicorn2 quantizes hook range ENDS down to the
+// range normalization: unicorn2 quantizes hook range ENDS down to the
 // target's instruction size, so [addr, addr] collapses to an EMPTY range on
 // aarch64 (end addr+1 aligns back to addr) and never fires — while firing
 // fine on x86_64 (1-byte granularity). This backend adapter normalizes a
@@ -710,7 +710,7 @@ func trampFor(htype int32) uintptr {
 // PUBLIC semantic ("fire at this address") holds everywhere:
 //
 //	ARM64: end ← addr+4 (fixed 4-byte encoding)
-//	ARM (P6b): end ← addr+4 (ARM state; a Thumb entry may co-fire the
+//	ARM end ← addr+4 (ARM state; a Thumb entry may co-fire the
 //	           following 2-byte instruction — documented, tolerated)
 //	AMD64: end ← addr+1 (1-byte granularity)
 func (b *unicornBackend) HookCode(start, end GuestAddr, fn CodeHookFunc) (HookHandle, error) {
@@ -740,7 +740,7 @@ type trapReg struct {
 
 // InstallTrap adapts the generic trap interface onto the engine's trap
 // channels. Runtime kind discrimination is deliberately NOT done via stub
-// instruction bytes (P1 design decision: not a cross-arch contract).
+// instruction bytes (design decision: not a cross-arch contract).
 // Trampoline identity is decided by address — PC in the stub region resolves
 // via interpose.StubManager metadata; anything else is a guest syscall.
 //
@@ -876,7 +876,7 @@ func (b *unicornBackend) FlushCache() error {
 	return nil
 }
 
-// FlushCodeCache implements CodeCacheController (P3.5). Unicorn exposes only
+// FlushCodeCache implements CodeCacheController . Unicorn exposes only
 // a WHOLE-cache TB flush (UC_CTL_TB_FLUSH has no ranged form), so the range
 // is accepted for the contract and the entire cache is invalidated — correct
 // (a superset of the affected range), just coarser than the caller's hint.
@@ -910,7 +910,7 @@ func (h *ucHook) Remove() error {
 	return nil
 }
 
-// WriteRegs implements the RegBatchWriter capability (P9.5a): one
+// WriteRegs implements the RegBatchWriter capability one
 // host↔engine crossing for the whole write set. On engines whose unicorn
 // build lacks uc_reg_write_batch (the binding stays nil) it degrades
 // internally to a per-register loop — bit-for-bit the same writes, just

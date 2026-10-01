@@ -8,7 +8,7 @@ import (
 	"github.com/isesword/golem/internal/emu"
 )
 
-// TestHookReadRole pins the P9 facade: a Hook reads registers by ABI ROLE
+// TestHookReadRole pins the facade: a Hook reads registers by ABI ROLE
 // through the arch's RoleReader — the same question, portable across
 // architectures, loud on unsupported roles.
 func TestHookReadRole(t *testing.T) {
@@ -38,7 +38,7 @@ func TestHookReadRole(t *testing.T) {
 		t.Fatalf("unknown role err = %v, want ErrUnsupportedRole", err)
 	}
 
-	// Kind travels with the hook: entry-scoped questions gate on it (P9b).
+	// Kind travels with the hook: entry-scoped questions gate on it .
 	if h.Kind() != HookFunctionEntry {
 		t.Fatalf("Kind() = %v, want function-entry", h.Kind())
 	}
@@ -46,7 +46,7 @@ func TestHookReadRole(t *testing.T) {
 	_ = hc
 }
 
-// TestHookSemanticGating pins the P9 context contract: entry-scoped
+// TestHookSemanticGating pins the context contract: entry-scoped
 // questions (Arg/ReturnAddress) answer at function-entry hooks and fail
 // with ErrContextUnavailable at instruction hooks — while ReadRole stays
 // available everywhere (it is CPU observation, not a call-context fact).

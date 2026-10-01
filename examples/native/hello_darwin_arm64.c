@@ -1,4 +1,4 @@
-// Tiny Darwin/ARM64 (Mach-O arm64) shared library — the P5b touchstone
+// Tiny Darwin/ARM64 (Mach-O arm64) shared library — the touchstone
 // fixture for golem's arch x platform x format matrix. Same ARM64 CPU as the
 // Android targets; everything else differs: Mach-O format (rebase/bind
 // opcodes instead of RELA), Darwin platform (x16 + svc #0x80 syscall
@@ -14,7 +14,7 @@
 //         -Wl,-no_fixup_chains -nostdlib \
 //         -o hello_darwin_arm64.dylib hello_darwin_arm64.c
 // (-no_fixup_chains keeps classic LC_DYLD_INFO rebase/bind opcodes;
-// -fixup_chains instead produces the P5d variant: LC_DYLD_CHAINED_FIXUPS
+// -fixup_chains instead produces the variant: LC_DYLD_CHAINED_FIXUPS
 // with pointer format DYLD_CHAINED_PTR_64 — same source, same behaviors,
 // the modern chained container.)
 

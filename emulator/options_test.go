@@ -31,7 +31,7 @@ type shimJni struct{ dvm.AbstractJni }
 
 // TestLegacyShimEquivalence proves the deprecated Config.Android field and
 // the android.NewConfig options path produce the same normalized platform
-// config — the two boot paths must converge on identical key fields (P4a).
+// config — the two boot paths must converge on identical key fields .
 func TestLegacyShimEquivalence(t *testing.T) {
 	jni := shimJni{}
 	prof := &profile.Profile{}
@@ -94,7 +94,7 @@ func TestLegacyShimEquivalence(t *testing.T) {
 }
 
 // TestLegacyShimZeroConfig: neither legacy field nor option → pcfg stays
-// nil; the platform factory's Bind supplies the zero-value defaults (P5b.5).
+// nil; the platform factory's Bind supplies the zero-value defaults .
 func TestLegacyShimZeroConfig(t *testing.T) {
 	cfg := Config{}
 	if err := normalizePlatformConfig(&cfg, androidNormTarget); err != nil {
@@ -120,7 +120,7 @@ func TestLegacyShimConflict(t *testing.T) {
 
 // TestWithPlatformConfigValidation: nil is rejected at the option boundary;
 // any non-nil platform.Config is accepted and stored, routed by PlatformID()
-// only (P5b.5 — no type-switch). A config for a platform that doesn't match
+// only (— no type-switch). A config for a platform that doesn't match
 // the probed target fails in the normalization step.
 func TestWithPlatformConfigValidation(t *testing.T) {
 	var cfg Config
@@ -179,7 +179,7 @@ func TestNormalizePlatformMismatch(t *testing.T) {
 		t.Fatal("legacy Android field + darwin target must error")
 	}
 	// darwin target with no config at all: pcfg stays nil — the platform
-	// factory's Bind supplies the defaults (P5b.5).
+	// factory's Bind supplies the defaults .
 	cfg = Config{}
 	if err := normalizePlatformConfig(&cfg, darwinNormTarget); err != nil {
 		t.Fatal(err)
@@ -305,7 +305,7 @@ func writeMachOARM64Header(t *testing.T) string {
 }
 
 // TestResolveTargetMachOProbeIsDarwin: the platform is DERIVED from the
-// probed format (P5b) — a Mach-O header flips the target to Darwin, and the
+// probed format — a Mach-O header flips the target to Darwin, and the
 // Mach-O cputype maps onto the SAME arch id the ELF probe reports.
 func TestResolveTargetMachOProbeIsDarwin(t *testing.T) {
 	tgt, err := resolveTarget(Config{SOPath: writeMachOARM64Header(t)})

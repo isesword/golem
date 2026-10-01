@@ -52,7 +52,7 @@ func newTrapEmu(t *testing.T, be emu.Backend) *Emulator {
 // Negative test ①: a trap whose source address is a stub must be dispatched
 // to the stub table and must NOT fall through into the kernel syscall
 // dispatcher (scCount stays 0; kctx is nil, so any fall-through would panic).
-// P2.5d: the stub table is the StubManager — same assertion semantics.
+// the stub table is the StubManager — same assertion semantics.
 func TestHostCallStubSkipsKernelDispatch(t *testing.T) {
 	be := &trapBE{}
 	e := newTrapEmu(t, be)

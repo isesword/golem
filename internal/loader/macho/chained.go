@@ -1,6 +1,6 @@
 package macho
 
-// Chained fixups (LC_DYLD_CHAINED_FIXUPS) — the P5c decoder. ALL bit
+// Chained fixups (LC_DYLD_CHAINED_FIXUPS) — the decoder. ALL bit
 // layouts below are taken from the SDK's <mach-o/fixup-chains.h> (the
 // authoritative source; never from memory):
 //
@@ -11,8 +11,8 @@ package macho
 //	dyld_chained_import{,_addend,_addend64}         — the imports table
 //
 // Coverage policy (loud errors, never silent mis-loads):
-//   - pointer formats: DYLD_CHAINED_PTR_ARM64E (1, P5c) and
-//     DYLD_CHAINED_PTR_64 (2, P5d — the format current toolchains emit for
+//   - pointer formats: DYLD_CHAINED_PTR_ARM64E (1) and
+//     DYLD_CHAINED_PTR_64 (2 — the format current toolchains emit for
 //     plain arm64 under -fixup_chains). KERNEL/FIRMWARE/32/64_OFFSET/
 //     USERLAND24/SHARED_CACHE and every other format is a loud
 //     "unsupported pointer format" error naming the value. The two formats
@@ -23,7 +23,7 @@ package macho
 //     (uncompressed).
 //   - page starts: single start per page; DYLD_CHAINED_PTR_START_MULTI
 //     (a 32-bit-format facility) is a loud error.
-//   - authenticated entries (auth bit set, format 1 only): P5c materializes
+//   - authenticated entries (auth bit set, format 1 only): materializes
 //     them under the explicit PACPolicyStrip (see below) — decoded fully,
 //     never masked. Format 2 has no auth bit; a rebase with high8 != 0 is
 //     a tagged pointer outside the guest address model — a loud error.
@@ -288,7 +288,7 @@ func decodeChainedEntry(ptrFormat uint16, v, slotVA uint64, imports []string, sy
 	return decodeChainedEntryARM64E(v, slotVA, imports, symIdx)
 }
 
-// decodeChainedEntry64 decodes one DYLD_CHAINED_PTR_64 chain entry (P5d;
+// decodeChainedEntry64 decodes one DYLD_CHAINED_PTR_64 chain entry (
 // fixup-chains.h: next:12 from bit 51 in 4-BYTE units, bind:1 bit 63 — no
 // auth bit, plain arm64 carries no signed pointers) into a Reloc.
 func decodeChainedEntry64(v, slotVA uint64, imports []string, symIdx map[string]uint32) (*loader.Reloc, uint16, error) {
@@ -337,7 +337,7 @@ func decodeChainedEntryARM64E(v, slotVA uint64, imports []string, symIdx map[str
 		// byte (Loader.cpp fixupPageAuth64), mach_o writes high8<<56
 		// (ChainedFixups.cpp). The value is the unrelocated vmaddr; the
 		// relocator adds the load bias, exactly the classic
-		// REBASE_TYPE_POINTER contract. (P7.6: reconstruction used to land
+		// REBASE_TYPE_POINTER contract. (reconstruction used to land
 		// high8 at bit 43 — silent wrong pointers whenever high8 != 0.)
 		target := v&0x7ffffffffff | (v>>43&0xff)<<56
 		return &loader.Reloc{Offset: slotVA, Type: RelocRebasePointer, Addend: int64(target)}, next, nil
@@ -378,7 +378,7 @@ func decodeChainedEntryARM64E(v, slotVA uint64, imports []string, symIdx map[str
 	}
 }
 
-// --- PACPolicyStrip: the P5c authenticated-pointer policy --------------------
+// --- PACPolicyStrip: the authenticated-pointer policy --------------------
 //
 // PACPolicyStrip is golem's materialization policy for authenticated chained
 // fixups: the value written to guest memory is the UNSIGNED, bare address —

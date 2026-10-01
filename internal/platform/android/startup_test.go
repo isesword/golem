@@ -161,9 +161,9 @@ func TestStartupABIBuildsAuxvBlock(t *testing.T) {
 	}
 }
 
-// TestStartupABIEmptyFeaturesPreservesBehavior is the P4d behavior-invariant
+// TestStartupABIEmptyFeaturesPreservesBehavior is the behavior-invariant
 // red line: with the (current, empty) feature set the served values are
-// bit-identical to the pre-P4d hardcoded getauxval — AT_PAGESZ=4096,
+// bit-identical to the legacy hardcoded getauxval — AT_PAGESZ=4096,
 // AT_HWCAP=0, AT_HWCAP2=0, AT_SECURE=0, unknown keys 0 — and without a main
 // image AT_PHDR/AT_PHNUM/AT_ENTRY read 0 as they always did.
 func TestStartupABIEmptyFeaturesPreservesBehavior(t *testing.T) {
