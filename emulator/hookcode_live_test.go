@@ -14,16 +14,14 @@ func bootForHook(t *testing.T, so string) *Emulator {
 	if _, err := os.Stat(so); err != nil {
 		t.Skipf("fixture not present: %v", err)
 	}
+	// host_magic interposition is harmless on fixtures that don't import it
+	// (native.so) and required to boot the one that does (hello_amd64).
 	cfg := Config{SOPath: so, AssetRoot: "../assets", Engine: "unicorn", Pid: 4242}
-	var opts []Option
-	if so == "../examples/native/hello_amd64.so" {
-		opts = append(opts, WithPlatformConfig(android.NewConfig(
-			android.WithReplaceFns(map[string]interpose.HostFunc{
-				"host_magic": func(ctx interpose.CallContext) uint64 { return 42 },
-			}),
-		)))
-	}
-	e, err := New(cfg, opts...)
+	e, err := New(cfg, WithPlatformConfig(android.NewConfig(
+		android.WithReplaceFns(map[string]interpose.HostFunc{
+			"host_magic": func(ctx interpose.CallContext) uint64 { return 42 },
+		}),
+	)))
 	if err != nil {
 		t.Skipf("boot: %v", err)
 	}
