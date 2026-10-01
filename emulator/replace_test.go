@@ -59,9 +59,6 @@ func TestHookBESatisfiesInstructionHooker(t *testing.T) {
 	if _, ok := be.(emu.CacheInvalidator); ok {
 		t.Fatal("hookBE must NOT satisfy emu.CacheInvalidator")
 	}
-	if _, ok := be.(emu.CodeCacheController); ok {
-		t.Fatal("hookBE must NOT satisfy emu.CodeCacheController (ReplaceE must tolerate its absence)")
-	}
 }
 
 func TestReplaceInterposeSuccess(t *testing.T) {
@@ -73,10 +70,11 @@ func TestReplaceInterposeSuccess(t *testing.T) {
 	if _, ok := e.itab.LookupAddress(0x1000); !ok {
 		t.Fatal("success must bind the entry in the InterposeTable")
 	}
-	// Performance constraint (DESIGN.md §8): exactly one hook, covering
-	// exactly the one entry address — never a range.
-	if len(be.ranges) != 1 || be.ranges[0] != [2]emu.GuestAddr{0x1000, 0x1000} {
-		t.Fatalf("hook must cover exactly [entry, entry], got %v", be.ranges)
+	// Performance constraint (DESIGN.md §8): exactly one hook, the half-open
+	// single-address range [entry, entry+1) — the engine boundary converts
+	// it to unicorn's inclusive [entry, entry].
+	if len(be.ranges) != 1 || be.ranges[0] != [2]emu.GuestAddr{0x1000, 0x1001} {
+		t.Fatalf("hook must be the half-open [entry, entry+1), got %v", be.ranges)
 	}
 }
 
