@@ -1,6 +1,6 @@
 //go:build unicorn && (darwin || linux)
 
-// .5 acceptance: the FULL emulator boot flow (emulator.New → LoadLibrary →
+// acceptance: the FULL emulator boot flow (emulator.New → LoadLibrary →
 // CallSymbol) on an AMD64 target — the component-level chain of
 // internal/platform/android/e2e_x86_64_test.go, now driven through the real
 // composition root. Boot resolves the Target from the ELF probe (EM_X86_64 →

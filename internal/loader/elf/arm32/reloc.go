@@ -47,7 +47,7 @@ type relocator struct{}
 
 // Apply writes one relocation into guest memory. r.Offset is image-relative;
 // base is the per-engine load bias; res resolves imported symbols through the
-// .5 SymbolResolver contract — the result is always a guest address, so a
+// SymbolResolver contract — the result is always a guest address, so a
 // host-interposed symbol is indistinguishable from a guest one here.
 //
 // The addend is read from the target's stored word ONLY for the types whose

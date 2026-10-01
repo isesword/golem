@@ -31,7 +31,7 @@ type shimJni struct{ dvm.AbstractJni }
 
 // TestLegacyShimEquivalence proves the deprecated Config.Android field and
 // the android.NewConfig options path produce the same normalized platform
-// config — the two boot paths must converge on identical key fields .
+// config — the two boot paths must converge on identical key fields.
 func TestLegacyShimEquivalence(t *testing.T) {
 	jni := shimJni{}
 	prof := &profile.Profile{}
@@ -94,7 +94,7 @@ func TestLegacyShimEquivalence(t *testing.T) {
 }
 
 // TestLegacyShimZeroConfig: neither legacy field nor option → pcfg stays
-// nil; the platform factory's Bind supplies the zero-value defaults .
+// nil; the platform factory's Bind supplies the zero-value defaults.
 func TestLegacyShimZeroConfig(t *testing.T) {
 	cfg := Config{}
 	if err := normalizePlatformConfig(&cfg, androidNormTarget); err != nil {
@@ -179,7 +179,7 @@ func TestNormalizePlatformMismatch(t *testing.T) {
 		t.Fatal("legacy Android field + darwin target must error")
 	}
 	// darwin target with no config at all: pcfg stays nil — the platform
-	// factory's Bind supplies the defaults .
+	// factory's Bind supplies the defaults.
 	cfg = Config{}
 	if err := normalizePlatformConfig(&cfg, darwinNormTarget); err != nil {
 		t.Fatal(err)

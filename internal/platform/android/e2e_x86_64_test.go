@@ -12,7 +12,7 @@
 // (probe, quad, backend, layout, link, startup, traps, calls) in isolation,
 // with per-step red-zone and stack-discipline assertions a full boot cannot
 // make. The same chain driven through emulator.New's real boot flow is
-// emulator/boot_amd64_unicorn_test.go .
+// emulator/boot_amd64_unicorn_test.go.
 package android
 
 import (

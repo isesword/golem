@@ -15,7 +15,7 @@
 // in this module is written against this interface so it compiles and is
 // testable without a C toolchain (a pure-Go build registers no backend).
 //
-// .5a (DESIGN.md invariants 14/15):
+// (DESIGN.md invariants 14/15):
 //
 //   - Backend is the CORE interface — registers, memory, run/stop, trap
 //     install, close. It is a freeze candidate: it must NOT grow methods for

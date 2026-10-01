@@ -7,7 +7,7 @@ import (
 	"github.com/isesword/golem/internal/emu"
 )
 
-// .5a caller-side capability probes: with a backend that implements ONLY
+// caller-side capability probes: with a backend that implements ONLY
 // the emu.Backend core interface, every capability-gated emulator entry point
 // must degrade to an error wrapping emu.ErrUnsupported — the same errors.Is
 // path as an engine that has the capability but refuses it.

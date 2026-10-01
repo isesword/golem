@@ -1,4 +1,4 @@
-// .5 relocation-path tests: the (FormatELF, ArchARM64) Relocator now
+// relocation-path tests: the (FormatELF, ArchARM64) Relocator now
 // resolves every imported symbol through the loader.SymbolResolver contract,
 // so guest symbols and host-interposed symbols are the SAME SHAPE to it — a
 // guest address. These tests pin that: the GOT/reloc slot receives exactly

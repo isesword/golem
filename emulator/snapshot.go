@@ -148,7 +148,7 @@ func (e *Emulator) Restore(snap *Snapshot) error {
 		return fmt.Errorf("restore: nil snapshot")
 	}
 	// Poisoned = untrustworthy address space; rebuilding a snapshot on top of
-	// it would launder the inconsistency into "restored" state .
+	// it would launder the inconsistency into "restored" state.
 	if e.poisonErr != nil {
 		return fmt.Errorf("emulator poisoned: %w", e.poisonErr)
 	}

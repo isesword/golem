@@ -8,7 +8,7 @@ import (
 	"github.com/isesword/golem/internal/memory"
 )
 
-// .5 HostResolver / UnresolvedStubResolver tests (DESIGN.md §3.8): the
+// HostResolver / UnresolvedStubResolver tests (DESIGN.md §3.8): the
 // interpose→loader adapter contract — host symbol → stub guest address with
 // Kind SymbolHostStub, stub reuse across repeated resolutions, decline on
 // unbound names, and the weak-undefined ELF rule in the terminal fallback.

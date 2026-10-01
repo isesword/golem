@@ -43,7 +43,7 @@ func (factory) Bind(ctx platform.BindContext) (*platform.Runtime, error) {
 	// the interposed getauxval serves exactly the vector BuildInitialState
 	// materialized — the single-source invariant, with no emulator-side
 	// type assertion. The pointer WIDTH of the auxv wire format is
-	// arch-dependent ARM32 gets the 8-byte-pair Elf32_auxv_t builder.
+	// arch-dependent: ARM32 gets the 8-byte-pair Elf32_auxv_t builder.
 	var startup platform.StartupABI
 	var auxvLookup func(typ uint64) uint64
 	switch ctx.ArchID {
@@ -57,8 +57,7 @@ func (factory) Bind(ctx platform.BindContext) (*platform.Runtime, error) {
 	// Bionic runtime libraries and the TLS slot init are arch-keyed. The
 	// asset tree ships BOTH widths: AArch64 under lib64/, ARM32 (real
 	// API-23 armeabi-v7a bionic) under lib/. On ARM64 the lib64 set loads
-	// for real; on any other target the boot's machine-mismatch skip (the
-	// .5 convention) drops whatever does not match — AMD64 therefore
+	// for real; on any other target the boot's machine-mismatch skip drops whatever does not match — AMD64 therefore
 	// still boots libc-less, while ARM32 gets its real libc/libm/libdl
 	// (naming note: the ARM32 tree keeps the image's original libc++.so /
 	// libstdc++.so names, unlike lib64's libcpp/libstdcpp). The TLS slot

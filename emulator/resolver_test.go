@@ -9,7 +9,7 @@ import (
 	"github.com/isesword/golem/internal/loader"
 )
 
-// .5 wiring tests: the emulator's boot resolver chain — HostResolver
+// wiring tests: the emulator's boot resolver chain — HostResolver
 // (InterposeTable) → DynamicLinker global scope → UnresolvedStubResolver —
 // replaces the old resolveSymbol if-else. These tests pin the assembled
 // semantics end to end, including the trap-path dispatch back into the

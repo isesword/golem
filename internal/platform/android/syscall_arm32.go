@@ -10,8 +10,7 @@ import (
 // transport ABI: the syscall number arrives in r7, up to 6 arguments in
 // r0..r5, and the result goes back in r0 — Value on success, the two's
 // complement of the errno on failure (the kernel-side "-errno" convention,
-// same as AArch64). This is the ARM32 counterpart of LinuxARM64Transport
-// .
+// same as AArch64). This is the ARM32 counterpart of LinuxARM64Transport.
 //
 // EABI 64-bit argument pairing (IMPORTANT, by design NOT handled here): the
 // ARM EABI requires 64-bit syscall arguments to be passed in an EVEN/ODD

@@ -170,7 +170,7 @@ func (c *captureCodec) DecodeIovec(src []byte) (Iovec, error) {
 // Synthetic dispatch numbers for the kernel's internal tests: arbitrary small
 // integers, deliberately NOT the Android/AArch64 assignments. The dispatch
 // mechanism and handler semantics are number-agnostic; the real number ->
-// handler binding is pinned by platform/android's table tests .
+// handler binding is pinned by platform/android's table tests.
 const (
 	nrGetpid uint64 = iota + 1
 	nrGetppid

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// .5d robustness contract: the loader REJECTS malformed binaries with a
+// robustness contract: the loader REJECTS malformed binaries with a
 // parse error — it never slices out of range later (Plan) and never
 // silently drops a ragged relocation tail.
 

@@ -38,7 +38,7 @@ func TestHookReadRole(t *testing.T) {
 		t.Fatalf("unknown role err = %v, want ErrUnsupportedRole", err)
 	}
 
-	// Kind travels with the hook: entry-scoped questions gate on it .
+	// Kind travels with the hook: entry-scoped questions gate on it.
 	if h.Kind() != HookFunctionEntry {
 		t.Fatalf("Kind() = %v, want function-entry", h.Kind())
 	}

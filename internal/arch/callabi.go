@@ -83,7 +83,7 @@ type CallRequest struct {
 // lives here, not on the CPU — ARM has an LR register, AMD64 keeps the return
 // address on the stack (invariant 13).
 //
-// .5 reshaped the interface around whole-call operations: call
+// The whole-call model reshaped the interface: call
 // establishment (PrepareCall), argument reads (ReadArgs) and result access
 // (WriteResult/ReadResult) are convention-level transactions, so callers
 // never name an argument/result/link register. Register-shaped questions are
@@ -92,7 +92,7 @@ type CallRequest struct {
 // convention whose arguments do not map to plain registers is not forced to
 // invent fake ones.
 //
-// (Architecture Exception #1) typed the arguments: PrepareCall consumes
+// Architecture Exception #1 introduced typed arguments: PrepareCall consumes
 // []CallArg. Implementations for 64-bit conventions (AAPCS64, SysV AMD64)
 // place every ArgKind in one 64-bit slot — bit-identical to the legacy
 // behavior; a 32-bit convention (AAPCS32) interprets ArgWord/ArgPtr as one

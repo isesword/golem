@@ -36,7 +36,7 @@ const MaxGuestIO = 64 << 20
 // It is deliberately NOT a wire encoding: how an Errno reaches the guest
 // (Linux: x0 = -errno; Darwin: x0 = +errno + carry flag) is the transport's
 // business. The numeric values below are the Linux asm-generic assignments;
-// a Darwin transport must translate them to Darwin's numbering .
+// a Darwin transport must translate them to Darwin's numbering.
 type Errno int
 
 const (

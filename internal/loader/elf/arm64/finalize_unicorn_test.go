@@ -12,7 +12,7 @@ import (
 	"github.com/isesword/golem/internal/loader"
 )
 
-// .5 / invariant 11 on a REAL backend: FinalizeImage is the RW→RX boundary
+// invariant 11 on a REAL backend: FinalizeImage is the RW→RX boundary
 // of the load lifecycle (DESIGN.md §3.9). A .text page the linker wrote
 // during relocation (legal pre-finalize) must reject GUEST writes after
 // Plan.Apply completes, while the RW segment stays writable.

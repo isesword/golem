@@ -5,7 +5,7 @@ import (
 	"unsafe"
 )
 
-// .5a capability-probe tests (DESIGN.md invariant 14): consumers detect an
+// capability-probe tests (DESIGN.md invariant 14): consumers detect an
 // optional engine ability by type-asserting the capability interface. A
 // backend that implements only the Backend core must fail EVERY capability
 // probe; one that implements a capability must pass exactly that probe.

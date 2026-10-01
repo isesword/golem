@@ -66,7 +66,7 @@ func macho64Header(cputype, subtype uint32) []byte {
 
 // TestSniffMachOARM64: a Mach-O arm64 dylib header sniffs to
 // (FormatMachO, arch.IDARM64, VariantGeneric) — the same arch identity the
-// ELF probe reports for AArch64, from a different container format .
+// ELF probe reports for AArch64, from a different container format.
 func TestSniffMachOARM64(t *testing.T) {
 	f, id, v, err := Sniff(bytes.NewReader(macho64Header(0x0100000c, 0))) // CPU_TYPE_ARM64 / ALL
 	if err != nil {

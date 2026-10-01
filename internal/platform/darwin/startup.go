@@ -21,7 +21,7 @@ const StackTopReserve = 0x100
 // execve where argv[0] equals the path).
 const argv0 = "golem-guest"
 
-// StartupABI is the Darwin personality's platform.StartupABI .
+// StartupABI is the Darwin personality's platform.StartupABI.
 //
 // Landing form — EXEC-STYLE INITIAL STACK FRAME, not an auxv data block.
 // This is the deliberate counter-example to the Android StartupABI: XNU hands

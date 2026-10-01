@@ -12,7 +12,7 @@ import (
 // Format identifies an executable object format (of the arch/platform
 // abstraction, DESIGN.md §3.3). The Format owns object-file concerns only —
 // it does NOT carry the Startup ABI: Image exposes startup metadata
-// (PHDR/ENTRY), building auxv/initial stack/HWCAP is platform's job .
+// (PHDR/ENTRY), building auxv/initial stack/HWCAP is platform's job.
 type Format uint8
 
 const (

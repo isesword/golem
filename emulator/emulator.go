@@ -107,7 +107,7 @@ type Config struct {
 	// New's options normalization. Never set it directly; it is unexported
 	// so positional Config literals outside this package already fail to
 	// compile. nil after normalization = the platform factory's Bind
-	// supplies the platform defaults .
+	// supplies the platform defaults.
 	pcfg platform.Config
 }
 
@@ -179,7 +179,7 @@ type Emulator struct {
 	layout  memory.Layout        // guest address-space layout in use
 	as      *memory.AddressSpace // single guest VA allocation entry (invariant 12)
 
-	// .5d (DESIGN.md §3.8, invariant 11): all guest trampolines are owned by
+	// (DESIGN.md §3.8, invariant 11): all guest trampolines are owned by
 	// the StubManager; exported-symbol replacement is Function Interposition
 	// via the InterposeTable + a per-entry execution hook — guest .text is
 	// never patched.
@@ -201,7 +201,7 @@ type Emulator struct {
 	aForm   bool    // 当前 JNI 调用为 Call*MethodA（jvalue 数组）形式
 	scCount int     // syscalls in current CallFunc (runaway guard)
 
-	// .5 (DESIGN.md §3.3): symbol resolution is a first-class loader
+	// (DESIGN.md §3.3): symbol resolution is a first-class loader
 	// component. dl owns the module graph + global symbol scope; resolver is
 	// the boot chain — host replacement symbols (InterposeTable via
 	// interpose.HostResolver) → global guest exports (dl.GlobalResolver) →
@@ -670,7 +670,7 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 	// modules are only in the DynamicLinker's global scope now. Names bound
 	// as import overrides during linking are not in the scope (they resolved
 	// to stubs) and are naturally skipped; exported symbols get an
-	// interposition entry hook .
+	// interposition entry hook.
 	for name, hf := range replaceFns {
 		if addr, ok := e.dl.LookupGlobal(name); ok {
 			if err := e.interposeE(uint64(addr), hf); err != nil {
@@ -699,7 +699,7 @@ func (e *Emulator) boot() error {
 	for _, rel := range e.rt.RuntimeLibs {
 		path := e.cfg.AssetRoot + "/" + rel
 		name := filepath.Base(rel)
-		// .5 transitional: the asset tree only ships AArch64 bionic
+		// transitional: the asset tree only ships AArch64 bionic
 		// (sdk23/lib64), so on a non-ARM64 target these modules would fail
 		// the LoadModule machine check. Pre-parse via CompileOnce (cached,
 		// no double parse) and skip with a verbose note instead of erroring;
@@ -1130,7 +1130,7 @@ func (e *Emulator) CallSymbol(name string, args ...Value) (uint64, error) {
 }
 
 // CallSymbolArgs is the Advanced typed variant of CallSymbol — arch.CallArg
-// is the internal vocabulary Value fronts . See CallFuncArgs.
+// is the internal vocabulary Value fronts. See CallFuncArgs.
 func (e *Emulator) CallSymbolArgs(name string, args ...arch.CallArg) (uint64, error) {
 	addr, ok := e.Sym(name)
 	if !ok {
@@ -1151,7 +1151,7 @@ func (e *Emulator) CallOffset(m *Module, offset uint64, args ...Value) (uint64, 
 		return 0, fmt.Errorf("CallOffset: no module (set Config.SOPath or pass a module)")
 	}
 	if len(args) <= 16 {
-		// .5b stack array, as in CallSymbol.
+		// stack array, as in CallSymbol.
 		var a [16]arch.CallArg
 		for i, v := range args {
 			a[i] = v.callArg()

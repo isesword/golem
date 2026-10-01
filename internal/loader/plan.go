@@ -122,7 +122,7 @@ func (p *Plan) apply(be emu.Backend, base uint64, res SymbolResolver, share bool
 // relocations, rebasing, binding) are legal only BEFORE this point.
 //
 // The re-protection itself has always been the last step of plan application;
-// .5 names the boundary so it can be called — and tested — on its own.
+// FinalizeImage names the boundary so it can be called — and tested — on its own.
 // Shareable maps created via MemMapPtr were already at their final protection
 // (nothing wrote them), so they are skipped.
 func (p *Plan) FinalizeImage(be emu.Backend, base uint64) error {

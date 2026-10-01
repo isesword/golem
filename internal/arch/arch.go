@@ -79,7 +79,7 @@ type Arch interface {
 	ByteOrder() binary.ByteOrder
 
 	// Caps reports the address-space capabilities a platform LayoutPolicy
-	// plans against .
+	// plans against.
 	Caps() AddressSpaceCaps
 
 	// SetTLSBase points the thread-pointer register (TPIDR_EL0 on arm64) at

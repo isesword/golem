@@ -29,7 +29,7 @@ type relocator struct{}
 
 // Apply writes one relocation into guest memory. r.Offset is image-relative;
 // base is the per-engine load bias; res resolves imported symbols through the
-// .5 SymbolResolver contract — the result is always a guest address, so a
+// SymbolResolver contract — the result is always a guest address, so a
 // host-interposed symbol is indistinguishable from a guest one here.
 //
 // x86-64 note: GLOB_DAT/JUMP_SLOT/R_X86_64_64 all compute S+A (symbol value

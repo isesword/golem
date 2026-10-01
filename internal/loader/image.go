@@ -87,7 +87,7 @@ type Image struct {
 
 	// Startup metadata (ELF program-header table + entry point). The format
 	// parser fills these; platform.StartupABI consumes them when building
-	// the process initial state .
+	// the process initial state.
 	Entry    uint64 // image-relative entry address (e_entry)
 	PhdrAddr uint64 // image-relative vaddr of the program-header table (0 if not mapped)
 	PhdrNum  int    // number of program-header entries

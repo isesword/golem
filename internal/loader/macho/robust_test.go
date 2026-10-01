@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// .5d robustness contract (macho twin of the ELF parser's): a segment
+// robustness contract (macho twin of the ELF parser's): a segment
 // claiming more file bytes than the file HAS is a parse error, never a
 // later slice-bounds panic in Plan.
 

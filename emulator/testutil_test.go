@@ -44,7 +44,7 @@ func newTestEmulator(t *testing.T, be emu.Backend) *Emulator {
 		t.Fatal(err)
 	}
 	// Startup and lookup are the SAME instance, exactly as the platform
-	// factory binds them into the Runtime .
+	// factory binds them into the Runtime.
 	startup := &android.StartupABI{}
 	e := &Emulator{
 		be:          be,

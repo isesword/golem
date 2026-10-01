@@ -46,8 +46,7 @@ func WithPlatformConfig(c platform.Config) Option {
 // (resolveTarget), because the platform the config speaks for must match the
 // probed platform: an android.Config with a Mach-O target (or a
 // darwin.Config with an ELF target) is a boot-time error, not a silent
-// mis-wiring. The matching is PlatformID() routing, not a type-switch
-// .
+// mis-wiring. The matching is PlatformID() routing, not a type-switch.
 //
 // Android precedence: an explicit WithPlatformConfig wins; Config.Android is
 // then required to be zero (setting both is an ambiguity error, not a silent

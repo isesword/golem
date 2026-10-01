@@ -10,7 +10,7 @@ import (
 // frozen contract: internal/emu's unicorn backend (regMap) translates them by
 // NUMBER — it cannot import this package (import cycle) — so a silent
 // renumbering here would corrupt register access without any compile error.
-// The values match the constants deleted from internal/emu in, one for one.
+// The values match the constants deleted from internal/emu, one for one.
 func TestFrozenRegIDs(t *testing.T) {
 	cases := []struct {
 		name string
