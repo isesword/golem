@@ -85,3 +85,31 @@ int jni_probe(void *env) {
 
     return (ver == 0x10006) + ul + al + same + pend + clr + refs;
 }
+
+// --- wrap nesting + recursion probes ------------------------------------
+// Both route a guest call through a RESOLVABLE BINDING by taking the callee's
+// address (default visibility -> a data reloc naming the symbol): exactly the
+// slot WrapSymbol redirects, so the wrap fires even though both callees live
+// in this same module. Guest-internal DIRECT calls (slen above) stay unwrapped
+// — that honest v1 scope is what makes these probes load-bearing.
+
+// p(s) -> slen via its binding; wrap slen AND strlen and this call nests two
+// wrap frames (slen's on strlen's). +1000 keeps any rewrite visibly separate.
+int nest(const char *s) {
+    int (*volatile p)(const char *) = slen;
+    return p(s) + 1000;
+}
+
+// Self-recursion THROUGH the binding: every recursive call re-enters the wrap
+// entry stub, so depth-n recursion pushes n wrap frames. fact(5) plain = 120.
+// The volatile pointers are a LOAD-BEARING TEST CONTRACT, not a style choice:
+// they keep these references preemptible (data relocations naming the symbol),
+// so every recursive/nesting edge passes the binding site. -O2 folds a plain
+// local pointer into a direct call — no reloc, nothing to wrap (seen live).
+// A compiler/linker upgrade that changes this shape must fail the fixture
+// contract test (TestWrapFixtureBindings), not silently weaken the wrap tests.
+long fact(long n) {
+    if (n <= 1) return 1;
+    long (*volatile p)(long) = fact;
+    return n * p(n - 1);
+}

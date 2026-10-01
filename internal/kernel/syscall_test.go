@@ -1234,3 +1234,39 @@ func TestHandlersReturnPureResults(t *testing.T) {
 		t.Errorf("SysWrite touched registers: reads=%d writes=%d, want 0/0", k.be.regReads, k.be.regWrites)
 	}
 }
+
+// TestTableSetAndNumber pins the override primitives: Set replaces (or
+// installs) a handler; Number resolves names to numbers portably —
+// including entries with a name but no built-in handler.
+func TestTableSetAndNumber(t *testing.T) {
+	k := newKernelCtxt(t)
+
+	nr, ok := k.ctx.Table.Number("uname")
+	if !ok {
+		t.Fatal("Number(uname) must resolve")
+	}
+	if nr != nrUname && nr != 160 {
+		t.Fatalf("Number(uname) = %d, want %d (synthetic table)", nr, nrUname)
+	}
+	if _, ok := k.ctx.Table.Number("no-such-syscall"); ok {
+		t.Fatal("Number(unknown) must not resolve")
+	}
+
+	// Set replaces the dispatched handler.
+	k.ctx.Table.Set(nr, func(c *Context, f *SyscallFrame) Result {
+		return Result{Value: 0xDEAD}
+	})
+	if got := k.call(nr); got != 0xDEAD {
+		t.Fatalf("overridden syscall = %#x, want 0xdead", got)
+	}
+
+	// Set(nil) refuses quietly (a nil handler would panic at dispatch).
+	before := len(k.ctx.Table.Handlers)
+	k.ctx.Table.Set(nr, nil)
+	if len(k.ctx.Table.Handlers) != before {
+		t.Fatal("Set(nil) must not modify the table")
+	}
+	if _, ok := k.ctx.Table.Lookup(nr); !ok {
+		t.Fatal("Set(nil) must not remove the existing handler")
+	}
+}

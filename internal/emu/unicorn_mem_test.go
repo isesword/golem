@@ -301,7 +301,7 @@ func TestUnicornMemory(t *testing.T) {
 	t.Logf("     RSS slope             : %.0f B/lifecycle", float64(int64(churn[len(churn)-1].rss)-int64(churn[0].rss))/float64(churnN))
 	t.Logf("total workload             : %s", delta(s0, sEnd))
 
-	totalIters := int64(2*hotN + hotN/10 + churnN) // + P3a2 + P3b + churn
+	totalIters := int64(2*hotN + hotN/10 + churnN) // + + + churn
 	heapSlope := float64(int64(sEnd.heap)-int64(s0.heap)) / float64(totalIters)
 	// GC pacing grows the retained heap under allocation churn (bounded, not a
 	// leak); a per-iteration slope stays tight even at 1M+ iterations.

@@ -165,3 +165,14 @@ func (aapcs64) ReadReturnAddress(b emu.Backend) (emu.GuestAddr, error) {
 	v, err := b.RegRead(LR)
 	return emu.GuestAddr(v), err
 }
+
+// InstallReturnContinuation re-aims the in-flight call's return at
+// the post continuation — AAPCS64 keeps it in X30.
+func (aapcs64) InstallReturnContinuation(b emu.Backend, post emu.GuestAddr) error {
+	return b.RegWrite(LR, uint64(post))
+}
+
+// ReturnTo jump to an explicit address.
+func (aapcs64) ReturnTo(b emu.Backend, target emu.GuestAddr) error {
+	return b.RegWrite(PC, uint64(target))
+}

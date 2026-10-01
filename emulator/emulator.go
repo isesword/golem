@@ -173,13 +173,13 @@ type Emulator struct {
 	fs     *vfs.VFS
 	kctx   *kernel.Context
 
-	arch    arch.Arch            // CPU properties, from e.target (always ARM64 in legacy boots)
+	arch    arch.Arch            // CPU properties, from e.target (always ARM64 until)
 	callABI arch.CallABI         // function calling convention (AAPCS64) — args/results/return flow
 	target  *target.Target       // immutable single source of truth for arch/format/platform (DESIGN.md §4)
 	layout  memory.Layout        // guest address-space layout in use
 	as      *memory.AddressSpace // single guest VA allocation entry (invariant 12)
 
-	// (DESIGN.md §3.8, invariant 11): all guest trampolines are owned by
+	// .5d (DESIGN.md §3.8, invariant 11): all guest trampolines are owned by
 	// the StubManager; exported-symbol replacement is Function Interposition
 	// via the InterposeTable + a per-entry execution hook — guest .text is
 	// never patched.
@@ -201,7 +201,7 @@ type Emulator struct {
 	aForm   bool    // 当前 JNI 调用为 Call*MethodA（jvalue 数组）形式
 	scCount int     // syscalls in current CallFunc (runaway guard)
 
-	// (DESIGN.md §3.3): symbol resolution is a first-class loader
+	// .5 (DESIGN.md §3.3): symbol resolution is a first-class loader
 	// component. dl owns the module graph + global symbol scope; resolver is
 	// the boot chain — host replacement symbols (InterposeTable via
 	// interpose.HostResolver) → global guest exports (dl.GlobalResolver) →
@@ -215,17 +215,19 @@ type Emulator struct {
 	getEnvStub   uint64         // JavaVM->GetEnv svc stub (special-cased)
 	jniDispatch  map[uint64]int // JNIEnv stub addr -> JNINativeInterface index
 	classRefs    map[string]dvm.Ref
-	shared       []sharedRange          // guest ranges mapped via MemMapPtr (Phase B page sharing;: diagnostic tracking, the privatize-on-write compensation retired with text patching)
-	poisonErr    error                  // set when a failed address-space transition leaves the emulator unusable
-	pendingPanic any                    // panic recovered inside a guarded backend callback; poisons at the next run boundary
-	classMeta    *dvm.Class             // java/lang/Class
-	natives      map[string]uint64      // "class.name+sig" -> registered native fn ptr
-	methods      map[dvm.Ref]*methodRef // jmethodID -> (class, method)
-	fields       map[dvm.Ref]*fieldRef  // jfieldID -> (class, field)
-	classFilter  map[string]bool        // FindClass allow-set (nil = allow all)
-	arrayPins    map[uint64]pinEntry    // GetByteArrayElements ptr -> array ref (copy-back)
-	pinGen       uint64                 // bumped per host-initiated native call
-	pendingExc   bool                   // a pending JNI exception (Throw/ThrowNew)
+	wraps        map[string]*wrapRuntime // wrap: symbol → wrap state
+	wrapStubs    map[string]*wrapRuntime // wrap: stub name → wrap state (trap routing)
+	shared       []sharedRange           // guest ranges mapped via MemMapPtr (Phase B page sharing;: diagnostic tracking, the privatize-on-write compensation retired with text patching)
+	poisonErr    error                   // set when a failed address-space transition leaves the emulator unusable
+	pendingPanic any                     // panic recovered inside a guarded backend callback; poisons at the next run boundary
+	classMeta    *dvm.Class              // java/lang/Class
+	natives      map[string]uint64       // "class.name+sig" -> registered native fn ptr
+	methods      map[dvm.Ref]*methodRef  // jmethodID -> (class, method)
+	fields       map[dvm.Ref]*fieldRef   // jfieldID -> (class, field)
+	classFilter  map[string]bool         // FindClass allow-set (nil = allow all)
+	arrayPins    map[uint64]pinEntry     // GetByteArrayElements ptr -> array ref (copy-back)
+	pinGen       uint64                  // bumped per host-initiated native call
+	pendingExc   bool                    // a pending JNI exception (Throw/ThrowNew)
 
 	// the platform Runtime is the factory's composition product —
 	// the complete personality as data (startup ABI, layout, syscall
@@ -449,6 +451,8 @@ func New(cfg Config, opts ...Option) (e *Emulator, err error) {
 		fs:          vfs.New(cfg.AssetRoot, pid, cfg.ProcessName),
 		jniDispatch: map[uint64]int{},
 		classRefs:   map[string]dvm.Ref{},
+		wraps:       map[string]*wrapRuntime{},
+		wrapStubs:   map[string]*wrapRuntime{},
 		shared:      []sharedRange{},
 		natives:     map[string]uint64{},
 		methods:     map[dvm.Ref]*methodRef{},
@@ -978,6 +982,24 @@ func (e *Emulator) onStubTrap(b emu.Backend, _ emu.TrapKind) {
 	// The hostFn contract is self-written result register, so the HostFunc's
 	// return value is intentionally ignored here.
 	if desc, ok := e.stubMgr.Lookup(stub); ok && desc.Kind == arch.StubHostCall {
+		// wrap stubs route through their own state machine (entry capture
+		// + continuation / post + resume) before any generic host-call tail.
+		// Entry vs post is distinguished by the stub NAME prefix — the two
+		// stubs share one wrapRuntime (one frame stack per wrapped symbol).
+		if wr, ok := e.wrapStubs[desc.Name]; ok {
+			e.onWrapTrap(wr, strings.HasPrefix(desc.Name, "__golem_wrap_post_"), b)
+			return
+		}
+		if strings.HasPrefix(desc.Name, "__golem_wrap_") {
+			// Wrap stub fired with its routing gone: a stale guest pointer
+			// after stop() (bindings restored, but a saved address remains)
+			// or a framework bug. The generic tail below would silently feed
+			// the caller a fake 0 — answer progress-preserving and poison.
+			_ = e.callABI.WriteResult(b, arch.CallResult{Value: 0})
+			_ = e.poison("wrap-stub", fmt.Errorf("wrap stub %s fired without routing", desc.Name))
+			fmt.Printf("[golem] %s fired without routing — emulator poisoned\n", desc.Name)
+			return
+		}
 		if name, cut := strings.CutPrefix(desc.Name, "host:"); cut {
 			if hf, ok := e.itab.LookupSymbol(name); ok {
 				hf(&Hook{e: e, kind: HookFunctionEntry})
@@ -1012,6 +1034,11 @@ func (e *Emulator) onStubTrap(b emu.Backend, _ emu.TrapKind) {
 // the syscall-instruction channel carries only real syscalls and the check
 // never matches.
 func (e *Emulator) onSyscallTrap(b emu.Backend, _ emu.TrapKind) {
+	if len(e.wrapStubs) > 0 && e.cfg.Verbose {
+		pc, _ := b.RegRead(e.pcReg)
+		_, stubHit := e.stubMgr.Lookup(e.trapStubAddr(b))
+		fmt.Printf("[syscall-trap] pc=%#x stubHit=%v wrapStubs=%d\n", uint64(pc), stubHit, len(e.wrapStubs))
+	}
 	if _, ok := e.stubMgr.Lookup(e.trapStubAddr(b)); ok {
 		return // a stub trap, already handled by onStubTrap
 	}
@@ -1130,7 +1157,7 @@ func (e *Emulator) CallSymbol(name string, args ...Value) (uint64, error) {
 }
 
 // CallSymbolArgs is the Advanced typed variant of CallSymbol — arch.CallArg
-// is the internal vocabulary Value fronts. See CallFuncArgs.
+// is the internal vocabulary Value fronts . See CallFuncArgs.
 func (e *Emulator) CallSymbolArgs(name string, args ...arch.CallArg) (uint64, error) {
 	addr, ok := e.Sym(name)
 	if !ok {

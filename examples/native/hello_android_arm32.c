@@ -59,3 +59,26 @@ long guest_getpid(void) {
     __asm__ volatile("svc #0" : "=r"(ret) : "r"(r7) : "memory");
     return ret;
 }
+
+// --- wrap binding probes -------------------------------------------------
+// Address-taken `add` forces an R_ARM_ABS32 data reloc naming a DEFINED,
+// preemptible symbol — exactly the resolvable binding WrapSymbol redirects.
+// (host_magic has no definition in any module, so it is NOT wrappable: the
+// Sym lookup fails before any binding scan.)
+
+long nest(long x) {
+    long (*volatile p)(long, long) = add;
+    return p(x, 4) + 1000;
+}
+
+// Same recursion-through-the-binding probe as the ARM64 fixture: each level
+// re-enters the wrap entry stub. fact(5) plain = 120. The volatile pointers
+// are a LOAD-BEARING TEST CONTRACT: they keep these references preemptible
+// (data relocations naming the symbol) so the edges pass the binding site —
+// -O2 folds plain local pointers into direct calls, emitting no reloc (seen
+// live). Shape changes must fail TestWrapFixtureBindings, not the wrap tests.
+long fact(long n) {
+    if (n <= 1) return 1;
+    long (*volatile p)(long) = fact;
+    return n * p(n - 1);
+}

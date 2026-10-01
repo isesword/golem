@@ -107,6 +107,34 @@ func (t *Table) Lookup(num uint64) (Handler, bool) {
 // Name returns the trace name for a syscall number ("" if unknown).
 func (t *Table) Name(num uint64) string { return t.Names[num] }
 
+// Set installs or REPLACES the handler for one syscall number the
+// override hook for consumers whose guests need semantics the built-in
+// table lacks. Tables are per-emulator instances, so an override never
+// leaks across engines. nr is platform-specific by nature — resolve it
+// portably with Number(name).
+func (t *Table) Set(nr uint64, h Handler) {
+	if h == nil {
+		return // a nil handler would panic at dispatch; refuse quietly
+	}
+	if t.Handlers == nil {
+		t.Handlers = make(map[uint64]Handler)
+	}
+	t.Handlers[nr] = h
+}
+
+// Number resolves a syscall NAME to this table's number — the portable way
+// to address a syscall across architectures (uname = 160 on ARM64, 122 on
+// ARM32). Names exist for bound AND deliberately-unbound entries alike, so
+// Number covers the "not implemented yet" override case too.
+func (t *Table) Number(name string) (uint64, bool) {
+	for nr, n := range t.Names {
+		if n == name {
+			return nr, true
+		}
+	}
+	return 0, false
+}
+
 // --- guest ABI structure semantics (encoded by StructCodecs) ---------------
 //
 // The types below are the SEMANTIC content of guest structs that handlers

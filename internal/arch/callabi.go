@@ -151,6 +151,38 @@ type CallABI interface {
 	// whether that value MEANS a return address — the facade gates this by
 	// hook kind and reports ErrContextUnavailable where it does not.
 	ReadReturnAddress(b emu.Backend) (emu.GuestAddr, error)
+
+	// InstallReturnContinuation REPLACES the existing return continuation
+	// of the IN-FLIGHT call (wrap continuation, ABI observation+control
+	// semantics). Frame-construction contract: PrepareCall BUILDS a call
+	// frame; this method must NOT create one — it only rewrites where the
+	// already-entered frame's existing return lands:
+	//
+	//	ARM64:       LR ← post
+	//	ARM32:       LR ← post (bit0 may set the continuation's ISA state)
+	//	AMD64 SysV:  [RSP] ← post in place — the caller's `call` pushed the
+	//	             return address there; the original's `ret` pops post with
+	//	             the stack back at the caller's exact state. (Pushing here
+	//	             would strand the real return below the caller's SP — the
+	//	             push that IS legitimate on this ABI belongs to
+	//	             PrepareCall, which constructs the frame.)
+	//
+	// Valid in the ENTRY state, immediately before the original function
+	// runs: the original's return then lands on the wrap's post
+	// continuation instead of the real caller, whose return address was
+	// captured first (ReadReturnAddress). The post continuation resumes the
+	// real caller through ReturnTo.
+	InstallReturnContinuation(b emu.Backend, post emu.GuestAddr) error
+
+	// ReturnTo transfers control to an explicit address — the wrap post
+	// continuation's "resume the real caller" step (the caller's return
+	// address was captured at entry, before InstallReturnContinuation
+	// re-aimed the return):
+	//
+	//	ARM64:       PC ← target
+	//	ARM32:       PC/CPSR.T ← target (setPCBX interworking semantics)
+	//	AMD64 SysV:  RIP ← target
+	ReturnTo(b emu.Backend, target emu.GuestAddr) error
 }
 
 // CallABIIntrospector is an optional capability a CallABI may implement for

@@ -22,7 +22,7 @@
 // Scope note: this package deliberately ships ONLY the register constants
 // at this stage. The Arch/CallABI/StubEncoder/CPUFeatures quad and its
 // registration are that port's work; the constants exist now so parallel agents
-// (transport, P6d loader) can import them.
+// (transport loader) can import them.
 //
 // Dependency direction: arm32 -> emu, never emu -> arm32.
 package arm32
